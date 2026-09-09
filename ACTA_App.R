@@ -6,7 +6,8 @@
 ##
 ## DRIVES ITS OWN FOLDER. Every version file -- script, functions, dashboard generator, report,
 ## layout workbook -- is discovered in the app's own directory by pattern, exactly as the script
-## already resolves its helpers. Copy this file into 2_98_WIP and it drives 2_98 with no edit.
+## already resolves its helpers. Copy this file into any version folder and it drives that version
+## with no edit.
 ##
 ## THIN BY DESIGN. All non-UI behaviour lives in ACTA_Functions.R (actaVersionFiles,
 ## actaValidateDashboardTemplate, actaScanExports, actaTiterOptions, actaArchiveThenCopy,
@@ -948,7 +949,7 @@ server <- function(input, output, session) {
   ## which does nothing when two roots hold cases of the SAME NAME -- and two of them routinely do:
   ## the version folder's Diagnostics/ and, for anyone who has installed the package, its
   ## extdata/oq_small/. That rendered FOUR identical-looking buttons for two cases, and the copy
-  ## inside an installed package carries THAT package's workbook -- 2_90 while this folder is 2_98 --
+  ## inside an installed package carries THAT package's workbook -- 2_90 while this folder is 2_99 --
   ## so half of them ran the current code against a version-locked workbook it must not accept.
   ##
   ## `roots` is in PREFERENCE order and must not be re-sorted across roots: the previous sort() was

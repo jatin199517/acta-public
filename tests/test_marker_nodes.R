@@ -5,7 +5,7 @@
 ## old `grep("[+]$", basename(paths))[1]` selected CD3+/CD3-, so the Stain Index would have been
 ## computed on CD3. Neither OQ case catches it -- in both, Reagent is the only "+/-" row, so the old
 ## code was right by accident. Hence this test.
-## Rscript <this> [version_dir]   -- defaults to 2_98_WIP; pass 2_87 to check the backport.
+## Rscript <this> [version_dir]   -- defaults to 2_99; pass 2_87 to check the backport.
 ## One cwd contract for the whole suite -- see acta_test_paths.R. Run this script from anywhere.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()

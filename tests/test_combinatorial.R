@@ -1,4 +1,4 @@
-## Guards the `Combinatorial_group (n)` declaration added in 2_98: the per-value numeric test, the
+## Guards the `Combinatorial_group (n)` declaration added in 2_99: the per-value numeric test, the
 ## per-group reduction, and the conflict report.
 ##
 ## Two failure modes this exists for, both silent:
@@ -7,7 +7,7 @@
 ##      EVERY row -- switching the flag off for groups that were declared correctly.
 ##   2. Reading the value off ONE well. Layout_Plate has a row per well; statsForExport keeps only
 ##      the maxSI row. A number filled in on some rows and not the winning one would report FALSE.
-## Rscript <this> [version_dir]   -- defaults to 2_98_WIP.
+## Rscript <this> [version_dir]   -- defaults to 2_99.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()
 cat("version_dir:", basename(vd), "\n")

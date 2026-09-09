@@ -1,4 +1,4 @@
-## Guards make_plate_layout_great_again(), the "Plate map" section added in 2_98 and
+## Guards make_plate_layout_great_again(), the "Plate map" section added in 2_99 and
 ## rebuilt on ggplate later the same version.
 ##
 ## The map's whole value is that a transcription error is visible on it, so a map that is itself

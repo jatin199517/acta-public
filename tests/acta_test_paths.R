@@ -14,7 +14,7 @@
 ##     .../tests/  ->  ACTA_VERSION_DIR (code)  ->  ACTA_REPO_ROOT  ->  ACTA_CASE_ROOT
 ##
 ## An explicit first argument still overrides the version folder -- that is how the suite is pointed
-## at another version (`Rscript 2_98_WIP/tests/test_preflight.R 2_89`). A path that does not exist
+## at another version (`Rscript 2_99/tests/test_preflight.R 2_89`). A path that does not exist
 ## is a HARD ERROR and never a silent fall back to this folder's own version: falling back would
 ## report a PASS for a version nobody tested.
 ## ---------------------------------------------------------------------------------------------

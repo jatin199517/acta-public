@@ -2760,7 +2760,7 @@ actaPrevalidateRecords <- function(metadata, gating_template, info, groups, fcs_
 
   ## Combinatorial_group: declarative, so the checks are about the DECLARATION being unambiguous,
   ## not about the data. Absent column skips -- it is optional by design, and every workbook written
-  ## before 2_98 lacks it.
+  ## before 2_99 lacks it.
   if (!("Combinatorial_group" %in% names(metadata))) {
     add("combinatorial_group", "Layout_Plate Combinatorial_group is unambiguous", "skip",
         "no `Combinatorial_group` column to look in", LP)

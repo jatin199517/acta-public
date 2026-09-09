@@ -1,0 +1,4 @@
+# Windows batch files must keep CRLF. cmd.exe is unreliable on LF-only .bat -- a parenthesised
+# for /f block with set inside it (which both launchers use to locate Rscript.exe) is the known
+# failure case. -text stops git rewriting them on any platform, including GitHub ZIP downloads.
+*.bat -text

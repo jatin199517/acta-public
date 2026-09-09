@@ -10,7 +10,7 @@
 ## LAZINESS MATTERS TO THIS TEST. An argument the callee never touches is never forced, so a stub
 ## that discards its arguments proves nothing; the stub below READS the value, as every real plugin
 ## reads `quantile`/`K`.
-## Rscript <this> [version_dir]   -- defaults to 2_98_WIP.
+## Rscript <this> [version_dir]   -- defaults to 2_99.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()
 cat("version_dir:", basename(vd), "\n")

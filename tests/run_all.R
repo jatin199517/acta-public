@@ -1,8 +1,8 @@
 ## ---------------------------------------------------------------------------------------------
 ## Run every fast gate in this folder and print one line per script.
 ##
-##     Rscript 2_98_WIP/tests/run_all.R            # this version, from anywhere
-##     Rscript 2_98_WIP/tests/run_all.R 2_87       # another version's copies of these scripts
+##     Rscript 2_99/tests/run_all.R            # this version, from anywhere
+##     Rscript 2_99/tests/run_all.R 2_87       # another version's copies of these scripts
 ##
 ## Each script runs in its OWN Rscript process, deliberately: they load the same package stack and
 ## source the same helper library, and a fatal error in one must not take the rest of the suite with

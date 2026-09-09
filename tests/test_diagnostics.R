@@ -8,7 +8,7 @@
 ## EVERY CHECK HERE ASSERTS CONTENT, NOT EXISTENCE. The defect being fixed is precisely a file that
 ## exists and says nothing, so "the bundle was written" proves nothing on its own -- cf. the
 ## `shared_upstream` assertion that passed on zero comparisons (2026-08-27).
-## Rscript <this> [version_dir]   -- defaults to 2_98_WIP.
+## Rscript <this> [version_dir]   -- defaults to 2_99.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()
 cat("version_dir:", basename(vd), "\n")

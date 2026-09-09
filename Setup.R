@@ -53,7 +53,8 @@ skip_tex  <- any(args %in% c("--no-tex", "--notex")) ||
 ## getwd(), which is whatever RStudio last had open:
 ##
 ##   1. ACTA_DIR              -- explicit, and the only route that ALWAYS works. Set it and stop
-##                               guessing:  ACTA_DIR <- "/path/to/2_98_WIP"; source("Setup.R")
+##                               guessing:  ACTA_DIR <- "<folder with ACTA_Script_*.R>"
+##                               then       source(file.path(ACTA_DIR, "Setup.R"))
 ##   2. ofile, ANY FRAME      -- set by source(). Reading sys.frame(1) only was the bug: source()
 ##                               called from inside a function or local() puts ofile at frame 2 or 7,
 ##                               not 1, so a REAL source() still missed and fell through. Measured.
@@ -126,11 +127,15 @@ if (!.hasPipeline(here)) {
                   paste(basename(cand), collapse = ", ")) else "",
          "\n\nThis happens when Setup.R is run in a way that hides its own path -- pasting it into\n",
          "the console, or RStudio's Run-Selected-Lines, both give no file path at all.\n",
-         "Two one-line fixes, either is fine:\n",
-         '  ACTA_DIR <- "/full/path/to/2_98_WIP"; source(file.path(ACTA_DIR, "Setup.R"))\n',
-         '  setwd("/full/path/to/2_98_WIP"); source("Setup.R")\n',
+         ## The placeholder is DESCRIBED, not named: this message ships in two layouts. The
+         ## development repo has version folders (2_99), the public repo is FLAT and has none,
+         ## so naming a version folder sent a public user to a directory that does not exist.
+         "Point it at the folder holding ACTA_Script_*.R -- in a release that is the folder you\n",
+         "cloned into. Two one-line fixes, either is fine:\n",
+         '  ACTA_DIR <- "<that folder>"; source(file.path(ACTA_DIR, "Setup.R"))\n',
+         '  setwd("<that folder>"); source("Setup.R")\n',
          "Or from a terminal, where the path is never ambiguous:\n",
-         "  Rscript /full/path/to/2_98_WIP/Setup.R\n", call. = FALSE)
+         "  Rscript <that folder>/Setup.R\n", call. = FALSE)
   }
 }
 
@@ -243,6 +248,20 @@ if (!length(need)) {
 latexOK <- function() {
   any(nzchar(Sys.which(c("pdflatex", "xelatex", "lualatex")))) ||
     (have("tinytex") && isTRUE(tryCatch(tinytex::is_tinytex(), error = function(e) FALSE)))
+}
+
+## PANDOC. rmarkdown shells out to it, so no pandoc means no report AT ALL -- not even a failed
+## LaTeX pass. Setup.R cannot install it (it is not an R package and there is no official installer
+## to drive), so this is a CHECK plus a link, the same contract as the XQuartz check below.
+## REPORTED FROM A WINDOWS TEST RUN, 2026-09-09: Setup.R said READY and the report then failed,
+## because pandoc had to be installed by hand afterwards. It never showed up in development because
+## RSTUDIO BUNDLES ITS OWN PANDOC and puts it where rmarkdown finds it -- so every RStudio user is
+## covered by accident and a plain `Rscript` install on Windows is not. Deliberately the SAME
+## expression actaPreflight() uses (ACTA_Functions.R, the "pandoc" record), so the installer and the
+## run-time check can never disagree about whether pandoc is present.
+pandocOK <- function() {
+  nzchar(Sys.which("pandoc")) ||
+    (have("rmarkdown") && isTRUE(tryCatch(rmarkdown::pandoc_available(), error = function(e) FALSE)))
 }
 if (want_tt && !latexOK()) {
   cat("\nInstalling TinyTeX (for the PDF report) ...\n")
@@ -447,6 +466,15 @@ if (latexOK()) line("LaTeX packages", texMiss, length(texPkgs))
 if (!latexOK())
   cat("                       -> re-run as:  Rscript Setup.R\n",
       "                          (or install MacTeX / MiKTeX / TeX Live yourself)\n", sep = "")
+## Same severity as the LaTeX line and reported the same way: the numbers, plots, export and
+## dashboard are all unaffected, but the PDF report needs pandoc as well as an engine.
+line("pandoc (PDF report)", if (pandocOK()) character(0) else "pandoc",
+     if (pandocOK()) 1L else 0L)
+if (!pandocOK())
+  cat("                       -> install it once per machine:\n",
+      "                          https://pandoc.org/installing.html\n",
+      "                          (RStudio ships its own, so running ACTA from RStudio also works)\n",
+      sep = "")
 if (.Platform$OS.type != "windows" && Sys.info()[["sysname"]] == "Darwin" &&
     !nzchar(Sys.which("Xquartz")) && !dir.exists("/opt/X11"))
   cat("\nXQuartz not detected. flowMeans loads tcltk, which needs X11 on macOS:\n",

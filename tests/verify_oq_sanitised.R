@@ -1,6 +1,6 @@
 ## Sanitisation gate for the publicly shareable OQ cases.
 ##
-## Run from anywhere:  Rscript 2_98_WIP/tests/verify_oq_sanitised.R [case_dir ...]
+## Run from anywhere:  Rscript 2_99/tests/verify_oq_sanitised.R [case_dir ...]
 ## With no arguments it scans EVERY Diagnostics/OQ_Test* case. That default is deliberate: this
 ## script used to hardcode a single folder name, and when the cases were moved under Diagnostics/
 ## it pointed at a path that no longer existed and exited with an error -- while still being cited

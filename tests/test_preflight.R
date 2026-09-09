@@ -6,7 +6,7 @@
 ##   * run_acta() globbed the folder for the export, so a failed run claimed a PREVIOUS run's file,
 ##     and actaReadyMessage() then said "Titration export is ready" unconditionally
 ##
-## Rscript <this> [version_dir]   -- defaults to 2_98_WIP
+## Rscript <this> [version_dir]   -- defaults to 2_99
 ## One cwd contract for the whole suite -- see acta_test_paths.R. Run this script from anywhere.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()

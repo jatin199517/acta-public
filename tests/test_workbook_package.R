@@ -176,13 +176,13 @@ cat("=== actaFindInstructions(): which files count as THE workbook ===\n")
 ## on a hidden file the analyst never created.
 fd <- file.path(tempdir(), sprintf("findinstr_%s", basename(tempfile(""))))
 dir.create(fd, showWarnings = FALSE)
-real <- "EXP1_Ab_Titration_Instructions_2_98.xlsx"
+real <- "EXP1_Ab_Titration_Instructions_2_99.xlsx"
 for (f in c(real,
             paste0(real, ".orig"),                 # a backup, as left by the repair
             paste0("~$", real),                    # Excel's lock file, present while it is OPEN
             paste0("._", real),                    # macOS AppleDouble over OneDrive/SMB
-            "EXP1_Ab_Titration_Instructions_2_98.xlsx.bak",
-            "EXP1_Ab_Titration_Instructions_2_98.xls",
+            "EXP1_Ab_Titration_Instructions_2_99.xlsx.bak",
+            "EXP1_Ab_Titration_Instructions_2_99.xls",
             "EXP1_Ab_Titration_Layout_2_86.xlsx",  # the pre-2_87 name: must NOT count
             "notes.txt"))
   invisible(file.create(file.path(fd, f)))
@@ -194,7 +194,7 @@ chk("an empty folder returns character(0), not NA or \"\"",
     identical(h$actaFindInstructions(file.path(fd, "nope")), character(0)))
 ## Two REAL workbooks must still both be reported -- the callers turn that into their own error, and
 ## silently picking one would run the wrong layout.
-invisible(file.create(file.path(fd, "EXP2_Ab_Titration_Instructions_2_98.xlsx")))
+invisible(file.create(file.path(fd, "EXP2_Ab_Titration_Instructions_2_99.xlsx")))
 chk("two real workbooks are both reported, for the caller to reject",
     length(h$actaFindInstructions(fd)) == 2L)
 unlink(fd, recursive = TRUE)
