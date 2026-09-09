@@ -196,9 +196,21 @@ chk("and they are read from kableExtra, not restated here",
                 get("latex_pkg_list", asNamespace("kableExtra"))()))) |> intersect(.tp) |> length(),
               length(unique(gsub(".*[{]|[}]", "",
                 get("latex_pkg_list", asNamespace("kableExtra"))())))))
-chk("a package that cannot exist is reported missing",
-    identical(h$actaLatexMissing(c("array", "acta_no_such_pkg")), "acta_no_such_pkg"))
-chk("no false positives on the real list", length(h$actaLatexMissing(.tp)) == 0L)
+## BOTH of these need a real TeX tree to mean anything, and the guard is not optional.
+## actaLatexMissing() returns character(0) when there is no kpsewhich -- deliberately, so that a
+## machine without TeX makes no claim either way, which is what the very next check asserts. So on
+## such a machine the negative control below gets character(0) instead of the fake package and
+## FAILS, and "no false positives" passes VACUOUSLY because everything comes back empty. That is
+## exactly the CI gates job, which installs no TeX (only the oq job gets TinyTeX), and it is why the
+## public badge was red from v2.98 onwards while the tool itself was fine.
+## Reproduce with:  env PATH=/usr/bin:/bin Rscript tests/test_app_support.R
+if (nzchar(Sys.which("kpsewhich"))) {
+  chk("a package that cannot exist is reported missing",
+      identical(h$actaLatexMissing(c("array", "acta_no_such_pkg")), "acta_no_such_pkg"))
+  chk("no false positives on the real list", length(h$actaLatexMissing(.tp)) == 0L)
+} else {
+  cat("  [skip] no kpsewhich here, so actaLatexMissing() cannot be exercised against a TeX tree\n")
+}
 chk("no kpsewhich -> no claim either way", {
   op <- Sys.getenv("PATH"); on.exit(Sys.setenv(PATH = op))
   Sys.setenv(PATH = "/nonexistent")
