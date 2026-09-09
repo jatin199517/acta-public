@@ -55,13 +55,21 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))
 res <- data.frame(script = SCRIPTS, status = NA_character_, seconds = NA_real_,
                   stringsAsFactors = FALSE)
+logs <- list()
 for (i in seq_along(SCRIPTS)) {
   f <- file.path(td, SCRIPTS[i])
   if (!file.exists(f)) { res$status[i] <- "MISSING"; next }
   t0 <- proc.time()[["elapsed"]]
   ## Arguments are NOT forwarded: every script defaults to the version folder it lives in, which is
   ## already the one asked for, and verify_oq_sanitised.R would read an argument as a CASE folder.
-  code <- system2("Rscript", shQuote(f), stdout = FALSE, stderr = FALSE)
+  ## CAPTURED, not discarded. This used to be stdout=FALSE/stderr=FALSE with a closing hint to
+  ## "rerun the failure on its own to see its output" -- advice nobody can take on a CI runner,
+  ## which is exactly where it matters. The public badge stayed red across three releases while the
+  ## log said only "FAIL test_app_support.R" and threw away the assertion that actually failed.
+  ## A gate whose failure cannot be READ is only half a gate.
+  lg <- tempfile(fileext = ".log")
+  code <- system2("Rscript", shQuote(f), stdout = lg, stderr = lg)
+  logs[[SCRIPTS[i]]] <- lg
   res$seconds[i] <- proc.time()[["elapsed"]] - t0
   res$status[i]  <- if (identical(as.integer(code), 0L)) "PASS" else "FAIL"
   cat(sprintf("  %-6s %-24s %5.1f s\n", res$status[i], SCRIPTS[i], res$seconds[i]))
@@ -71,7 +79,15 @@ bad <- res$status != "PASS"
 cat(sprintf("%s\n%d of %d passed in %.0f s\n", strrep("-", 62), sum(!bad), nrow(res),
             sum(res$seconds, na.rm = TRUE)))
 if (any(bad)) {
-  cat("\nRerun a failure on its own to see its output:\n")
+  for (s in res$script[bad]) {
+    cat(sprintf("\n%s\n--- captured output of %s ---\n", strrep("=", 62), s))
+    lg <- logs[[s]]
+    if (!is.null(lg) && file.exists(lg))
+      cat(paste(readLines(lg, warn = FALSE), collapse = "\n"), "\n")
+    else cat("  (no output captured)\n")
+    cat(sprintf("--- end %s ---\n", s))
+  }
+  cat("\nTo reproduce locally:\n")
   for (s in res$script[bad]) cat(sprintf("  Rscript %s\n", file.path(td, s)))
 }
 quit(status = if (any(bad)) 1L else 0L)
