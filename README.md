@@ -210,13 +210,9 @@ What each platform needs beyond R:
 | **App launcher** | Ships with the tool | none — use `Rscript` or the R console | `ACTA App.command` | `ACTA App.bat` |
 
 **The PDF report needs both a TeX engine and pandoc.** `rmarkdown` runs pandoc to turn the report
-into LaTeX, then the TeX engine turns that into the PDF, so neither one is enough on its own.
-`Setup.R` installs the TeX engine and the LaTeX packages. **It does not install pandoc** — it only
-checks for it and reports it in the closing summary, so install pandoc yourself from
-[pandoc.org](https://pandoc.org/installing.html).
-
-Missing either one costs you the PDF report and nothing else: the analysis still finishes and writes
-the plots, the titration export and the dashboard.
+into LaTeX, then the TeX engine turns that into the PDF. `Setup.R` installs the TeX engine and the
+LaTeX packages. **It does not install pandoc** — it only checks for it and reports it in the closing
+summary, so install pandoc yourself from [pandoc.org](https://pandoc.org/installing.html).
 
 If you do not want the PDF, skip both and use `run_acta(report=FALSE)`.
 
