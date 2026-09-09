@@ -1,0 +1,56 @@
+{
+  "name": "OQ_Test2",
+  "eln_id": "EXP00000002",
+  "description": "Three antibody groups (CD19, CD7, CD56) on a DIFFERENT instrument (Bio-Rad ZE5) with a supplied compensation matrix. Proves vendor portability -- non-standard scatter names (FS00/SS02), $PnS gating dimensions, an 18-bit $PnR -- and that a csv spillover matrix is read, validated and applied.",
+  "group": [
+    "CD19",
+    "CD7",
+    "CD56"
+  ],
+  "n_groups": 3,
+  "stats_rows": 21,
+  "stats_cols": 42,
+  "qc_checks": [
+    "cells_fsc",
+    "live",
+    "single_cells",
+    "costain_lowest",
+    "min_events"
+  ],
+  "n_plots": 22,
+  "export_rows": 3,
+  "dashboard_rows": 3,
+  "report_expected": true,
+  "events_per_well": 12000,
+  "compensation": "csv",
+  "qc_verdicts": {
+    "cells_fsc": "PASS",
+    "live": "PASS",
+    "single_cells": "PASS",
+    "costain_lowest": "PASS",
+    "min_events": "PASS"
+  },
+  "verdict_note": "Flat map: all five checks PASS in all three groups. Group order follows LAYOUT ROW order (CD19, CD7, CD56), not alphabetical. CD8 was swapped out for CD56 and the compensation matrix repointed from CD8's detector FL29-A to CD56's FL19-A -- left alone the matrix would still have been square and still applied while no longer naming a channel under test, so it would have passed while demonstrating nothing.",
+  "why_this_case": "OQ_Test1 is one group on one instrument. Everything vendor-specific that OQ_Test1 cannot reach is exercised here: isFluorChannel() against ZE5 channel names, the $PnR consensus, gating dimensions written as $PnS descriptions rather than $PnN detectors, and the csv compensation path end-to-end. The compensation matrix printed in the report section is the visual confirmation that the matrix was applied.",
+  "gating_note": "The Cells gate is the built-in `boundary` method, min=c(50000,10000) max=c(250000,250000), NOT gate_flowclust_2d. This is PBMC, which legitimately has both a low-SSC and a high-SSC population, and no single ellipse holds both: K=2, 3, 4, 5 and 7 were tried, plus K=5 and K=2 with a min= debris floor. Lowering K makes it WORSE -- with fewer components the debris merges into the largest-weight component, which is the one gate_flowclust_2d picks, so K=3 read 63-70% 'Cells' while excluding the real cluster. Thresholds validated numerically on CD56 D8 (20k events): in-gate median FSC 111332 / SSC 35190 versus excluded median FSC 35524 / SSC 9284, so the excluded set is low in BOTH channels. 88% of exclusions are the FSC floor and 91% of those also have SSC < 20000 -- debris, not cells. A floor of 40000 or 30000 would add events with median SSC 15835 / 14424, far below the in-gate median of 35190: a lower floor recovers debris, not cells. max= also trims events on the ZE5's 262144 ceiling.",
+  "schema_note": "stats_cols 39 -> 40 with the StainUnit column, added beside StainQty so the quantity axis can be a volume, a concentration or a dilution factor. StainVolume was renamed StainQty at the same time -- a rename, not a schema change, so it does not move the count on its own. 2026-08-21: stats_cols 40 -> 41. Combinatorial titration made the loop's unit one titrated MARKER rather than one FCS folder, so every stats row now carries a `Titration` key -- Dirname names the folder, which co-titrated markers share, and the QC and Michaelis-Menten joins had nothing else to key on. Equal to Dirname in every single-marker workbook, including this case. Then 41 -> 42 in 2_95 when Layout_Plate gained Combinatorial_group (n): the column rides into `stats` through pData, so the count moves even though the two EXPORT columns are added later, in statsForExport.",
+  "platemap_note": "n_plots 21 -> 22: the Plots/ export gained one plate map per PlateID in 2_97 (<BenchlingID>_PlateMap_plate_<PlateID>.png). One plate in this case.",
+  "plots_note": "n_plots includes the run-level ConcatPlot added in 2_87 (FlowJo-style concatenation, marker intensity against stain quantity, no gates) alongside SIPlot and SatPlot.",
+  "downsample_note": "Info!Downsample_to is set to 12000 against files that each hold 20000 events, so every file is genuinely subsampled and the events_per_well assertion is what proves downsampling ran. 12000 was chosen to be comfortably below 20000 in EVERY file -- flowCore's which.lines errors outright if n exceeds a file's $TOT -- while leaving enough events for the gates. The subsample is random but seeded, so this case stays byte-reproducible. OQ_Test1 is deliberately left at full events: one case has to keep guarding the numbers that have been stable since 2.85.",
+  "quadrant_note": "n_plots 36 -> 21: one quadrant plot per group instead of six. The `+/-+/-` expansion creates six populations -- four quadrants plus a 1D intermediate per dim -- and only the four quadrants are DRAWN, since the intermediates' cutpoints are already the rectangle edges. They remain real populations feeding StatsExport. 18 non-quadrant plots + 3 groups x 1.",
+  "combinatorial": {
+    "CD19": {
+      "group": "",
+      "logical": "FALSE"
+    },
+    "CD7": {
+      "group": "",
+      "logical": "FALSE"
+    },
+    "CD56": {
+      "group": "",
+      "logical": "FALSE"
+    }
+  },
+  "combinatorial_note": "Asserted per titration, not counted. stats_cols went 41 -> 42 when Layout_Plate gained Combinatorial_group (n): the column rides into `stats` through pData, so the count moves even though the two EXPORT columns are added later in statsForExport. OQ_Test3 is the only case that declares anything -- CCR7_combo and CD14_combo really were stained in the same wells, so they carry group 1 while the standalone CCR7 series is left blank, giving two TRUEs and one FALSE to assert. OQ_Test1 and OQ_Test2 pin the negative case: the column exists, nothing is declared, every titration reads FALSE."
+}

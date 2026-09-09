@@ -1,0 +1,40 @@
+{
+  "name": "OQ_Test1",
+  "eln_id": "EXP00000001",
+  "description": "Single antibody group: 11 analysable wells plus one unstained. Quick end-to-end check that a fresh install produces the right numbers, not merely files.",
+  "group": "Strep_PE",
+  "n_groups": 1,
+  "stats_rows": 11,
+  "stats_cols": 42,
+  "qc_checks": [
+    "cells_fsc",
+    "live",
+    "single_cells",
+    "costain_lowest",
+    "min_events"
+  ],
+  "n_plots": 10,
+  "export_rows": 1,
+  "dashboard_rows": 1,
+  "report_expected": true,
+  "events_per_well": 60000,
+  "qc_verdicts": {
+    "cells_fsc": "PASS",
+    "live": "PASS",
+    "single_cells": "PASS",
+    "costain_lowest": "PASS",
+    "min_events": "PASS"
+  },
+  "qc_note": "All five checks PASS. At the previous 20k downsample costain_lowest AND min_events both FAILED from one shared cause: the Costain well (A2, stain volume 0) held only 88 events in Reagent+, below the 100-event floor, and the SI estimated from it was noisy enough that the Costain well no longer held the strict minimum SI. Re-derived from source at 60k and both clear, which confirms the diagnosis -- neither was a pipeline defect. Asserted as an explicit verdict map rather than qc_all_pass so a check degrading to SKIPPED is caught as a failure.",
+  "schema_note": "stats_cols 39 -> 40 with the StainUnit column, added beside StainQty so the quantity axis can be a volume, a concentration or a dilution factor. StainVolume was renamed StainQty at the same time -- a rename, not a schema change, so it does not move the count on its own. 2026-08-21: stats_cols 40 -> 41. Combinatorial titration made the loop's unit one titrated MARKER rather than one FCS folder, so every stats row now carries a `Titration` key -- Dirname names the folder, which co-titrated markers share, and the QC and Michaelis-Menten joins had nothing else to key on. Equal to Dirname in every single-marker workbook, including this case. Then 41 -> 42 in 2_95 when Layout_Plate gained Combinatorial_group (n): the column rides into `stats` through pData, so the count moves even though the two EXPORT columns are added later, in statsForExport.",
+  "platemap_note": "n_plots 9 -> 10: the Plots/ export gained one plate map per PlateID in 2_97 (<BenchlingID>_PlateMap_plate_<PlateID>.png). One plate in this case.",
+  "plots_note": "n_plots includes the run-level ConcatPlot added in 2_87 (FlowJo-style concatenation, marker intensity against stain quantity, no gates) alongside SIPlot and SatPlot.",
+  "quadrant_note": "n_plots 12 -> 9: the CD4_CD8 quadrant row now yields ONE plot with all four gates on it, not four single-population panels of the same 2D plot. A quadrant is one gate; four panels of it was the first thing the user called wrong. 8 non-quadrant plots + 1.",
+  "combinatorial": {
+    "Strep_PE": {
+      "group": "",
+      "logical": "FALSE"
+    }
+  },
+  "combinatorial_note": "Asserted per titration, not counted. stats_cols went 41 -> 42 when Layout_Plate gained Combinatorial_group (n): the column rides into `stats` through pData, so the count moves even though the two EXPORT columns are added later in statsForExport. OQ_Test3 is the only case that declares anything -- CCR7_combo and CD14_combo really were stained in the same wells, so they carry group 1 while the standalone CCR7 series is left blank, giving two TRUEs and one FALSE to assert. OQ_Test1 and OQ_Test2 pin the negative case: the column exists, nothing is declared, every titration reads FALSE. KEYED ON THE TITRATION KEY, WHICH IS NOT THE ALIAS. For a folder holding ONE marker the key is the Dirname ('Strep_PE'); the Alias ('Strep') only becomes the key where a folder carries more than one marker, as in OQ_Test3. Written with the Alias first, this assertion failed with 'no row in the export' -- which is the check working: it will not silently pass on a titration it cannot find."
+}

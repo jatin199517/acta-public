@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<!--
+  Titration dashboard template  ·  "Lab Record" variant
+  The Swiss / instrument-datasheet language from the report specimen, applied to
+  the 28-column dashboard. Structure, columns, filters, sorting, grouping, tabs,
+  search, attention toggle and figure-link behaviour are UNCHANGED from the
+  dashboard's reference layout.
+
+  Design language, carried over verbatim where it applies:
+    · off-white surfaces (#fcfcfb on #f9f9f7), near-black ink, no radii, no shadows
+    · a 2px black rule over the masthead; heavily tracked uppercase wordmark
+    · hairline-divided definition grids and stat cells instead of cards
+    · 9.5px uppercase 0.15em micro-labels in muted grey
+    · section heads: mono ordinal + title + right-aligned note over a heavy rule
+    · monospace tabular figures for every ID, lot, date and number
+    · Helvetica Neue / Helvetica primary stack
+
+  ACCENT: the specimen used blue (#2a78d6). Teal is substituted here so the
+  dashboard family cue survives, per the earlier decision to keep a teal identity.
+  The language is otherwise achromatic, so this is a one-token swap.
+
+  Contract: the two JSON placeholders the generator substitutes appear exactly ONCE
+  each, in the script block only. Do NOT name them anywhere else in this file --
+  the generator uses sub() (first match only), so a second mention
+  swallows the substitution and leaves the real one unreplaced. Self-contained, no
+  external requests, figure hrefs stay relative to the output file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACTA Dashboard</title>
+<style>
+  :root{
+    /* Specimen tokens, unchanged. Swap for your own brand hexes and re-run the
+       colour validator before shipping. */
+    --surface-1:      #fcfcfb;
+    --plane:          #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --muted:          #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --rule:           rgba(11,11,11,0.14);
+    --rule-strong:    rgba(11,11,11,0.55);
+    /* accent: teal in place of the specimen's blue */
+    --accent:         #0e7c86;
+    --accent-ink:     #0b5b64;
+    --accent-wash:    #f0f6f7;
+    --good:           #0b6b57;
+    --critical:       #d03b3b;
+    /* The specimen's --warning #fab219 is a FILL colour (1.79:1 on this surface) and
+       is unreadable as text. Mid-state status text uses this darker amber instead. */
+    --warn-ink:       #8a5a00;
+
+    --sans:"Helvetica Neue",Helvetica,Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--plane);color:var(--text-primary);
+       font:13px/1.5 var(--sans);font-feature-settings:"kern" 1;
+       -webkit-font-smoothing:antialiased}
+
+  .sheet{background:var(--surface-1);border-bottom:1px solid var(--rule);padding:0 26px}
+
+  /* ---- masthead: 2px rule, tracked wordmark, mono provenance right -------- */
+  .mast{border-top:2px solid var(--text-primary);padding:13px 0 0;display:flex;
+        align-items:baseline;gap:14px}
+  .wordmark{font-size:26px;font-weight:700;letter-spacing:.30em;text-transform:uppercase;
+        line-height:1;margin:0}
+  .wordmark span{font-weight:300}
+  .mast__kind{font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;
+        color:var(--text-secondary)}
+  .mast__sp{flex:1}
+  .mast__id{text-align:right;font-family:var(--mono);font-size:11px;line-height:1.7;
+        color:var(--text-secondary)}
+  .mast__id b{color:var(--text-primary);font-weight:600}
+
+  /* ---- stat cells: hairline-divided, NOT cards --------------------------- */
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,190px)) 1fr;
+        margin:14px 0 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+  .stat{padding:11px 20px 12px 0;border-right:1px solid var(--rule)}
+  .stats>div:last-child{border-right:0}
+  .stat__k{font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+  /* proportional figures on display numbers; tabular-nums only inside the table */
+  .stat__v{font-size:24px;font-weight:600;line-height:1.1;margin:5px 0 0;letter-spacing:-.015em}
+  .stat__v.is-zero{color:var(--muted)}
+  .stat__v.is-alert{color:var(--critical)}
+  .stat__d{font-size:10.5px;color:var(--text-secondary);margin-top:2px}
+
+  /* ---- section head ----------------------------------------------------- */
+  .sec__head{display:flex;align-items:baseline;gap:13px;margin:20px 0 0;
+        border-bottom:1px solid var(--rule-strong);padding-bottom:6px}
+  .sec__n{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.06em}
+  .sec__t{font-size:14px;font-weight:600;letter-spacing:.02em;margin:0}
+  .sec__note{margin-left:auto;font-size:10px;color:var(--muted);letter-spacing:.09em;
+        text-transform:uppercase}
+
+  /* ---- tabs: micro-labels on a hairline, 2px active rule ---------------- */
+  .tabs{display:flex;gap:0;flex-wrap:wrap;border-bottom:1px solid var(--rule);
+        margin:0 0 2px}
+  /* No text-transform: tab labels are project names (data), not chrome labels. */
+  .tab{padding:9px 14px 8px 0;margin-right:18px;border:0;background:none;font:inherit;
+        font-size:11.5px;letter-spacing:.06em;color:var(--muted);
+        cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{color:var(--text-primary)}
+  .tab.active{color:var(--text-primary);font-weight:700;border-bottom-color:var(--accent)}
+
+  /* ---- toolbar: hairline fields, zero radii ----------------------------- */
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 9px}
+  .toolbar input[type=search]{flex:1 1 300px;min-width:200px;padding:6px 9px;
+        border:1px solid var(--baseline);background:var(--surface-1);font:inherit;font-size:12.5px}
+  .toolbar input[type=search]:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+  .toolbar select{padding:6px 7px;border:1px solid var(--baseline);background:var(--surface-1);
+        font:inherit;font-size:12px}
+  .toolbar label{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+        color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+  .toolbar label select{text-transform:none;letter-spacing:0;font-size:12px;color:var(--text-primary)}
+  .toolbar button{padding:6px 10px;border:1px solid var(--baseline);background:var(--surface-1);
+        font:inherit;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+        cursor:pointer;color:var(--accent-ink)}
+  .toolbar button:hover{background:var(--accent-wash);border-color:var(--accent)}
+  .counts{font-size:10.5px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;
+        margin:0 0 7px}
+  .counts b{color:var(--text-primary);font-weight:600;font-variant-numeric:tabular-nums}
+  .counts .attn{color:var(--critical)}
+
+  /* ---- table ------------------------------------------------------------ */
+  .tablewrap{background:var(--surface-1);border-top:1px solid var(--rule-strong);
+        border-bottom:1px solid var(--rule);overflow:auto;max-height:calc(100vh - 292px)}
+  table{width:100%;border-collapse:separate;border-spacing:0}
+  th,td{padding:6px 11px;text-align:left;border-bottom:1px solid var(--gridline);
+        vertical-align:top;white-space:nowrap}
+  thead th{position:sticky;top:0;z-index:3;background:var(--surface-1);color:var(--muted);
+        font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;font-weight:500;
+        cursor:pointer;user-select:none;border-bottom:1px solid var(--rule-strong);
+        padding-top:9px;padding-bottom:7px}
+  thead th:hover{color:var(--text-primary)}
+  /* µ TRAP, carried over from the original template: uppercase maps U+00B5 MICRO
+     SIGN to U+039C GREEK CAPITAL MU, turning "µL" into "ML". Keep this rule. */
+  th .unit{text-transform:none}
+  th .arrow{font-size:9px;color:var(--accent);margin-left:5px}
+  tr.filterrow td{position:sticky;top:31px;z-index:3;background:var(--plane);
+        padding:4px 6px;border-bottom:1px solid var(--rule)}
+  tbody tr:hover td{background:var(--accent-wash)}
+  /* sticky anchor columns. The Project column's width is PINNED and sticky2's `left`
+     is set to exactly that width -- a guessed offset wider than the real column
+     shifts Marker right and its opaque background clips the cell beside it. */
+  th.sticky1,td.sticky1{position:sticky;left:0;z-index:2;
+        width:112px;min-width:112px;max-width:112px}
+  th.sticky2,td.sticky2{position:sticky;left:112px;z-index:2}
+  td.sticky1,td.sticky2{background:var(--surface-1)}
+  thead th.sticky1,thead th.sticky2{z-index:4}
+  tr.filterrow td.sticky1,tr.filterrow td.sticky2{z-index:4;background:var(--plane)}
+  th.sticky2,td.sticky2{box-shadow:1px 0 0 var(--gridline)}
+  tbody tr:hover td.sticky1,tbody tr:hover td.sticky2{background:var(--accent-wash)}
+  td.key{font-weight:600}
+  td.mono,.mono{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;
+        color:var(--text-secondary)}
+  .muted{color:var(--muted)}
+  td.notes{white-space:normal;min-width:200px;max-width:290px;color:var(--text-secondary);
+        font-size:12px;line-height:1.45}
+
+  /* ---- chips: no box, and NO text-transform ----------------------------
+     This language uppercases LABELS (column heads, micro-labels, section notes),
+     never DATA. Fluorophore names are reagent identifiers whose case carries
+     meaning -- uppercasing turned "Pacific Blue" into "PACIFIC BLUE" and would do
+     the same to "eFluor"/"PerCP". Distinction comes from weight and colour. */
+  .chip{display:inline-block;font-size:11.5px;color:var(--text-secondary)}
+  .chip.proj{color:var(--accent-ink);font-weight:600;font-size:11px;letter-spacing:.02em}
+
+  /* ---- figure links: mono uppercase tags, no emoji --------------------- */
+  a.file{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid transparent;
+        font-size:11px}
+  a.file:hover{border-bottom-color:var(--accent)}
+  a.file.disabled{color:var(--baseline);pointer-events:none}
+  td.figs a.file{display:inline-block}
+  a.file .tag{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;
+        letter-spacing:.11em;font-weight:600}
+  a.file .par{color:var(--muted);letter-spacing:0;text-transform:none;font-family:var(--sans)}
+
+  /* ---- attention: a 3px edge on the anchor cell ------------------------ */
+  tr.flag td.sticky1{box-shadow:inset 3px 0 0 var(--critical);padding-left:14px}
+
+  /* ---- status: uppercase tracked text, colour + word, no pill ---------- */
+  .status,.tstat{display:inline-block;font-size:9.5px;font-weight:700;
+        text-transform:uppercase;letter-spacing:.11em;white-space:nowrap}
+  /* QC_Status from the export. The four inventory-lookup values this block used to
+     carry (Matched / Lot verified / Lot_info conflict / Needs attention) came from the
+     Master Panel Inventory join, which no longer exists -- they can never be emitted, so
+     they are gone and the real values are styled instead. */
+  .status.PASS{color:var(--good)}
+  .status.FAIL{color:var(--critical)}
+  .tstat.Validated{color:var(--good)}
+  .tstat.Confirmed{color:var(--warn-ink)}
+  .tstat.Pending,.tstat.Re-runneeded{color:var(--critical)}
+  /* `Undetermined` occurs in live data but had NO rule in the original template,
+     so it rendered as an unstyled pill. Given an explicit muted rule here. */
+  .tstat.Undetermined{color:var(--muted)}
+
+  /* ---- group rows: eyebrow on a heavy top rule, not a filled bar -------- */
+  /* No text-transform: this label is the value of whatever field is grouped BY --
+     marker, fluorophore, parent pop -- so uppercasing it mangles identifiers
+     ("hCD45" -> "HCD45"). The heavy top rule carries the emphasis instead. */
+  tr.group td{background:var(--plane);color:var(--text-primary);cursor:pointer;
+        font-size:11.5px;font-weight:700;letter-spacing:.05em;
+        border-top:2px solid var(--text-primary);border-bottom:1px solid var(--rule);
+        padding-top:8px;padding-bottom:7px}
+  tr.group td>.glabel{position:sticky;left:11px;display:inline-block}
+  tr.group td .gc{font-weight:400;color:var(--muted);margin-left:10px;letter-spacing:.04em;
+        font-family:var(--mono);font-size:10px;text-transform:none}
+
+  .empty{padding:34px;text-align:center;color:var(--muted);letter-spacing:.06em;
+        text-transform:uppercase;font-size:11px}
+
+  footer{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
+        margin:0 26px;padding:10px 0 26px;font-size:10px;color:var(--muted);
+        letter-spacing:.09em;text-transform:uppercase}
+  footer .mono{font-family:var(--mono);letter-spacing:0;text-transform:none;font-size:10.5px}
+
+  /* ---- per-column filter controls -------------------------------------- */
+  .fdrop{position:relative;display:block}
+  .fdrop>summary{list-style:none;cursor:pointer;font-size:11px;padding:2px 5px;
+        border:1px solid var(--gridline);background:var(--surface-1);white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)}
+  .fdrop>summary::-webkit-details-marker{display:none}
+  .fdrop>summary::after{content:"▾";color:var(--muted);float:right;margin-left:6px}
+  .fdrop[open]>summary{border-color:var(--accent);color:var(--accent-ink)}
+  /* no shadow anywhere in this language -- a hairline carries the layer */
+  .menu{position:absolute;z-index:40;top:calc(100% + 1px);left:0;min-width:165px;
+        max-height:265px;overflow:auto;background:var(--surface-1);
+        border:1px solid var(--rule-strong);padding:5px}
+  .menu label{display:flex;align-items:center;gap:6px;font-size:11px;padding:3px 4px;
+        color:var(--text-primary);cursor:pointer;white-space:nowrap}
+  .menu label:hover{background:var(--accent-wash)}
+  tr.filterrow input.cf{width:100%;min-width:70px;padding:2px 5px;
+        border:1px solid var(--gridline);font:inherit;font-size:11px;background:var(--surface-1)}
+  tr.filterrow input.cf:focus-visible{outline:1px solid var(--accent);outline-offset:-1px}
+
+    /* ------------------------------------------------------------------ *
+       SKIN: MAROON CHROME
+       Maroon, stepped the same way as the teal skin.
+       This file is the base dashboard VERBATIM plus the token overrides
+       below. Structure, element ids, column handling and the whole script
+       block are byte-identical to the other templates, so any of them can be
+       dropped in and the generator produces the same dashboard -- only the
+       skin differs. Re-declaring the tokens after the base sheet is what
+       keeps that true: nothing above this block is edited.
+     * ------------------------------------------------------------------ */
+    :root{
+      --accent:      #a4505f;
+      --accent-ink:  #883a49;
+      --accent-wash: #fbf5f7;
+    }
+    header.mast{background:#6b2b38;color:#fff;padding:14px 22px;border:0}
+    header.mast .wordmark{color:#fff;font-weight:700}
+    header.mast .wordmark span,
+    header.mast .mast__kind,
+    header.mast .mast__id{color:#dfe6ef}
+    thead th{background:var(--accent-wash);color:var(--accent-ink);
+             text-transform:uppercase;letter-spacing:.03em}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="mast">
+    <h1 class="wordmark">Acta<span>·</span></h1>
+    <span class="mast__kind">Dashboard</span>
+    <span class="mast__sp"></span>
+    <span class="mast__id" id="mastid"></span>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="stat__k">Marker rows</div><div class="stat__v" id="s_rows">—</div><div class="stat__d">one per entry × marker</div></div>
+    <div class="stat"><div class="stat__k">ELN entries</div><div class="stat__v" id="s_entries">—</div><div class="stat__d">distinct experiments</div></div>
+    <div class="stat"><div class="stat__k">Needs attention</div><div class="stat__v" id="s_attn">—</div><div class="stat__d">QC not passed</div></div>
+    <div></div>
+  </div>
+
+  <div class="sec__head">
+    <span class="sec__n">01</span>
+    <h2 class="sec__t">Titration records</h2>
+    <span class="sec__note">File scan · figure links relative</span>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Search across all fields…" autocomplete="off">
+    <!-- Options are BUILT FROM THE SCHEMA at run time (see buildGroupMenu). Do not
+         hardcode them here: the previous static list drifted out of sync with the
+         export and silently offered two dead choices. -->
+    <label>Group by
+      <select id="groupby"><option value="">None</option></select>
+    </label>
+    <label><input type="checkbox" id="attn"> Needs attention only</label>
+    <button id="clear">Clear filters</button>
+  </div>
+  <div class="counts" id="counts"></div>
+  <div class="tablewrap">
+    <table id="tbl">
+      <thead><tr id="head"></tr><tr id="filters" class="filterrow"></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+</div>
+<footer>
+  <span>ACTA Antibody Titration</span>
+  <span class="mono" id="f_src"></span>
+</footer>
+
+<script>
+/* ============================================================
+   META + DATA are injected by the dashboard generator.
+   One record = one ELN entry × marker token.
+   ============================================================ */
+const META = __META_JSON__;
+const DATA = __DATA_JSON__;
+
+/* ============================================================
+   Dashboard logic — behaviourally IDENTICAL across every template variant.
+   The only changes are presentational: `sticky` flags on the two anchor
+   columns, `mono`/`notes` cell classes, and text tags in place of the emoji
+   in figLabel(). Column set, order, labels, filters and sorting are untouched.
+   ============================================================ */
+/* Columns are INJECTED, not fixed here: the set follows the newest titration export, so a
+   column added to the export in a future version appears with no edit to this file, and one
+   that never existed is never rendered. See ACTA_Dashboard_*.R. */
+const COLS = __COLS_JSON__;
+const GROUPABLE = __GROUPABLE_JSON__;
+let sortKey=META.sort_key||"project", sortDir=1, activeTab=null;
+const filters = {};
+const $=s=>document.querySelector(s);
+
+/* Tabbed FILTER views: "All data" + one per Project */
+function projectTabs(){
+  const projs=[...new Set(DATA.map(r=>r.project).filter(Boolean))].sort();
+  return [{name:"All data", groupby:META.group_key||"project", attn:false, filters:{}}]
+    .concat(projs.map(p=>({name:p, groupby:"", attn:false, filters:{project:[p]}})));
+}
+let TABS = projectTabs();
+function buildTabs(){
+  $("#tabs").innerHTML = TABS.map((t,i)=>`<button class="tab ${i===activeTab?"active":""}" data-i="${i}">${esc(t.name)}</button>`).join("");
+  document.querySelectorAll("#tabs .tab").forEach(b=>b.addEventListener("click",()=>applyTab(+b.dataset.i)));
+}
+function applyTab(i){
+  const t=TABS[i]; if(!t) return; activeTab=i;
+  $("#groupby").value=t.groupby||""; $("#attn").checked=!!t.attn; $("#q").value="";
+  for(const k in filters) delete filters[k];
+  Object.keys(t.filters||{}).forEach(k=>{filters[k]=Array.isArray(t.filters[k])?t.filters[k].slice():t.filters[k];});
+  buildTabs(); buildFilters(); render();
+}
+function markCustom(){ if(activeTab!==null){ activeTab=null; buildTabs(); } }
+
+function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function fileName(p){return p? String(p).split("/").pop():"";}
+function statusClass(s){
+  // A CLASS NAME, NEVER DATA. This used to be `(s||"").replace(/\s+/g,"")` and its result was
+  // interpolated into class="status ${...}" with no escaping -- so a QC or titer-status cell of
+  //     y"/tabindex="0"/autofocus/onfocus="..."
+  // closed the attribute and became live handlers on the span (zero-click, demonstrated
+  // 2026-09-08). Whitespace was stripped but the quote was not. Reducing to the characters a
+  // CSS class may contain removes the whole class of escape rather than one payload.
+  return (s||"").replace(/\s+/g,"").replace(/[^A-Za-z0-9_-]/g,"");
+}
+// Sourced from the export's QC_Status now that there is no inventory lookup, so "good" is a
+// passing QC. Anything else (FAIL, or blank on a pre-QC export) counts as needing attention.
+const OK_STATUS=["PASS"];
+function isOK(r){return OK_STATUS.includes(r.status);}
+/* Same parent-labelling logic as the original; the emoji are replaced by short
+   uppercase tags, which survive copy/paste, print and forced-colors. */
+function figLabel(p){const n=fileName(p);
+  const m=n.match(/parent_(.+?)_(?:pseudo|hist|histogram|plotLayout|\.)/i);
+  const par=m?`<span class="par"> (${esc(m[1])})</span>`:"";
+  if(/SIPlot/i.test(n))  return `<span class="tag">SI</span>`+par;
+  if(/SatPlot/i.test(n)) return `<span class="tag">Sat</span>`+par;
+  if(/pseudo/i.test(n))  return `<span class="tag">Pseudo</span>`+par;
+  if(/hist/i.test(n))    return `<span class="tag">Hist</span>`+par;
+  return esc(n);}
+/* Search index follows the schema: every data column, figure/folder columns excluded
+   (their cell content is a link, not text worth matching). This REPLACED a hardcoded
+   key list that had drifted badly against the export -- 13 of its 24 keys matched no
+   column at all, while Marker, Fluorophore, Catalog #, Lot, Script Ver, QC status and
+   the LI_* fit columns were not searchable. Deriving it means a column added to the
+   export is searchable with no edit here. */
+const SEARCH_KEYS = COLS.filter(c=>!c.figs && !c.folder).map(c=>c.k);
+function searchText(r){
+  return SEARCH_KEYS.map(k=>r[k]==null?"":r[k]).join(" ").toLowerCase();}
+function distinct(k){return [...new Set(DATA.map(r=>r[k]).filter(v=>v!=null&&v!==""))].sort();}
+function summaryText(k){const s=filters[k]||[];return !s.length?"(all)":s.length===1?s[0]:s.length+" selected";}
+
+function stickyCls(c){return c.sticky?` sticky${c.sticky}`:"";}
+
+/* A column label may carry markup (the Titer heading wraps its units in a span to
+   escape the uppercase µ trap), which cannot go inside an <option>. */
+function plainLabel(c){return String(c.label==null?c.k:c.label).replace(/<[^>]*>/g,"");}
+/* Group-by menu is derived from GROUPABLE, in COLS order and with COLS labels, so it
+   can never again offer a key the data does not have -- or omit one it does. */
+function buildGroupMenu(){
+  const sel=$("#groupby"), cur=sel.value;
+  sel.innerHTML=`<option value="">None</option>`+
+    COLS.filter(c=>GROUPABLE[c.k])
+        .map(c=>`<option value="${esc(c.k)}">${esc(plainLabel(c))}</option>`).join("");
+  if(cur && GROUPABLE[cur]) sel.value=cur;
+}
+
+function buildHead(){
+  $("#head").innerHTML = COLS.map(c=>{
+    const arrow = c.k===sortKey ? `<span class="arrow">${sortDir>0?"▲":"▼"}</span>` : "";
+    // `unit` opts a header OUT of the uppercase transform. Not cosmetic: CSS text-transform
+    // uppercases U+00B5 MICRO SIGN to U+039C GREEK CAPITAL MU, so a "(uL)" header silently
+    // renders as "(ML)" -- millilitres, a 1000x error in a header describing a stain volume.
+    // This file HAD the matching `th.unit{text-transform:none}` rule and never applied the class,
+    // so the guard was dead and the template still passed validation. Fixed 2026-08-20.
+    const cls = (stickyCls(c) + (c.unit ? " unit" : "")).trim();
+    return `<th class="${cls}" data-k="${c.k}">${esc(c.label)}${arrow}</th>`;
+  }).join("");
+  document.querySelectorAll("#head th").forEach(th=>{
+    th.onclick=()=>{const k=th.dataset.k; if(k===sortKey){sortDir*=-1;}else{sortKey=k;sortDir=1;} render();};
+  });
+}
+function buildFilters(){
+  $("#filters").innerHTML = COLS.map(c=>{
+    const sc=stickyCls(c);
+    if(c.filter==="select"){
+      const sel=filters[c.k]||[];
+      const opts=distinct(c.k).map(v=>
+        `<label><input type="checkbox" class="cfx" data-k="${c.k}" value="${esc(v)}" ${sel.includes(v)?"checked":""}> ${esc(v)}</label>`).join("");
+      return `<td class="${sc.trim()}"><details class="fdrop"><summary id="sum_${c.k}">${esc(summaryText(c.k))}</summary><div class="menu">${opts||'<span class="muted">none</span>'}</div></details></td>`;
+    }
+    if(c.filter==="text"){
+      return `<td class="${sc.trim()}"><input class="cf" data-k="${c.k}" value="${esc(filters[c.k]||"")}" placeholder="filter…"></td>`;
+    }
+    return `<td class="${sc.trim()}"></td>`;
+  }).join("");
+  document.querySelectorAll("#filters .cfx").forEach(el=>el.addEventListener("change",e=>{
+    const k=e.target.dataset.k;
+    const checked=[...document.querySelectorAll('.cfx[data-k="'+k+'"]')].filter(x=>x.checked).map(x=>x.value);
+    if(checked.length) filters[k]=checked; else delete filters[k];
+    const sum=document.querySelector("#sum_"+k); if(sum) sum.textContent=summaryText(k);
+    markCustom(); render();
+  }));
+  document.querySelectorAll("#filters .cf").forEach(el=>el.addEventListener("input",e=>{
+    const k=e.target.dataset.k; const v=e.target.value;
+    if(v) filters[k]=v; else delete filters[k];
+    markCustom(); render();
+  }));
+}
+function parentDirs(row){
+  const files=[]; [row.si,row.plots].forEach(v=>{ if(Array.isArray(v)) files.push(...v); else if(v) files.push(v); });
+  return [...new Set(files.map(p=>String(p).replace(/[^/]*$/,'')).filter(Boolean))];   // strip filename -> folder
+}
+function cellHtml(row,c){
+  if(c.figs){
+    const arr=[].concat(row[c.figs]||[]);   // tolerate scalar OR array (JSON may unbox single-element lists)
+    if(!arr.length) return `<span class="file disabled">—</span>`;
+    return arr.map(p=>`<a class="file" href="${esc(encodeURI(p))}" target="_blank" rel="noopener" title="${esc(p)}">${figLabel(p)}</a>`).join("<br>");
+  }
+  if(c.folder){
+    const dirs=parentDirs(row);
+    if(!dirs.length) return `<span class="file disabled">—</span>`;
+    return dirs.map(d=>`<a class="file" href="${esc(encodeURI(d))}" target="_blank" rel="noopener" title="${esc(d)}"><span class="tag">Open ↗</span></a>`).join(" ");
+  }
+  const v=row[c.k];
+  if(c.status) return `<span class="status ${statusClass(v)}">${esc(v)}</span>`;
+  if(c.tstat) return v?`<span class="tstat ${statusClass(v)}">${esc(v)}</span>`:"";
+  if(c.chip)  return v?`<span class="chip ${c.chip==="proj"?"proj":""}">${esc(v)}</span>`:"";
+  if(c.suffix) return (v==null||v==="")?"":`${esc(v)} <span class="muted">${c.suffix}</span>`;
+  return esc(v==null?"":v);
+}
+function rowHtml(r){
+  const flag = isOK(r) ? "":"flag";
+  return `<tr class="${flag}">`+COLS.map(c=>`<td class="${c.cls||""}${c.figs?" figs":""}${stickyCls(c)}">${cellHtml(r,c)}</td>`).join("")+`</tr>`;
+}
+function sortKeyVal(r){return String(r[sortKey]==null?"":r[sortKey]);}
+function passFilters(r){
+  for(const c of COLS){
+    const fv=filters[c.k];
+    if(c.filter==="select"){
+      if(Array.isArray(fv)&&fv.length){ if(!fv.includes(String(r[c.k]==null?"":r[c.k]))) return false; }
+    } else if(c.filter==="text"){
+      if(fv && !String(r[c.k]==null?"":r[c.k]).toLowerCase().includes(fv.toLowerCase())) return false;
+    }
+  }
+  return true;
+}
+function filtered(){
+  const q=$("#q").value.trim().toLowerCase();
+  const attn=$("#attn").checked;
+  return DATA.filter(r=>{
+    if(attn && isOK(r)) return false;
+    if(!passFilters(r)) return false;
+    if(!q) return true;
+    return searchText(r).includes(q);
+  });
+}
+function cmp(a,b){
+  const x=sortKeyVal(a), y=sortKeyVal(b);
+  if(x<y) return -sortDir; if(x>y) return sortDir;
+  if(a.marker!==b.marker) return a.marker<b.marker?-1:1;
+  return String(a.fluor||"")<String(b.fluor||"")?-1:1;
+}
+function render(){
+  buildHead();
+  let gb=$("#groupby").value; if(!GROUPABLE[gb]) gb="";
+  const rows=filtered().sort(cmp);
+  const body=$("#body"), ncol=COLS.length;
+  if(!rows.length){body.innerHTML=`<tr><td class="empty" colspan="${ncol}">No rows match.</td></tr>`;updateCounts(0);return;}
+  let html="";
+  if(gb){
+    const groups={};
+    rows.forEach(r=>{const k=(r[gb]==null||r[gb]==="")?"(blank)":r[gb]; (groups[k]=groups[k]||[]).push(r);});
+    Object.keys(groups).sort().forEach(key=>{
+      const g=groups[key];
+      html+=`<tr class="group"><td colspan="${ncol}"><span class="glabel">${esc(key)}<span class="gc">${g.length} row${g.length>1?"s":""}</span></span></td></tr>`;
+      g.forEach(r=>{html+=rowHtml(r);});
+    });
+  } else {
+    rows.forEach(r=>{html+=rowHtml(r);});
+  }
+  body.innerHTML=html;
+  updateCounts(rows.length);
+}
+function updateCounts(shown){
+  const attn=DATA.filter(r=>!isOK(r)).length;
+  $("#counts").innerHTML=`Showing <b>${shown}</b> of <b>${DATA.length}</b> marker rows`+
+    (attn?` · <b class="attn">${attn}</b> need attention`:"");
+}
+/* The stat strip is a RECORD HEADER: it reports the whole scan, not the filtered
+   view, so its numbers do not move as you filter. The "Showing N of M" line above
+   the table is what tracks the filter. n_entries comes from META. */
+function fillChrome(){
+  const attn=DATA.filter(r=>!isOK(r)).length;
+  const set=(id,v,alert)=>{const el=$("#"+id); if(!el) return;
+    el.textContent=v;
+    el.className="stat__v"+(alert&&v>0?" is-alert":(v===0?" is-zero":""));};
+  set("s_rows",DATA.length,false);
+  set("s_entries",META.n_entries!=null?META.n_entries:DATA.length,false);
+  set("s_attn",attn,true);
+  $("#mastid").innerHTML=`Generated <b>${esc(META.generated||"\u2014")}</b>`;
+  $("#f_src").textContent=META.root||"";
+}
+function clearFilters(){ for(const k in filters) delete filters[k]; $("#q").value=""; markCustom(); buildFilters(); render(); }
+
+["q","groupby","attn"].forEach(id=>{
+  const el=$("#"+id); el.addEventListener((el.tagName==="INPUT"&&el.type!=="checkbox")?"input":"change",()=>{markCustom();render();});
+});
+$("#clear").addEventListener("click", clearFilters);
+fillChrome();
+buildGroupMenu();          /* before applyTab -- applyTab assigns #groupby.value */
+buildTabs(); applyTab(0);
+</script>
+</body>
+</html>

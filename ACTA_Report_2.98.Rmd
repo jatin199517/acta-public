@@ -1,0 +1,706 @@
+---
+## The version comes from THIS FILE'S OWN NAME. It cannot come from ScriptVersion: inline R in the
+## YAML header is evaluated before the setup chunk runs, so the script has not been sourced yet.
+## ScriptVersion is underscored ("2_88") anyway, whereas the .Rmd name already carries the dotted
+## form the title wants. The %||% fallback keeps the title renderable if knitted without a file.
+title: "ACTA (Anybody Can Titrate Antibody) Report v`r sub('^ACTA_Report_', '', tools::file_path_sans_ext(basename(knitr::current_input() %||% 'ACTA_Report_?.Rmd')))`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    toc_depth: 2
+    number_sections: false
+header-includes:
+  - \usepackage{multicol}
+  - \setlength{\columnsep}{2.2cm}
+  - \makeatletter\AtBeginDocument{\renewcommand{\tableofcontents}{\begingroup\raggedcolumns\setlength{\columnseprule}{0.4pt}\renewcommand{\columnseprulecolor}{\color{black!35}}\begin{multicols}{2}[\section*{\contentsname}]\renewcommand{\addvspace}[1]{}\raggedright\@starttoc{toc}\end{multicols}\endgroup}}\makeatother
+  - \definecolor{actanavy}{HTML}{1F3864}
+  - \makeatletter\AtBeginDocument{\let\ACTAlpart\l@part\renewcommand{\l@part}[2]{\begingroup\def\@linkcolor{actanavy}\ACTAlpart{#1}{#2}\endgroup}}\makeatother
+  - \usepackage{array}
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{colortbl}
+  - \definecolor{actapass}{HTML}{1B7F3B}
+  - \definecolor{actafail}{HTML}{B3261E}
+  ## The plate map's grid, and the box it is measured in before deciding whether to shrink it.
+  ## grey50: the grid has to be visible enough to separate 96 wells and faint enough that the doses
+  ## stay the thing being read. No new package -- colortbl is already here for the QC verdicts and
+  ## \resizebox comes from graphicx, which pandoc's template loads.
+  - \definecolor{actagrid}{gray}{0.5}
+  ## The KEY shade: the header tiers and the label columns, so the 96 wells stay white and read as
+  ## the subject of the table. A 10% grey in the printing sense -- LIGHT. R's literal grey10 is
+  ## #1A1A1A and would bury the labels. Raise the number to fade it, lower it to deepen it.
+  - \definecolor{actalab}{gray}{0.90}
+  - \newsavebox{\actaplatebox}
+  - \usepackage{float}
+  - \AtBeginDocument{\hypersetup{bookmarksopen=true,bookmarksopenlevel=1}}
+  ## FOUR PACKAGES DROPPED on 2026-08-20 -- fancyhdr, lastpage, placeins and titlesec -- and replaced
+  ## by the plain-LaTeX equivalents below. They were exactly the four a colleague's minimal TeX was
+  ## missing, and the only way to install them (tlmgr) was broken on that machine, so the report could
+  ## not be produced at all while every number in the run was correct. Each was a shallow dependency:
+  ## a package that could not be installed was buying us one label, one page-break idiom, one spacing
+  ## line, and a header. What remains -- array, booktabs, colortbl, float, longtable, multicol -- is
+  ## in every distribution, including the one that was missing the other four.
+  ##
+  ## lastpage: it exists to define \pageref{LastPage}. \AtEndDocument runs BEFORE \end{document}'s
+  ## final \clearpage, so a plain \label there records the true last page with no off-by-one to
+  ## correct (verified: a 3-page document reads "Page 2 of 3").
+  - \AtEndDocument{\label{ACTAendpage}}
+  ## fancyhdr: one page style with the header, one without, both with the footer. \ps@plain is
+  ## repointed AT BEGIN DOCUMENT because \maketitle uses `plain` for the title page -- which is how
+  ## that page keeps its footer and loses its header, as before. \headheight allows for the rule.
+  - \makeatletter\newcommand{\ACTAfoot}{\hfil\small Page \thepage\ of \pageref{ACTAendpage}\hfil}\makeatother
+  - \makeatletter\def\ps@acta{\def\@oddhead{\vbox to \headheight{\hbox to \textwidth{\small ACTA Antibody Titration Report\hfil\small\itshape Developed Inc.}\vskip 2pt \hrule height 0.4pt \vfil}}\let\@evenhead\@oddhead\def\@oddfoot{\ACTAfoot}\let\@evenfoot\@oddfoot}\makeatother
+  - \makeatletter\def\ps@actaplain{\let\@oddhead\@empty\let\@evenhead\@empty\def\@oddfoot{\ACTAfoot}\let\@evenfoot\@oddfoot}\makeatother
+  - \setlength{\headheight}{22pt}
+  - \setlength{\headsep}{14pt}
+  - \pagestyle{acta}
+  - \makeatletter\AtBeginDocument{\let\ps@plain\ps@actaplain}\makeatother
+  ## titlesec bought a single \titlespacing*{\subsection}{0pt}{0pt}{4pt}. It is simply DROPPED, and
+  ## article's own subsection spacing used instead, because the obvious replacement does not survive
+  ## the pipeline:
+  ##
+  ## PANDOC HAS ITS OWN MACRO EXPANDER. A \renewcommand in header-includes is RECORDED by it and
+  ## applied to the body, so `\renewcommand\subsection{\@startsection{subsection}...}` here caused
+  ## pandoc to rewrite the script's own `\subsection{\small 4.1 Strep_PE}` into
+  ## `\@startsection{subsection}{2}{\z@}...{\small 4.1 Strep_PE}` IN THE BODY -- where @ is not a
+  ## letter, so the render died with "You can't use \spacefactor in vertical mode". Never redefine a
+  ## command that pandoc itself emits, and never assume header-includes stays in the preamble.
+  ##
+  ## The cost of dropping it is close to nothing: every per-antibody subsection is preceded by
+  ## \clearpage, and a heading's before-skip is discarded at the top of a page. Only the numbered
+  ## subsections inside the MiFlowCyt part sit mid-page, and they gain a few points of air.
+## The "Contents" heading is HOISTED OUT of the columns, into multicols' optional pre-text argument,
+## which is typeset at full width before the columns start. Inside the columns it was part of the left
+## column's flow, so the left column began one heading lower than the right: "MiFlowCyt metadata" sat
+## below "Titration results" instead of level with it. With the heading above both, the two parts start
+## on the same line.
+##
+## Hoisting it means the class's own \tableofcontents can no longer be reused (it prints the heading
+## itself), so this emits \@starttoc{toc} directly -- the documented way to place a TOC by hand -- and
+## the whole line is wrapped in \makeatletter/\makeatother because of the @. rmarkdown's toc_depth
+## still applies: it sets tocdepth, which governs what reaches the .toc file, not how it is typeset.
+##
+## THE TWO \part ENTRIES ARE NAVY, the rest of the TOC stays pandoc's Maroon. Every TOC entry is a
+## HYPERLINK, so its colour is hyperref's \@linkcolor and not the surrounding text colour -- putting
+## \textcolor inside the \part title would colour the part's own title PAGE as well and fight the link
+## colour in the TOC. Redefining \l@part to set \@linkcolor for the duration of that one line colours
+## the TOC entry ONLY, title text and page number together, and leaves \l@section untouched.
+##
+## Verification trap, cost an hour: a hand-written .toc used for a quick preview had EMPTY anchors
+## (`{...}{2}{}`), and hyperref's \contentsline skips the link entirely when the anchor is empty -- so
+## nothing was a link, nothing was coloured, and both the before and after looked black. A mock .toc
+## must give every entry a non-empty fourth argument. (Second trap in the same hour: pdftools'
+## pdf_render_page() returns dim (width, height, CHANNEL), so a[1,,] reads one column of pixels, not
+## the red channel.)
+##
+## The wide gaps between entries are article's \addvspace{1.0em}, which \l@section issues before every
+## section line. It is neutralised for the duration of the TOC only -- \addvspace is restored by the
+## \endgroup -- which tightens the spacing without shrinking the type and without a new package.
+##
+## tocloft is the conventional tool for this and was tried first; it works, and this does the same job
+## without adding a package -- which matters, because a colleague's render failed outright on a missing
+## placeins.sty, so every package in this header is one more thing that can be absent on a machine.
+##
+## While tocloft was in place every \part appeared TWICE in the TOC and I blamed tocloft for it. That
+## was wrong: the .Rmd itself held each `\part{}` block twice, left over from a reassembly that added
+## new dividers while the originals were still attached to the preceding section -- a {=tex} fence is
+## not a heading, so a splitter keyed on headings carries it along. Removing tocloft changed nothing;
+## deleting the duplicate dividers fixed it.
+##
+## \columnsep goes from LaTeX's default 10pt to 2.2cm because at 10pt the two columns read as one
+## run-on block: the right column's entry text starts almost where the left column's page number ends.
+##
+## \columnseprule draws the 0.4pt vertical rule between the columns, at black!35 so it separates the
+## two parts without competing with the entries. \columnseprulecolor is multicol's own hook for this;
+## it defaults to \normalcolor.
+##
+## THE RULE IS WHY THIS IS UNSTARRED multicols and no longer multicols*. Under the starred form the
+## column box takes the full available page height, so the rule ran two thirds of the way down the
+## page through empty space below the entries. The unstarred form balances, which sets the box to the
+## height actually used, and the rule stops with the content.
+##
+## Balancing was the reason for the starred form in the first place -- it once split the TOC at the
+## halfway point of the height, putting 4.4 to 4.5 at the top of the right column above "Titration
+## results", the two parts interleaved. That is no longer a risk, because the \columnbreak written
+## into the .toc at the part boundary (see the \addtocontents beside \part{B. Titration results})
+## FORCES the split point regardless of balancing. Balancing now only decides the column HEIGHT.
+##
+## \raggedcolumns stays. It sets the columns ragged-bottom, so the entry spacing stays as tight as it
+## is typeset and the leftover space collects at the foot of the column instead of being stretched
+## through the column's vertical glue -- which is what undid the tightening entirely when it was
+## missing under the starred form.
+## TWO-COLUMN CONTENTS. The page is LANDSCAPE, so a single-column TOC spends half its width on leader
+## dots: 20 entries took 14 lines on page 1 and spilled 6 onto page 2. Two columns halve the height at
+## no cost to legibility. Done by wrapping \tableofcontents rather than emitting our own, so
+## rmarkdown's toc / toc_depth settings still drive it.
+## It also buys headroom for GROWTH, which is the real issue: "Layouts for each antibody" adds one
+## entry per antibody group, so a six-group run would otherwise spill further every time. If it ever
+## spills again, the next step is to stop listing the per-antibody subsections, which CAPS the length
+## instead of just shrinking it.
+classoption: landscape
+date: "`r Sys.Date()`"
+colorlinks: true
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(dev = "ragg_png", dpi = 300)
+library(purrr)
+
+# Reading metadata file
+listOfLibrary<-c("flowMeans","this.path","lubridate","dplyr","tidyr","readxl","openxlsx","rstudioapi","ggplot2","flowCore","ggcyto","openCyto","flowWorkspace","grDevices","BiocManager","stringr","knitr","kableExtra","diptest","mclust","sessioninfo","ragg","ggplate")
+
+walk(listOfLibrary, ~{
+  if (!requireNamespace(.x, quietly = TRUE)) {
+    message("Trying CRAN for: ", .x)
+    tryCatch(install.packages(.x), error = function(e) NULL)
+  }
+  if (!requireNamespace(.x, quietly = TRUE)) {
+    message("CRAN failed for: ", .x, ". Trying Bioconductor...")
+    tryCatch(BiocManager::install(.x, ask = FALSE, update = FALSE),
+             error = function(e) NULL)
+  }
+  library(.x, character.only = TRUE)
+})
+## Resolve THIS report's own folder. The previous getActiveDocumentContext() call pointed
+## at whatever file had FOCUS in the editor, so knitting with another version folder's file
+## selected silently ran the report against THAT folder's scripts. knitr already sets the
+## working directory to the document's folder; this.dir() states it explicitly, with
+## current_input() as the fallback.
+## ACTA_WORK_DIR, if the caller already put it in the knit environment, OVERRIDES the pair below --
+## the same hook the script has. run_acta(report = TRUE) sets it and also passes knit_root_dir, so
+## a programmatic render cannot end up knitting one version folder's .Rmd against another's script,
+## which is exactly the failure the note above describes. Unset in a normal Knit, so the
+## interactive path is unchanged.
+ReportDir <- if (exists("ACTA_WORK_DIR", inherits = TRUE))
+  normalizePath(get("ACTA_WORK_DIR"), mustWork = TRUE) else
+  tryCatch(this.path::this.dir(), error = function(e)
+    tryCatch(dirname(knitr::current_input(dir = TRUE)), error = function(e2) getwd()))
+setwd(ReportDir)
+knitr::opts_knit$set(root.dir = ReportDir)
+## ABSOLUTE path: a relative name here would make this.path(original=TRUE) inside the
+## script resolve to a bare filename, defeating its own setwd().
+## The SCRIPT comes from the code folder; ReportDir stays the data/output folder (see the note on
+## ACTA_CODE_DIR in the script). Identical when the two are the same folder, which is the norm.
+CodeDir <- if (exists("ACTA_CODE_DIR", inherits = TRUE))
+  normalizePath(get("ACTA_CODE_DIR"), mustWork = TRUE) else ReportDir
+ScriptFile<-list.files(path = CodeDir, pattern = "^ACTA_Script.*\\.R$", full.names = TRUE)
+if (length(ScriptFile) != 1)
+  stop(sprintf("Expected exactly one ACTA_Script*.R in '%s'; found %d.", CodeDir, length(ScriptFile)))
+source(ScriptFile, local = knitr::knit_global())
+```
+
+```{=tex}
+\clearpage
+```
+```{=tex}
+\part{A. MiFlowCyt metadata}
+```
+
+
+# 1 Experiment Overview
+
+```{r MfcExperiment, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## MiFlowCyt 1, rendered FROM `actaMfc` -- the same object the FlowRepository export will serialise --
+## so this page and any future submission cannot disagree with each other. Items that legitimately
+## live in the ELN are printed as the explicit reference the assembler produced, never as a blank.
+##
+## mfcVal() and mfcTable() are defined HERE, in the first MiFlowCyt chunk, and reused by the three
+## that follow: knitr chunks share one environment and this one runs first. A missing value reads
+## "(not supplied)" rather than NA, because an NA in a report is indistinguishable from a field
+## somebody left blank by accident.
+## A cell holding the literal text "NA" is a blank somebody typed, not a value; actaInfoValue() has
+## always treated it that way. Without the same rule here the Specimen table read "Well volume (uL) NA".
+mfcVal <- function(v) {
+  v <- as.character(v)
+  v <- v[!is.na(v) & nzchar(trimws(v)) & toupper(trimws(v)) != "NA"]
+  if (!length(v)) "(not supplied)" else paste(v, collapse = "; ")
+}
+## An ABSOLUTE width, not a fraction of \textwidth. column_spec() drops the backslash: passing
+## "0.60\\textwidth" emitted `p{0.60textwidth}` into the .tex, and xelatex answered "Illegal unit of
+## measure (pt inserted)" pointing at the header, "MiFlowCyt item & V|alue". 15cm against a landscape
+## text width of roughly 23cm leaves the item column its natural size. The width is needed at all
+## because the Value column carries whole sentences -- the ELN references -- which otherwise run off
+## the page instead of wrapping.
+##
+## Not a longtable either: at most nine rows, so it never needs to break across pages.
+mfcTable <- function(d)
+  cat(kableExtra::column_spec(
+        kableExtra::kable_styling(
+          knitr::kable(d, format = "latex", booktabs = TRUE, row.names = FALSE,
+                       ## "Category" rather than "MiFlowCyt item": the section heading already says
+                       ## which MiFlowCyt part this is, so repeating it in every header row is noise.
+                       col.names = c("Category", "Value")),
+          latex_options = "hold_position", font_size = 9),
+        2, width = "15cm"))
+
+if (!exists("actaMfc")) {
+  cat("No MiFlowCyt metadata was assembled by this run.\n\n")
+} else {
+  cat(sprintf("**%s %s.** %s\n\n", actaMfc$standard$name, actaMfc$standard$version,
+              actaMfc$standard$note))
+  e <- actaMfc$experiment
+  mfcTable(data.frame(
+    Item  = c("Purpose", "Keywords", "Experiment variables", "Organization",
+              "Primary contact", "Acquisition date", "Conclusions", "Quality control"),
+    Value = vapply(list(e$purpose, e$keywords, e$experiment_variables, e$organization,
+                        e$primary_contact, e$date, e$conclusions, e$qc_measures),
+                   mfcVal, character(1)), stringsAsFactors = FALSE))
+}
+```
+
+
+```{=tex}
+\clearpage
+```
+
+# 2 Flow Sample/Specimen Details
+
+```{r MfcSpecimen, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## MiFlowCyt 2. The SOP belongs under sample treatment (MiFlowCyt 2.3): it IS the staining protocol
+## reference, and Fix/Perm are the parts of that protocol the instructions file records per well.
+if (exists("actaMfc")) {
+  s <- actaMfc$specimen
+  mfcTable(data.frame(
+    Item  = c("Test material", "Cells per well (e6)", "Well volume (uL)",
+              "Source", "Collection", "SOP", "Fixed", "Permeabilised", "Protocol"),
+    Value = vapply(list(s$characteristics$test_material, s$characteristics$cells_per_well_e6,
+                        s$characteristics$well_volume_uL, s$source, s$collection,
+                        s$treatment$sop, s$treatment$fixed, s$treatment$permeabilised,
+                        s$treatment$protocol),
+                   mfcVal, character(1)), stringsAsFactors = FALSE))
+}
+```
+
+
+```{=tex}
+\clearpage
+```
+
+## 2.4 Fluorescence Reagent Description
+
+```{r PanelInfo, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## One table per Dirname group: the panel as the instrument recorded it ($PnN -> $PnS), captured
+## per group in the script rather than read back here, so this chunk cannot itself fail the render.
+texEsc <- .actaTexEsc   # one implementation, in ACTA_Functions.R -- escapes the backslash too
+if (!exists("panelList") || !length(panelList)) {
+  cat("No panel information was captured by this run.\n\n")
+} else {
+  ## Three panels per line, each in its own minipage under a Dirname heading. minipage rather than
+  ## a multi-column table because the panels differ in length between groups -- side-by-side tables
+  ## of unequal height cannot be expressed as one tabular without padding every short one.
+  nm <- names(panelList); N <- length(nm); PER <- 3L
+  for (i in seq_len(N)) {
+    cat(sprintf("\\begin{minipage}[t]{%.2f\\textwidth}\n", 1/PER - 0.02))
+    cat(sprintf("\\textbf{%s}\\\\[2pt]\n", texEsc(nm[i])))
+    cat(knitr::kable(panelList[[nm[i]]], format = "latex", booktabs = TRUE, row.names = FALSE,
+                     align = c("l", "l"), col.names = c("Channel", "Markername")))
+    cat("\n\\end{minipage}")
+    if (i %% PER == 0L || i == N) cat("\n\n\\vspace{10pt}\n\n") else cat("\\hfill\n")
+  }
+}
+```
+
+```{=tex}
+\clearpage
+```
+
+```{=tex}
+\clearpage
+```
+
+# 3 Instrument Details
+
+```{r MfcInstrument, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## MiFlowCyt 3. Manufacturer/model comes from the FCS keywords, so it reports what ACQUIRED the data
+## rather than what the instructions file claims. The detector table is $PnV -- the gains actually in
+## force -- read from one representative file of the FIRST antibody group, because voltages are per
+## acquisition rather than per well.
+if (exists("actaMfc")) {
+  i <- actaMfc$instrument
+  mfcTable(data.frame(Item = c("Manufacturer and model", "Detectors with a recorded gain",
+                               "Instrument QC"),
+                      Value = vapply(list(i$manufacturer_model, i$settings$n_detectors_with_gain,
+                                          i$qc), mfcVal, character(1)),
+                      stringsAsFactors = FALSE))
+  v <- i$settings$detector_voltages
+  if (is.data.frame(v) && nrow(v)) {
+    cat("\n\n**Detector voltages ($PnV)**\n\n")
+    cat(kableExtra::kable_styling(
+          knitr::kable(v, format = "latex", booktabs = TRUE, row.names = FALSE, longtable = TRUE),
+          latex_options = c("hold_position", "repeat_header"), font_size = 9))
+  } else {
+    cat("\n\nNo detector voltages were recorded in the FCS keywords.\n\n")
+  }
+}
+```
+
+
+```{=tex}
+\clearpage
+```
+
+# 4 Data Analysis Details
+
+Everything below is MiFlowCyt part 4 -- what was done to the events between acquisition and the
+numbers in this report, in the order it happened: events read, compensation, transformation, gating,
+and the software that did it.
+
+## 4.1 List-mode data files: downsampling
+
+```{r Downsample, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## Stated BEFORE compensation because it happens before it -- the events every later section
+## describes are the ones counted here. actaEventsRead is per SAMPLE and accumulates across antibody
+## groups; actaDownsampleTo is the Info!Downsample_to value (NA when the column is blank).
+ds <- actaDownsampleReport(if (exists("actaDownsampleTo")) actaDownsampleTo else NA_integer_,
+                           if (exists("actaEventsRead")) actaEventsRead else integer(0))
+cat(sprintf("**Info!Downsample_to:** %s\n\n",
+            if (is.na(ds$requested)) "*(blank)*" else sprintf("`%s`", format(ds$requested, big.mark = ","))))
+cat(.actaTexEsc(ds$text), "\n\n")
+if (ds$n_files)
+  cat(sprintf("Events read: %s across %d file(s) (smallest %s, largest %s).\n\n",
+              format(ds$total, big.mark = ","), ds$n_files,
+              format(ds$min, big.mark = ","), format(ds$max, big.mark = ",")))
+```
+
+```{=tex}
+\clearpage
+```
+
+## 4.2 Compensation Description
+
+```{r Compensation, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## States what was actually applied, and for a csv shows the matrix itself -- so the report is the
+## evidence that compensation happened, not just an assertion that it was configured. compMode is
+## the resolved mode ('csv' / 'self' / 'none'); compLabel is the workbook cell verbatim.
+ci <- actaCompReport(compMode, getwd(), raw = if (exists("compLabel")) compLabel else NA_character_)
+## ESCAPED, AND NOT LEFT IN A MARKDOWN CODE SPAN. Info!compensation is free text from the workbook
+## and reaches pandoc through a results='asis' chunk, where a backslash starts a LaTeX command --
+## a cell of  csv` \input{/etc/passwd} `  had its backtick close the span and the rest ran, pulling
+## an arbitrary readable file into the report PDF (demonstrated end-to-end 2026-09-08). The code
+## span was never a defence: the value can contain the very character that ends it. \texttt{} keeps
+## the monospace look while making the whole construct raw TeX that pandoc passes through intact.
+cat(sprintf("**Info!compensation:** %s\n\n",
+            if (is.na(ci$raw) || !nzchar(ci$raw)) "*(blank)*"
+            else sprintf("\\texttt{%s}", .actaTexEsc(ci$raw))))
+cat(if (is.na(ci$note)) "" else .actaTexEsc(ci$note), "\n\n")
+if (!is.null(ci$matrix)) {
+  cat(sprintf("**Matrix file:** \\texttt{%s}\n\n", .actaTexEsc(basename(ci$source))))
+  m <- ci$matrix
+  ## A wide panel makes an unreadable table on a landscape page; past ~20 channels say so rather
+  ## than emit something nobody can read.
+  if (ncol(m) > 20) {
+    cat(sprintf("Matrix is %d x %d -- too wide to render here. Off-diagonal range: %.4g to %.4g.\n\n",
+                nrow(m), ncol(m), min(m[row(m) != col(m)]), max(m[row(m) != col(m)])))
+  } else {
+    cat(kableExtra::kable_styling(
+          knitr::kable(round(m, 4), format = "latex", booktabs = TRUE, escape = TRUE,
+                       row.names = TRUE),
+          latex_options = c("hold_position", "scale_down"), position = "left"), "\n\n")
+  }
+}
+```
+
+## 4.3 Data Transformation Details
+
+```{r Transformations, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## The FlowJo biexponential as applied, one column per group. It is a run-level setting by design
+## (actaTransArgs() errors if groups disagree), so the columns are identical -- which is the point:
+## the table is the evidence that one transform covered every group, and Stain Indices are therefore
+## comparable between them. maxValue is shown with its source, since it is the one argument the
+## layout cannot set.
+texEsc <- .actaTexEsc   # one implementation, in ACTA_Functions.R -- escapes the backslash too
+grp <- if (exists("panelList") && length(panelList)) names(panelList) else
+       if (exists("antibody")) antibody else character(0)
+if (!exists("actaTransEff") || !length(grp)) {
+  cat("No transformation settings were recorded for this run.\n\n")
+} else {
+  fmt <- function(v) format(v, scientific = FALSE, trim = TRUE)
+  lab <- names(actaTransEff)
+  lab[lab == "maxValue"] <- "maxValue (from $PnR)"
+  PER <- 8L
+  for (blk in split(grp, ceiling(seq_along(grp) / PER))) {
+    tab <- data.frame(Argument = texEsc(lab), stringsAsFactors = FALSE, check.names = FALSE)
+    for (ab in blk) tab[[texEsc(ab)]] <- vapply(actaTransEff, fmt, "")
+    if (length(grp) > PER)
+      cat(sprintf("\n*Groups %d-%d of %d*\n\n", match(blk[1], grp),
+                  match(blk[length(blk)], grp), length(grp)))
+    cat(kableExtra::kable_styling(
+          knitr::kable(tab, format = "latex", booktabs = TRUE, escape = FALSE, row.names = FALSE,
+                       align = c("l", rep("c", length(blk)))),
+          latex_options = c("hold_position"), position = "left"), "\n\n")
+  }
+}
+```
+
+```{=tex}
+\clearpage
+```
+
+## 4.4 Gating (Data Filtering) Details
+
+```{r GatingPlot, fig.width=12, fig.height=8, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center"}
+plot(gs)
+```
+
+```{=tex}
+\clearpage
+```
+
+## 4.4.2 Gate Statistics
+
+```{r MfcGateStats, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## MiFlowCyt 4.4.2 asks for the gating statistics. They are NOT reproduced here: the table is per well AND
+## per population -- 44 rows for a single group, 126 for three -- and a summarised version was neither
+## the real numbers nor short enough to be worth a page. It pointed at StatsExport anyway, so this
+## points there directly and says how to get a population into it.
+if (exists("actaMfc") && !is.null(actaMfc$analysis$gating$statistics) &&
+    nrow(actaMfc$analysis$gating$statistics)) {
+  g <- as.data.frame(actaMfc$analysis$gating$statistics)
+  cat(sprintf(paste("Count, percent of parent, median fluorescence intensity and robust SD were",
+                    "collected for %d population/well combination%s and written to the",
+                    "**Pop_stats** sheet of the titration export beside this report.\n\n"),
+              nrow(g), if (nrow(g) == 1) "" else "s"))
+} else {
+  cat(paste("No gating statistics were collected: no population in the gating_template was flagged",
+            "for export.\n\n"))
+}
+cat(paste("In `gating_template`, mark `stats_export` as TRUE to make sure that population's stats",
+          "are exported.\n\n"))
+```
+
+## 4.5 Analysis software (not a MiFlowCyt 1.0 item)
+
+```{r MfcSoftware, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## MiFlowCyt 1.0 has NO software item -- section 4 ends at 4.4.4 -- so this is labelled an
+## addition rather than given a real item number. It still belongs in the report: Taken from the run itself rather than
+## restated by hand: ACTA's version is parsed from the script FILENAME and R's from R.version.string.
+if (exists("actaMfc")) {
+  s <- actaMfc$analysis$software
+  mfcTable(data.frame(Item = c("ACTA version", "R version"),
+                      Value = vapply(list(s$acta_version, s$r_version), mfcVal, character(1)),
+                      stringsAsFactors = FALSE))
+}
+## A POINTER, not the documentation. Somebody holding only this PDF has no way to know the pipeline is
+## callable from R; one line fixes that. The documentation itself stays in README.md, because anything
+## added to this .Rmd prints into every operator's report, and a page of R API notes is noise to the
+## people this report is actually for.
+cat("\n\nThis pipeline can be driven from R without the app: see **Automating ACTA** in",
+    "`README.md` in the script folder.\n\n")
+```
+
+
+```{=tex}
+\clearpage
+```
+
+```{=tex}
+\addtocontents{toc}{\protect\columnbreak}
+\part{B. Titration results}
+```
+
+
+# 1 Plate map
+
+```{r PlateMap, fig.width=10, fig.height=7.6, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center", results='asis'}
+## Layout_Plate drawn as the plate it describes -- one figure per PlateID, built by the script (see
+## make_plate_layout_great_again) and printed here, so the PDF and the Plots/ export are the same
+## object. Guarded the same way ConcatPlot is: an empty list says so rather than taking the render
+## down, because nothing in this section reads FCS and a missing plate map must not cost a report.
+if (!exists("PlateMapList") || !length(PlateMapList)) {
+  cat("No plate layout was available to map.\n\n")
+} else {
+  for (.i in seq_along(PlateMapList)) {
+    ## \clearpage between plates, so a multi-plate run does not stack two maps on one page.
+    if (.i > 1) cat("\n\\clearpage\n")
+    print(PlateMapList[[.i]])
+  }
+}
+```
+
+# 2 QC
+
+```{r QCChecks, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## Renders whatever actaQCChecks() produced per antibody -- add a check in ACTA_Functions.R and it
+## appears here with no edit to this file. Every verdict is one of PASS (green), FAIL (red) or
+## SKIPPED (italic, uncoloured -- it is neither). Skipped is NOT passed: the
+## per-antibody roll-up in the titration export (QC_Status) counts it as FAIL.
+## Nothing in this section can stop the render: the checks were already computed in the script.
+## Braces are required: a brace-less function body ends at the newline, so `else` on the next
+## line is a parse error inside a knitr chunk.
+paint <- function(v) {
+  if (identical(v, "PASS")) "\\textcolor{actapass}{\\textbf{PASS}}"
+  else if (identical(v, "FAIL")) "\\textcolor{actafail}{\\textbf{FAIL}}"
+  else sprintf("\\textit{%s}", v)     # skipped: no colour, it is neither a pass nor a fail
+}
+texEsc <- .actaTexEsc   # one implementation, in ACTA_Functions.R -- escapes the backslash too
+if (!exists("qcList") || !length(qcList)) {
+  cat("No QC results were produced by this run.\n\n")
+} else {
+  ## Checks down the side, ONE COLUMN PER GROUP: a comparative table shows at a glance which group
+  ## failed, where the per-group blocks made you read them one after another. Rows are keyed on the
+  ## check id, so a group that skipped a check still lines up with the others.
+  ids   <- unique(unlist(lapply(qcList, function(cl) vapply(cl, function(c) c$id, ""))))
+  stmt  <- setNames(rep(NA_character_, length(ids)), ids)
+  for (cl in qcList) for (c in cl) if (is.na(stmt[[c$id]])) stmt[[c$id]] <- c$statement
+  cell  <- function(ab, id) {
+    hit <- Filter(function(c) c$id == id, qcList[[ab]])
+    if (!length(hit)) "--" else paint(hit[[1]]$verdict)
+  }
+  ## Split into blocks of at most PER groups. The Check column repeats in each block, so every
+  ## table is readable on its own; scale_down alone would keep shrinking the type until a run with
+  ## many groups is unreadable, and a landscape page still has a finite width.
+  PER <- 4L
+  grp <- names(qcList)
+  for (blk in split(grp, ceiling(seq_along(grp) / PER))) {
+    tab <- data.frame(Check = texEsc(unname(stmt[ids])), stringsAsFactors = FALSE, check.names = FALSE)
+    for (ab in blk) tab[[texEsc(ab)]] <- vapply(ids, function(i) cell(ab, i), "")
+    tab[nrow(tab) + 1, ] <- c("\\textbf{Overall}",
+                              vapply(blk, function(ab) paint(actaQCStatus(qcList[[ab]])), ""))
+    if (length(grp) > PER)
+      cat(sprintf("\n*Groups %d-%d of %d*\n\n", match(blk[1], grp),
+                  match(blk[length(blk)], grp), length(grp)))
+    cat(kableExtra::kable_styling(
+          knitr::kable(tab, format = "latex", booktabs = TRUE, escape = FALSE, row.names = FALSE,
+                       align = c("l", rep("c", length(blk)))),
+          latex_options = c("hold_position"), position = "left"), "\n\n")
+  }
+}
+```
+
+# 3 Resolution of populations
+
+```{r ConcatPlot, fig.width=si_width, fig.height=si_height, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center"}
+## FlowJo-style concatenation, BEFORE the Stain Index: it shows the raw separation the SI then
+## reduces to one number per well, so a reader sees the distributions before the summary of them.
+## Guarded -- ConcatPlot is NULL when no events survived to the parent population, and a plot(NULL)
+## would take the whole render down with it. Same dimensions as SIPlot, same facet ncol.
+if (!is.null(ConcatPlot)) plot(ConcatPlot) else cat("No concatenated events to plot.")
+```
+
+```{=tex}
+\clearpage
+```
+
+```{r SIPlot, fig.width=si_width, fig.height=si_height, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center"}
+plot(SIPlot)
+```
+
+```{r SIPlotMMNote, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## WHY a Michaelis-Menten fit was refused. The plot can only afford "Michaelis-Menten: no fit" -- a
+## whole sentence would overflow a narrow facet -- and mmFits has carried the reason all along with
+## nowhere to put it. A refused fit is usually the RIGHT answer: an SI series that peaks and then
+## declines is not a saturating isotherm, and a Vmax fitted to it would be worse than none. Four
+## blank cells cannot say that, so the reader cannot tell a real finding from a broken pipeline.
+if (exists("mmFits") && "MM_note" %in% names(mmFits)) {
+  bad <- mmFits[!isTRUE_vec(mmFits$MM_ok), , drop = FALSE]
+  if (nrow(bad)) {
+    cat("\n\n**No Michaelis-Menten fit for:**\n\n")
+    ## Dirname is a workbook cell and had no code span around it at all, so a backslash in it went
+    ## straight into the TeX stream. Same class as Info!compensation above.
+    for (i in seq_len(nrow(bad)))
+      cat(sprintf("- \\texttt{%s} -- %s\n", .actaTexEsc(bad$Dirname[i]),
+                  if (is.na(bad$MM_note[i])) "reason not recorded" else .actaTexEsc(bad$MM_note[i])))
+    cat(paste("\nFor these groups the recommended volume is `maxSI_StainQty`, the observed peak,",
+              "rather than a fitted parameter. The same reason is in the titration export's",
+              "`MM_note` column.\n\n"))
+  }
+}
+```
+
+```{=tex}
+\clearpage
+```
+
+# 4 Saturation of positive population proportion
+
+```{r SatPlot, fig.width=si_width, fig.height=si_height, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center"}
+plot(SatPlot)
+```
+
+```{=tex}
+\clearpage
+```
+
+# 5 Layouts for each antibody
+
+```{r layoutPlots, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## Each antibody becomes a \subsection, so it nests UNDER "Layouts for each antibody" in the
+## TOC (toc_depth: 2). Every plot gets its own page: pseudocolor, histogram, then one page per
+## gating_template population flagged Layout=TRUE.
+##
+## Each plot is emitted through knit_child with ITS OWN fig.width/fig.height, taken from
+## plotDims[[q]] (facetLayout()). A single fig size on this chunk would render every grid at the
+## same 12 x 8 in and re-squash the panels the script just sized -- an antibody with 16 stain
+## volumes needs a taller, wider device than one with 6. out.height still caps each figure at
+## 0.88\textheight so nothing overruns the footer.
+## Chunk labels must be unique across the whole document -- see actaChunkTag().
+usedTags <- character(0)
+uniqTag <- function(t) {
+  if (t %in% usedTags) {
+    k <- 2L
+    while (paste0(t, "_", k) %in% usedTags) k <- k + 1L
+    t <- paste0(t, "_", k)
+  }
+  usedTags <<- c(usedTags, t)
+  t
+}
+emitPlot <- function(code, tag, d) {
+  cat(knitr::knit_child(quiet = TRUE, text = c(
+    sprintf(paste0("```{r %s, echo=FALSE, warning=FALSE, message=FALSE, fig.width=%.2f, ",
+                   "fig.height=%.2f, fig.pos='H', out.width='\\\\textwidth', ",
+                   "out.height='0.88\\\\textheight', out.extra='keepaspectratio', ",
+                   "fig.align='center'}"), tag, d$width, d$height),
+    code, "```", "")), sep = "\n")
+}
+for (q in seq_along(antibody)) {
+  ## Numbered 5.q to match the MiFlowCyt part's manual numbering. The "5" is the section number of
+  ## "Layouts for each antibody" above and is written in both places -- renumber the two together.
+  cat("\n\\clearpage\n\\subsection{\\small ", sprintf("5.%d ", q),
+      knitr:::escape_latex(antibody[q]), "}\n\n", sep = "")
+  d     <- reportDims[[q]]
+  np    <- length(reportHist[[q]])        # pages per plot; 1 when not paginating
+  first <- TRUE
+  ## A "page i of k" marker is printed ONLY when the plot is actually split, so unpaginated
+  ## output is byte-identical to before. Without it two near-identical pages are indistinguishable.
+  emitPage <- function(code, tag, what, i) {
+    if (!first) cat("\n\\newpage\n")
+    first <<- FALSE
+    if (np > 1L)
+      cat("\n\\textit{\\small ", knitr:::escape_latex(sprintf("%s -- page %d of %d", what, i, np)),
+          "}\n\n", sep = "")
+    emitPlot(code, tag, d)
+  }
+  for (i in seq_len(np))
+    emitPage(sprintf("print(reportPseudo[[%d]][[%d]])", q, i), sprintf("lp%d-pseudo%d", q, i), "Pseudocolor", i)
+  for (i in seq_len(np))
+    emitPage(sprintf("print(reportHist[[%d]][[%d]])", q, i), sprintf("lp%d-hist%d", q, i), "Histogram", i)
+  for (al in names(reportLayout[[q]]))
+    for (i in seq_along(reportLayout[[q]][[al]]))
+      emitPage(sprintf("print(reportLayout[[%d]][[%s]][[%d]])", q, deparse(al), i),
+               ## actaChunkTag() keeps + and - distinguishable (as p / n); uniqTag() is the backstop,
+               ## because a duplicate label is a failed render and not a cosmetic problem.
+               uniqTag(sprintf("lp%d-%s-%d", q, actaChunkTag(al), i)), al, i)
+}
+```
+
+```{=tex}
+\clearpage
+```
+
+# 6 Session Information
+
+```{r provenance, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+cat("**Script version:** ACTA v", ScriptVersion, "\n\n", sep = "")
+cat("**Render timestamp:** ", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"), "\n\n", sep = "")
+cat("**Rendered by:** ", Sys.info()[["user"]], " on ", Sys.info()[["nodename"]], "\n\n", sep = "")
+## The workbook's filename is chosen by whoever supplies it, so it is untrusted text too.
+cat("**Layout workbook:** \\texttt{", .actaTexEsc(basename(metadata_file_name)), "}\n\n", sep = "")
+```
+
+```{r sessionInfo, echo=FALSE}
+## sessioninfo::session_info() (URSULA variant) rather than base sessionInfo(): it also
+## reports the package SOURCE (CRAN/Bioconductor/GitHub + version) and the R environment
+## block, which is what makes a run reproducible after the fact.
+sessioninfo::session_info()
+```

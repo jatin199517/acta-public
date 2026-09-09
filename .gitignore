@@ -1,0 +1,167 @@
+# ACTA -- public repository.
+#
+# Generated as part of the release build; edit it in the source repository, not here.
+#
+# THE PUBLIC REPO IS FLAT -- the pipeline files sit at the root, with no version folder -- so every
+# rule anchored "one level deep" upstream is ALSO anchored at the root here. Without that change a
+# user's own `Titration_FCS/*.wsp` and `*.csv` would be COMMITTABLE, because
+# `*/Titration_FCS/*` cannot match a path with no leading directory. Your own flow data should
+# never be committable by accident.
+#
+# === R workspace & session artifacts (regenerable, large) ===
+.RData
+.RData*
+.RDataTmp
+.Rhistory
+.Rapp.history
+.Rproj.user/
+
+# === Raw / large data — do NOT commit to external hosting ===
+# Flow cytometry raw data (proprietary experimental data, large binaries)
+*.fcs
+*.fcs.gz
+# ...EXCEPT the sanitised diagnostic data, which is part of the tool and MUST ship: without it a
+# fresh clone has no test data, `actaOQRun()` cannot run, and the OQ cases are also the only worked
+# examples a new user gets. Re-included explicitly so `git add -A` picks them up.
+#
+# WHY THIS EXISTS: they were force-added long ago, `*.fcs` above quietly caught them on every
+# subsequent bump, and a plain `git add -A <new version>` therefore staged a version folder with
+# ZERO test data -- 41 files instead of 88, which passes every local suite because the files are on
+# disk, and fails from a fresh clone. This rule removes the need for a `git add -f`.
+!**/Diagnostics/OQ_Test*/Titration_FCS/**
+
+# Large generated reports (regenerable from .Rmd)
+*.pdf
+
+# knitr / rmarkdown intermediates. render(clean = FALSE) keeps these so a FAILED render leaves the
+# LaTeX .log behind to diagnose from -- which means they now appear routinely and must be ignored.
+# ACTA_Report_*.knit.md had already been committed once by an over-broad `git add -A`.
+*.knit.md
+*.utf8.md
+*.aux
+# The LaTeX .log is the one intermediate that is USEFUL after a failure -- and the one that must not
+# be committed. A tracked log from a failed 2_87 run carried the operator's absolute home directory
+# on EVERY line. It sits at the case ROOT, not under Outputs/, so the **/OQ_Test*/Outputs/ rule
+# never caught it. Read it, diagnose from it, then leave it out.
+#
+# Keep this note. `*.log` sitting between `*.aux` and `*.toc` reads as an ordinary build artefact,
+# so a later tidy-up removes it as redundant -- and the disclosure it prevents is invisible from the
+# rule alone.
+*.log
+*.tex
+*.toc
+*.out
+*_files/
+
+# Generated plot images (regenerable from scripts) — keep repo code-only
+*.png
+
+# ...except the README's own figures, which are SOURCE, not output. The negation must sit BELOW the
+# rule it overrides: git applies the LAST matching pattern, so a negation placed above `*.png` is
+# dead text. Without this the repo publishes a README with two broken images.
+!assets/*.png
+
+# Whole Plots/ output directory at any depth (belt-and-braces alongside *.png)
+Plots/
+
+# Generated titration exports. Regenerable by re-running the script, and they carry
+# experiment metadata (ELN IDs, reagent lots, donor material) plus derived Stain Index
+# values, so they are kept out of remote hosting.
+*TitrationExport*.xlsx
+# The per-population StatsExport is the same kind of thing.
+*StatsExport*.xlsx
+
+# WORKING flow data folder. `*.fcs` above already excludes the FILES; this excludes everything else
+# a version's own working folder might collect (a vendor .csv, a FlowJo workspace, a screenshot), so
+# nothing in there can be committed by accident.
+#
+# The CONTENTS are excluded, not the folder itself, and its README is re-included -- so the folder
+# EXISTS in a fresh clone, telling a user where the FCS go, instead of having to be created by hand
+# before the first run. Excluding the directory outright would make that impossible: git cannot
+# re-include a path underneath an excluded directory.
+#
+# Anchored ONE level deep, which is exactly where a version's working folder sits: `*` does not match
+# a slash, so this catches `<version>/Titration_FCS/<file>` and nothing deeper. The sanitised OQ data
+# at */Diagnostics/OQ_Test*/Titration_FCS/ is four levels down and is NOT caught BY THIS RULE --
+# but it WAS caught by the global `*.fcs` at the top of this file, which this comment used to deny.
+# That is now handled by an explicit re-include up there; see it for what the denial cost.
+Titration_FCS/*
+!Titration_FCS/README.md
+*/Titration_FCS/*
+!*/Titration_FCS/README.md
+
+# === WORKING instructions / layout workbooks: never upload, any version ===
+# Superseded the earlier note here, which said these were "deliberately NOT ignored -- they are
+# inputs the pipeline needs, not outputs". Being an input is not the test: a working workbook carries
+# the RUN's own metadata -- ELN ID, operator, vendor / catalogue / lot numbers, test material and the
+# plate map -- so it is proprietary regardless of the fact that the tool reading it is not. What gets
+# published is the TOOL, its TESTS and its DIAGNOSTICS.
+#
+# Two kinds are therefore still tracked, both by design:
+#   Template/<...>.xlsx              the blank template, which IS part of the tool
+#   Diagnostics/*/<...>.xlsx         sanitised OQ copies, without which the OQ cases cannot run
+# A working copy of the instructions workbook holds real run data, so it is never committed; the
+# blank template and the sanitised OQ copies above are part of the tool and are.
+# THIS TREE IS FLAT, WHICH CHANGES WHERE THE RULE BITES. Here `Template/` is one level deep and a
+# working copy sits at the ROOT -- so a naive `*/*` rule ignored the blank template, which every
+# user copies and
+# which the comment above calls part of the tool, while leaving a root-level working workbook
+# perfectly committable. Both halves are wrong, and the second is a disclosure risk.
+#
+# So: catch the root as well, and un-ignore the two that ship. Negations come AFTER, because git
+# applies the last matching pattern. (`Diagnostics/*/` is two levels and never matched `*/*`
+# anyway; it is stated so the intent survives the next person to edit this file.)
+/*_Ab_Titration_Layout*.xlsx
+/*_Ab_Titration_Instructions*.xlsx
+*/*_Ab_Titration_Layout*.xlsx
+*/*_Ab_Titration_Instructions*.xlsx
+!Template/*_Ab_Titration_Instructions*.xlsx
+!Diagnostics/*/*_Ab_Titration_Instructions*.xlsx
+
+# The GENERATED dashboard. Named distinctly from the Template/*.html sources so those stay tracked.
+# It had been committed into two version folders by an over-broad `git add -A`, which is also how it
+# came to be duplicated into the new version by the bump.
+ACTA_Titration_Dashboard*.html
+
+# === OS / editor cruft ===
+.DS_Store
+Thumbs.db
+
+# === Backups ===
+*.bak
+*.bak_*
+# Layout workbooks kept as safety copies before a schema edit. The layouts themselves are
+# inputs and ARE tracked, so these have to be excluded by the *_backup suffix, not by extension.
+*_backup.xlsx
+Archive/
+
+# regression snapshots are run artefacts
+*.rds
+.acta_run_result.rds
+ACTA_app_run_log.tsv
+# OQ run artefacts. `**/` because the cases live at 2_87_WIP/Diagnostics/OQ_TestN/Outputs/ --
+# a bare `*/` matches exactly ONE directory level, so the old pattern never fired at that depth
+# and two artefacts were committed. They matter: the report and dashboard embed the ABSOLUTE
+# path of whoever ran them and log.txt records the machine name, so in a folder that is meant to
+# be publicly shareable these are a disclosure, not just clutter.
+**/OQ_Test*/Outputs/
+
+# The OQ compensation matrix is an INPUT the diagnostic needs, exactly like the layout workbooks.
+# It is negated EXPLICITLY because it is not this file that excludes it: a user-global
+# core.excludesFile carrying `*.csv` does, silently. Without this line a fresh clone gets no
+# matrix, OQ_Test2's csv pre-flight reports "0 candidates", and the case looks broken rather than
+# incompletely cloned. A repo .gitignore outranks the global excludes file, so this negation wins.
+!**/OQ_Test*/*CompMatrix*.csv
+# the OQ FCS are sanitised and downsampled, so they DO belong in git (force-added)
+.acta_oq_result.rds
+
+# The scrub token sidecar: the list of identifiers to remove IS the identifiers, so it must never
+# be committed. verify_oq_sanitised.R and build_oq_test.R load it from beside themselves and run in
+# a loudly-announced reduced mode when it is absent -- which is what a public clone looks like.
+**/tests/.acta_scrub_tokens.R
+
+# Local planning notes. Kept beside the code they describe, deliberately not tracked.
+Plans/
+
+# The build's own provenance note: meaningful only in the source repository. Stays out of this one.
+RELEASE_MANIFEST.txt

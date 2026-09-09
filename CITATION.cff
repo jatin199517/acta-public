@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: If you use ACTA in work you publish, please cite it.
+title: "ACTA — Anybody Can Titrate Antibody"
+abstract: >-
+  An R workflow for analysing flow cytometry antibody titration experiments. A run reads a flowset
+  of FCS files plus one Excel instructions workbook, gates positive and negative populations with
+  openCyto, and reports a Stain Index per stain quantity together with a Michaelis-Menten fit, a
+  PDF report, and an HTML dashboard across runs.
+type: software
+license: AGPL-3.0-only
+repository-code: "https://github.com/jatin199517/acta-public"
+keywords:
+  - flow cytometry
+  - antibody titration
+  - stain index
+  - openCyto
+  - R
+authors:
+  - family-names: Sharma
+    given-names: Jatin
+    affiliation: "Lyell Immunopharma, Inc."
+
+# WHEN THE PAPER IS PUBLISHED, ADD rather than REPLACE. Keep the software entry above and append a
+# `preferred-citation:` block describing the article; GitHub's "Cite this repository" button then
+# offers the paper while the software remains citable in its own right, which is what you want when
+# someone is citing a specific version's behaviour rather than the method. Sketch:
+#
+#   preferred-citation:
+#     type: article
+#     title: "..."
+#     authors: [...]
+#     journal: "..."
+#     year: 20XX
+#     doi: "10.XXXX/..."
+#
+# FOR A PER-VERSION DOI, enable the GitHub-Zenodo integration BEFORE the first public release: each
+# tag then mints its own DOI and the repository gets a concept DOI covering all of them. Doing it
+# afterwards leaves earlier tags without one.

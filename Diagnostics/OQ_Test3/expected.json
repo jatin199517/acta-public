@@ -1,0 +1,83 @@
+{
+  "name": "OQ_Test3",
+  "description": "COMBINATORIAL titration: two markers (CCR7, CD14) titrated from ONE set of FCS files, alongside a single-marker CCR7 titration in its own folder. 3 titrations across 2 FCS folders.",
+  "why_this_case": "OQ_Test1 is one titration in one folder; OQ_Test2 is three titrations in three folders on a second instrument. Neither exercises the case where one Dirname carries MORE THAN ONE titrated marker, which is the whole of the combinatorial work: the loop's unit becomes Alias rather than Dirname, the layout lists each well once per marker, and the seven prevalidation consumers that used to read the loop key as a folder name all have to stop doing that.",
+  "eln_id": "EXP00000003",
+  "group": [
+    "CCR7",
+    "CCR7_combo",
+    "CD14_combo"
+  ],
+  "n_groups": 3,
+  "events_per_well": 20000,
+  "stats_rows": 21,
+  "stats_cols": 42,
+  "export_rows": 3,
+  "dashboard_rows": 3,
+  "n_plots": 19,
+  "shared_upstream": true,
+  "qc_checks": [
+    "cells_fsc",
+    "live",
+    "single_cells",
+    "costain_lowest",
+    "min_events"
+  ],
+  "report_expected": true,
+  "group_note": "Order follows LAYOUT ROW order, not the alphabet: the standalone CCR7 folder first, then the two series inside CD14+CCR7. The keys are the ALIASES for the combinatorial folder and the DIRNAME for the single one -- actaTitrationGroups() switches on whether a folder carries more than one Alias, which is exactly what this case pins.",
+  "alias_note": "CCR7_combo, not CCR7, for the co-titrated series: the key must be unique across the run and the standalone folder already claims CCR7. actaTitrationGroups() refuses a duplicate key outright, so this naming is load-bearing rather than cosmetic.",
+  "stats_note": "stats_rows 21 = 7 wells x 3 titrations. The seven CD14+CCR7 wells are counted TWICE because two markers are titrated in them -- that doubling is the point of the case, not an error. export_rows stays 3, one per titration (its best-SI well).",
+  "shared_upstream_note": "Asserts that Cells, Single_cells and Live come out identical for CCR7_combo and CD14_combo, which share all seven wells. They are gated in separate GatingSets, so this holds only because set.seed(ACTA_SEED) is re-set per loop iteration. Without that, flowClust/flowMeans would place the shared parents differently for the two series and their Stain Indices would not be comparable. Keyed on PLATE POSITION, not the sample name: `name` is generated per titration and embeds the target (..._tgtCCR7_... vs ..._tgtCD14_...), so the two series never share one. 21 comparisons = 3 populations x 7 wells.",
+  "synthetic_note": "THIS FIXTURE IS PARTLY SYNTHETIC, by agreement, and every edit is confined and documented. (1) BUV615-A $PnS relabelled CD16-CD14 -> CD14 in all 14 files: the real run put CD16 in the same fluorochrome, so the CD14 series measures CD14 union CD16 and is not a biologically clean CD14 titration. (2) BOTH folders are built from the same seven CD14+CCR7 acquisitions -- CD14+CCR7 as acquired, CCR7 as an independent replicate (see series_agreement_note). (3) COSTAIN WELLS ONLY: values above an explicit threshold in the CCR7 and CD14 channels are REDRAWN from that channel's own negatives -- CD14 at 10000 (about 10 percent of the well, the expected PBMC monocyte+NK fraction) and CCR7 at 1500 (about 6.5 percent, clear of a negative mode ending near 800). The fitted gate_flowmeans split was tried and rejected for both: it returns the p99 of the NEGATIVE cluster, which for these overlapped channels landed at the 95.5th/99th percentile of the WELL and cleaned only 1.0-4.5 percent, leaving a visible cloud that then set the gate. Replacement values carry log-normal jitter (sd 0.35) plus a decaying tail of 0.006 of the well, because a plain resample caps values AT the threshold and renders as a hard vertical wall -- visible clipping. (4) NOTHING IS EVER DELETED. Deleting 90 percent of the CD14 positives was tried and abandoned: it removes whole CELLS, so it took their CCR7 readings too and the same antibody read 42.90 percent in one folder against 16.88 in the other; it also made operation order load-bearing, collapsing the CCR7 split from 4258 to 222 and rewriting 36.84 percent of that channel. Every shipped well holds exactly 20000 events.",
+  "gating_note": "The Cells gate is the built-in `boundary` method, min=c(1.5e6,-Inf) max=c(Inf,Inf). The source workbook had min=c(1.5e6,Inf), max=c(-Inf,Inf), which makes both intervals EMPTY and keeps zero events; corrected here because a fixture cannot ship a gate that empties the tree. stats_export is TRUE on the three hierarchy rows so the export carries Pop_stats -- 3 populations x 21 wells = 63 rows -- which the stats_sheets check requires.",
+  "platemap_note": "n_plots 18 -> 19: the Plots/ export gained one plate map per PlateID in 2_97 (<BenchlingID>_PlateMap_plate_<PlateID>.png). One plate in this case.",
+  "plots_note": "n_plots 18 = 3 titrations x (histogram + pseudocolor + 3 layout pages) plus the 3 run-level figures (SIPlot, SatPlot, ConcatPlot).",
+  "schema_note": "stats_cols 42 matches OQ_Test1/2 as of 2_91: the Titration column added by the combinatorial work is counted there. Went 41 -> 42 in 2_95 when Layout_Plate gained Combinatorial_group (n), which rides into `stats` through pData.",
+  "qc_verdicts": {
+    "CCR7": {
+      "cells_fsc": "PASS",
+      "live": "PASS",
+      "single_cells": "PASS",
+      "costain_lowest": "FAIL",
+      "min_events": "PASS"
+    },
+    "CCR7_combo": {
+      "cells_fsc": "PASS",
+      "live": "PASS",
+      "single_cells": "PASS",
+      "costain_lowest": "FAIL",
+      "min_events": "PASS"
+    },
+    "CD14_combo": {
+      "cells_fsc": "PASS",
+      "live": "PASS",
+      "single_cells": "PASS",
+      "costain_lowest": "PASS",
+      "min_events": "PASS"
+    }
+  },
+  "verdict_note": "NESTED verdict map, because the three titrations legitimately disagree on one check. costain_lowest PASSES for CD14_combo and FAILS for both CCR7 series, and both are correct for this data. For CD14 the control is now genuinely clean -- 0 events above the 10000 threshold -- so its Costain holds the lowest SI in the series, which is what a zero-volume control should do. For CCR7 it is structural and not a pipeline defect: the marker gate floor IS the Costain's own 99th percentile (pp_costain_floor, costain_quantile=0.99), so the Costain always holds ~1 percent positive by construction and its `pos` is the median of that top 1 percent; against a MAD-based robustSD on a skewed distribution that ratio sits inside the range the stain wells occupy. MEASURED across four builds on 2026-08-27, Costain SI vs series minimum: unsquashed 13.40/4.02 with min_events also failing; fitted-split squash 4.48/2.40; 90% deletion at 62987 then at 10000; and this build. Asserted exactly, so that no verdict MOVES unnoticed -- this map is what caught CD14_combo turning PASS when the threshold was corrected, rather than absorbing it silently. THE UNDERCUTTING WELL, identified 2026-09-03 and previously an open question: StainQty 0.3125, SI 1.599 against the Costain 2.187 for CCR7, and 1.758 against 2.105 for CCR7_combo. The series maximum is 3.809, so this is ONE weak dose sitting near background and not a series that failed to separate -- the two are different situations and actaQCCostainLowest now says which one it found. Note the CCR7 titration is non-monotonic in the SOURCE data: the positive median drops from 3588 at 0.15625 to 1902 at 0.3125, so the weakest dose is not the smallest volume. LEFT AS MEASURED. Cleaning the Costain further to clear the check would be fitting the fixture to the assertion, and the gate floor is the Costain own p99 anyway, so lowering its tail moves the floor and every stain well with it.",
+  "series_agreement": {
+    "pair": [
+      "CCR7",
+      "CCR7_combo"
+    ],
+    "max_percent_diff_pp": 4.0
+  },
+  "series_agreement_note": "The two CCR7 series are INDEPENDENT REPLICATES of the same seven wells, not copies: own event sample (different downsample seed), own Costain cleaning, and a per-well stain-efficiency factor (log-normal, sd 0.10, 0.977-1.225 here) applied to the titrated channel -- fluorescence scales with bound antibody, so a multiplicative factor is the physical model for stain-to-stain variation. Observed 2026-08-27: worst 2.96 pp, mean 1.37 pp across the 7 wells (0.00 0.16 2.96 1.60 2.40 0.22 2.28). Band set at 4.0 pp -- above the observed spread, far below the 10+ pp a broken combinatorial path would produce. AN EXACT MATCH IS A FAILURE: two independent replicates cannot agree to the last digit, so zero difference means they are sharing events. That is what this case looked like briefly on 2026-08-27, when the CCR7 folder was a copy of the combinatorial one -- it satisfied a strict invariant and read as a fixture artefact rather than an experiment, which for a case that doubles as the try-it-yourself dataset costs more than the invariant was worth. The Costain difference is 0.00 pp in both series BY CONSTRUCTION, not because events are shared: the gate floor is each Costain's own p99, so each holds ~1 percent positive by definition.",
+  "combinatorial": {
+    "CCR7": {
+      "group": "",
+      "logical": "FALSE"
+    },
+    "CCR7_combo": {
+      "group": "1",
+      "logical": "TRUE"
+    },
+    "CD14_combo": {
+      "group": "1",
+      "logical": "TRUE"
+    }
+  },
+  "combinatorial_note": "Asserted per titration, not counted. stats_cols went 41 -> 42 when Layout_Plate gained Combinatorial_group (n): the column rides into `stats` through pData, so the count moves even though the two EXPORT columns are added later in statsForExport. OQ_Test3 is the only case that declares anything -- CCR7_combo and CD14_combo really were stained in the same wells, so they carry group 1 while the standalone CCR7 series is left blank, giving two TRUEs and one FALSE to assert. OQ_Test1 and OQ_Test2 pin the negative case: the column exists, nothing is declared, every titration reads FALSE."
+}
