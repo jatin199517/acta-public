@@ -189,7 +189,8 @@ Setup.bat                    :: or: Setup.bat --no-tex
 
 `Setup.bat` exists because the R for Windows installer does not put `Rscript` on `PATH`, so
 `Rscript Setup.R` fails there with `'Rscript' is not recognized`; the launcher finds `Rscript.exe`
-itself. From R or RStudio on any platform, `source("Setup.R")` works too.
+itself. `source("Setup.R")` from R or RStudio installs the same packages, but see the pandoc note
+below before you rely on what it reports.
 
 `Setup.R` installs the R packages, a TeX engine if there is none, and the LaTeX packages the report
 needs. It reads its package list out of `ACTA_Script_*.R`, so that script is the authoritative
@@ -202,16 +203,21 @@ What each platform needs beyond R:
 | | Installed by `Setup.R` | Linux | macOS | Windows |
 |---|---|---|---|---|
 | **TeX engine** — PDF report only | **Yes** — TinyTeX, plus the LaTeX packages the report needs | installed | installed | installed |
-| **pandoc** — PDF report only; `rmarkdown` shells out to it | No — `Setup.R` checks for it and prints the download link | **you install it** — [pandoc.org](https://pandoc.org/installing.html), or your distro's package | **you install it**, unless you run ACTA from RStudio | **you install it**, unless you run ACTA from RStudio |
+| **pandoc** — PDF report only; `rmarkdown` shells out to it | No — `Setup.R` checks for it and prints the download link | **you install it** — your distro's package, or [pandoc.org](https://pandoc.org/installing.html) | **you install it** — [pandoc.org](https://pandoc.org/installing.html) | **you install it** — [pandoc.org](https://pandoc.org/installing.html) |
 | **XQuartz / X11** — `flowMeans` loads `tcltk` | No — `Setup.R` checks for it and prints the download link | usually already present; install your distro's X11 dev libraries if `tcltk` fails to load | **you install it** — [xquartz.org](https://www.xquartz.org) | not needed, `tcltk` ships with R |
 | **Perl** — used by `tlmgr` to fetch the report's LaTeX packages | No | system `perl` | system `perl` | not needed, TinyTeX ships its own |
 | **Compiler toolchain** — only if a package has no binary | No | `build-essential` + the `-dev` libraries the flow stack names | Xcode command line tools | Rtools |
 | **Setup launcher** | Ships with the tool | none — use `Rscript Setup.R` | none — use `Rscript Setup.R` | `Setup.bat` |
 | **App launcher** | Ships with the tool | none — use `Rscript` or the R console | `ACTA App.command` | `ACTA App.bat` |
 
-**RStudio ships its own pandoc**, so if you drive ACTA from RStudio you already have one and can
-ignore that row — which is exactly why this dependency went unnoticed until a plain `Rscript`
-install on Windows hit it. `Setup.R` now reports pandoc in its closing summary either way.
+**Install pandoc if you use the Shiny app.** The app runs the analysis in a separate `Rscript`
+process, so the copy of pandoc that ships inside RStudio is not available to it. Without pandoc the
+analysis still finishes and writes the plots, the titration export and the dashboard — only the PDF
+report is missing.
+
+Check it with `Setup.R`, which reports pandoc in its closing summary. Run that from `Setup.bat` or a
+terminal rather than from inside RStudio: inside RStudio it finds RStudio's own pandoc and reports it
+present, which is not the answer the app needs.
 
 Skip the TeX engine entirely if you do not want the PDF and use `run_acta(report=FALSE)`.
 
