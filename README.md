@@ -189,8 +189,7 @@ Setup.bat                    :: or: Setup.bat --no-tex
 
 `Setup.bat` exists because the R for Windows installer does not put `Rscript` on `PATH`, so
 `Rscript Setup.R` fails there with `'Rscript' is not recognized`; the launcher finds `Rscript.exe`
-itself. `source("Setup.R")` from R or RStudio installs the same packages, but see the pandoc note
-below before you rely on what it reports.
+itself. `source("Setup.R")` from an R console installs the same packages.
 
 `Setup.R` installs the R packages, a TeX engine if there is none, and the LaTeX packages the report
 needs. It reads its package list out of `ACTA_Script_*.R`, so that script is the authoritative
@@ -210,14 +209,10 @@ What each platform needs beyond R:
 | **Setup launcher** | Ships with the tool | none — use `Rscript Setup.R` | none — use `Rscript Setup.R` | `Setup.bat` |
 | **App launcher** | Ships with the tool | none — use `Rscript` or the R console | `ACTA App.command` | `ACTA App.bat` |
 
-**Install pandoc if you use the Shiny app.** The app runs the analysis in a separate `Rscript`
-process, so the copy of pandoc that ships inside RStudio is not available to it. Without pandoc the
-analysis still finishes and writes the plots, the titration export and the dashboard — only the PDF
-report is missing.
-
-Check it with `Setup.R`, which reports pandoc in its closing summary. Run that from `Setup.bat` or a
-terminal rather than from inside RStudio: inside RStudio it finds RStudio's own pandoc and reports it
-present, which is not the answer the app needs.
+**pandoc is required, and `Setup.R` does not install it.** Install it yourself from
+[pandoc.org](https://pandoc.org/installing.html). `Setup.R` only checks for it and reports it in the
+closing summary. Without pandoc the analysis still finishes and writes the plots, the titration
+export and the dashboard — only the PDF report is missing.
 
 Skip the TeX engine entirely if you do not want the PDF and use `run_acta(report=FALSE)`.
 
