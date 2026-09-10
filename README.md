@@ -198,14 +198,19 @@ library(ACTA)
 ```
 
 This provides `run_acta()` and `actaOQRun()`, and the three diagnostic cases. You can validate the
-install straight away — see *Validate your installation* below. pandoc and a TeX engine are not
-installed; see the table below.
+install straight away — see *Validate your installation* below.
 
 That one call pulls in 139 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
 packages sit behind those. `remotes` finds them because the `DESCRIPTION` declares `biocViews`,
 which is the field it reads to decide whether to look at the Bioconductor repositories at all.
 Nothing to configure. Expect 20-40 minutes the first time if none of it is already installed.
+
+What it does not bring is anything that is not an R package. The PDF report needs two of those —
+pandoc and a TeX engine — and this route installs neither, so the report is the one thing you will
+not get out of the box. The analysis, the plots, the titration export and the dashboard all run
+without them: use `run_acta(report = FALSE)`. To get the report as well, install both yourself; the
+first table below lists what each route leaves you to do.
 
 **From a clone**, for the Shiny app, the desktop launchers and the working folder layout:
 
@@ -236,22 +241,41 @@ manifest.
 
 **Requires R ≥ 4.4.0**, which `Setup.R` enforces before it installs anything.
 
+What each way of installing gives you:
+
+| | clone + `Setup.R` | `remotes::install_github` |
+|---|---|---|
+| the R packages | yes | yes |
+| a TeX engine, for the PDF report | yes — TinyTeX, and the LaTeX packages the report needs | **no** — run `tinytex::install_tinytex()` yourself. The `tinytex` R package is already there; the TeX engine it drives is not |
+| pandoc, for the PDF report | no — checks for it and prints the download link | **no** — get it from [pandoc.org](https://pandoc.org/installing.html) |
+| XQuartz on macOS, to start a run | no — checks for it and prints the download link | **no** — get it from [xquartz.org](https://www.xquartz.org) |
+| `Setup.R` itself | yes | not part of the package |
+| the desktop launchers | `ACTA App.command`, `ACTA App.bat` | not part of the package |
+| the Shiny app | launch it with `ACTA App.command` or `ACTA App.bat` | `acta_app()` — start R in your working folder and call it. `shiny::runApp()` on the app file will not work: it changes directory before reading the file, so the app would take the library as your working folder, and it refuses rather than doing that |
+| the `Titration_FCS` folder layout | yes | you make it yourself |
+
+So a package install leaves you with an analysis that runs and no PDF report, until you install
+pandoc and a TeX engine yourself. Nothing else is missing.
+
 What each platform needs beyond R:
 
 | | Installed by `Setup.R` | Linux | macOS | Windows |
 |---|---|---|---|---|
 | **TeX engine** — PDF report only | **Yes** — TinyTeX, plus the LaTeX packages the report needs | installed | installed | installed |
 | **pandoc** — PDF report only; `rmarkdown` shells out to it | No — `Setup.R` checks for it and prints the download link | **you install it** — your distro's package, or [pandoc.org](https://pandoc.org/installing.html) | **you install it** — [pandoc.org](https://pandoc.org/installing.html) | **you install it** — [pandoc.org](https://pandoc.org/installing.html) |
-| **XQuartz / X11** — `flowMeans` loads `tcltk` | No — `Setup.R` checks for it and prints the download link | usually already present; install your distro's X11 dev libraries if `tcltk` fails to load | **you install it** — [xquartz.org](https://www.xquartz.org) | not needed, `tcltk` ships with R |
+| **XQuartz / X11** — `flowMeans` loads `tcltk`, so this is needed to start a run, not to load the library | No — `Setup.R` checks for it and prints the download link | usually already present; install your distro's X11 dev libraries if `tcltk` fails to load | **you install it** — [xquartz.org](https://www.xquartz.org) | not needed, `tcltk` ships with R |
 | **Perl** — used by `tlmgr` to fetch the report's LaTeX packages | No | system `perl` | system `perl` | not needed, TinyTeX ships its own |
 | **Compiler toolchain** — only if a package has no binary | No | `build-essential` + the `-dev` libraries the flow stack names | Xcode command line tools | Rtools |
-| **Setup launcher** | Ships with the tool | none — use `Rscript Setup.R` | none — use `Rscript Setup.R` | `Setup.bat` |
-| **App launcher** | Ships with the tool | none — use `Rscript` or the R console | `ACTA App.command` | `ACTA App.bat` |
+| **Setup launcher** | ships with the clone, not with the package | none — use `Rscript Setup.R` | none — use `Rscript Setup.R` | `Setup.bat` |
+| **App launcher** | ships with the clone, not with the package | none — use `Rscript` or the R console | `ACTA App.command` | `ACTA App.bat` |
 
 The PDF report needs both a TeX engine and pandoc. `rmarkdown` runs pandoc to turn the report into
 LaTeX, then the TeX engine turns that into the PDF. `Setup.R` installs the TeX engine and the LaTeX
 packages. It does not install pandoc — it checks for it and reports it in the closing summary.
 Install pandoc from [pandoc.org](https://pandoc.org/installing.html).
+
+A package install brings neither, so install both if you want the report:
+`tinytex::install_tinytex()` for the TeX engine, and pandoc from the link above.
 
 If you do not want the PDF, skip both and use `run_acta(report=FALSE)`.
 

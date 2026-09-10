@@ -10,10 +10,14 @@
 ## put in inst/app/, where CODE_DIR would have found neither and every version-file check would
 ## have failed. Nothing else would have caught that before a user did.
 ##
-## NOTE the app still conflates code_dir and version_dir, so it cannot be run IN PLACE from a
-## package: inst/pipeline/ is code-only and holds no user workbook. That is a known open design
-## item (the app needs an override in the shape of ACTA_LAYOUT_DIR). This test therefore stages a
-## working directory, which is exactly what the README tells a user to assemble after installing.
+## The app CAN be run in place from a package, through acta_app(), and this comment used to say
+## it could not. But the mechanism is ACTA_WORK_DIR, not the getwd() fallback: shiny::runApp()
+## setwd()s to the app directory BEFORE it sources the file, so by the time WORK_DIR evaluates
+## getwd() the answer is already inst/pipeline/ and WORK_DIR silently equals CODE_DIR -- measured,
+## not assumed. acta_app() works because it records getwd() into ACTA_WORK_DIR first. That is why
+## it is exported and why the README documents it instead of a bare runApp() call.
+## This test stages a working directory, because that is the arrangement a user is most likely to
+## have and the one the README describes.
 suppressMessages(library(shiny))
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 ok <- TRUE; skipped <- NA_character_

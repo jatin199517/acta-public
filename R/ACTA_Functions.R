@@ -5151,6 +5151,12 @@ actaReadyMessage <- function(res, dashboard_ok = FALSE) {
 ## is never written to, which is the point: a package library is often read-only, and putting a run
 ## log inside it would fail on a managed machine.
 ##
+## That claim used to have one exception, and it was the panel a package-only user is most likely
+## to press first. The shipped diagnostic cases live under system.file("extdata", "oq_small"), and
+## actaOQRun() unlinks and rewrites <case>/Outputs at the case root -- so clicking Run OQ_Test1
+## wrote inside the library, which on a group-writable one crosses a user boundary. The app now
+## copies such a case into <work_dir>/Diagnostics/ and runs the copy.
+##
 ## Returns nothing; it blocks until the app window is closed, like shiny::runApp().
 acta_app <- function(work_dir = getwd(), launch.browser = TRUE, ...) {
   if (!requireNamespace("shiny", quietly = TRUE))

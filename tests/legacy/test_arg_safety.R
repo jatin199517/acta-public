@@ -249,5 +249,51 @@ if (Sys.info()[["sysname"]] == "Darwin" && nzchar(Sys.which("osascript"))) {
       !any(grepl('POSIX file \\\\?"%s', app)))
 } else cat("=== folder-picker checks skipped (not macOS) ===\n")
 
+## ---------------------------------------------------------------------------------------------
+## A DISCOVERED FILENAME MUST NOT REACH A SHELL. openPath() used to call utils::browseURL(),
+## which on macOS and Linux hands the path to a shell whose quoting does not make an arbitrary
+## filename safe. The paths are list.files()/list.dirs() results from the working folder, so
+## whoever can write into that folder picks them -- and titration folders live on shared drives.
+## One of them is opened with no click at all when a diagnostic case finishes. Verified against
+## the shipped function, both before the fix and after.
+cat("\n=== a discovered filename cannot reach a shell ===\n")
+appf <- actaTestAppFile(vd)
+appl <- readLines(appf, warn = FALSE)
+code <- appl[!grepl("^\\s*##", appl)]
+chk("the app calls browseURL nowhere (it is the shell path)",
+    !any(grepl("browseURL", code, fixed = TRUE)))
+
+## Behavioural, not just textual: run the SHIPPED openPath over a hostile filename with the opener
+## stubbed, and assert the backtick arrives as one literal argument and no command runs.
+i <- grep("^  openPath <- function", appl)
+chk("openPath is where it is expected to be", length(i) == 1L)
+if (length(i) == 1L) {
+  j <- i + which(trimws(appl[(i + 1):(i + 20)]) == "}")[1]
+  td <- file.path(tempdir(), "acta_openpath_gate"); unlink(td, recursive = TRUE)
+  dir.create(td, recursive = TRUE, showWarnings = FALSE)
+  marker <- file.path(td, "COMMAND_RAN")
+  hostile <- file.path(td, "ACTA_Report_`touch COMMAND_RAN`.pdf")
+  file.create(hostile); owd <- setwd(td); on.exit(setwd(owd), add = TRUE)
+  seen <- NULL
+  say <- function(...) invisible(NULL)
+  eval(parse(text = paste(sub("^  ", "", appl[i:j]), collapse = "\n")))
+  orig <- processx::run
+  assignInNamespace("run", function(command, args, ...) {
+    seen <<- c(command, args); list(status = 0L) }, ns = "processx")
+  try(openPath(hostile), silent = TRUE)
+  assignInNamespace("run", orig, ns = "processx")
+  setwd(owd)
+  ## WAIT BEFORE CONCLUDING NOTHING RAN. The unsafe path can complete asynchronously, so a
+  ## file.exists() checked immediately raced it and the mutation test reported this assertion as
+  ## ok while the command was still running. An assertion that passes because it looked too early
+  ## is worse than no assertion.
+  for (.w in 1:20) { if (file.exists(marker)) break; Sys.sleep(0.1) }
+  chk("the hostile filename does NOT execute",           !file.exists(marker))
+  chk("it is passed as one literal argument, not a command line",
+      !is.null(seen) && length(seen) == 2L && grepl("COMMAND_RAN", seen[[2]], fixed = TRUE) &&
+        !grepl("&&|\\|\\||;", seen[[2]]))
+  unlink(td, recursive = TRUE)
+}
+
 cat(if (ok) "\nALL ARG-SAFETY CHECKS PASSED\n" else "\nSOME ARG-SAFETY CHECKS FAILED\n")
 quit(status = if (ok) 0L else 1L)

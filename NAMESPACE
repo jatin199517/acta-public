@@ -44,6 +44,11 @@ importFrom(utils, str)
 importFrom(methods, as)
 
 
+## acta_app() is the supported way to launch the Shiny app from an INSTALLED package.
+## shiny::runApp() on the app file is not equivalent: runApp setwd()s to the app directory
+## before sourcing it, so the app sees the library as its working folder rather than the
+## caller's. acta_app() records getwd() into ACTA_WORK_DIR first, which is why it works.
+export("acta_app")
 export("ACTA_GLYPH")
 export("actaArchiveThenCopy")
 export("actaCompCsvCandidates")

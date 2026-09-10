@@ -86,6 +86,37 @@ chk("exactly one TEMPLATE_*.xlsx ships inside the package",
 chk("exactly one *dashboard_template*.html sits in Template/",
     length(dir(tpl, pattern = "dashboard_template.*[.]html$")) == 1L)
 
+## The README tells a package-only user to launch the app with acta_app(). That is the ONLY
+## invocation that works from an installed library -- shiny::runApp() on the app file setwd()s to
+## the app directory before sourcing it, so the app would take the library as the working folder.
+## If the export ever goes, the documented route breaks with "could not find function".
+nsf <- file.path(vd, "NAMESPACE")
+chk("NAMESPACE exports acta_app, the documented way to launch the app from an install",
+    file.exists(nsf) && any(grepl('^[[:space:]]*export\\("?acta_app"?\\)', readLines(nsf, warn = FALSE))))
+
+## THE DESKTOP LAUNCHERS MUST NAME A FILE THAT EXISTS. They are .Rbuildignore'd, so they are not
+## in the package -- but they ARE in the public repo, and they are how a clone user starts the app.
+## Both did `cd` to the repo root and then runApp("ACTA_App.R"), which was right until 3.0 moved
+## the app to inst/pipeline/. Double-clicking printed an error and stopped, through four releases,
+## because nothing here looked at them.
+`%s0%` <- function(a, b) paste0(a, b)
+for (lf in c("ACTA App.command", "ACTA App.bat")) {
+  f <- file.path(vd, lf)
+  if (!file.exists(f)) next
+  txt <- readLines(f, warn = FALSE)
+  named <- unique(unlist(regmatches(txt, gregexpr("[A-Za-z0-9_/\\\\.]*ACTA_App[.]R", txt))))
+  named <- gsub("\\\\", "/", named)
+  ## ANY, not ALL: each launcher names a preferred path and a fallback for the flat layout, and
+  ## in this layout the fallback deliberately does not exist. What must hold is that at least one
+  ## candidate resolves, because the launcher takes the first that does.
+  hit <- named[file.exists(file.path(vd, named))]
+  chk(sprintf("%s names an app file that exists (%s)", lf,
+              if (length(hit)) paste(hit, collapse = ", ") else "none of: " %s0% paste(named, collapse = ", ")),
+      length(hit) > 0L)
+  chk(sprintf("%s points the app at the repo root via ACTA_WORK_DIR", lf),
+      any(grepl("ACTA_WORK_DIR", txt, fixed = TRUE)))
+}
+
 oq <- file.path(vd, "inst", "extdata", "oq_small")
 chk("inst/extdata/oq_small/ ships all three diagnostic cases",
     all(dir.exists(file.path(oq, sprintf("OQ_Test%d", 1:3)))))

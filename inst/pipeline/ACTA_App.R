@@ -41,11 +41,22 @@ CODE_DIR <- APP_DIR
 WORK_DIR <- local({
   e <- Sys.getenv("ACTA_WORK_DIR", unset = "")
   if (nzchar(e)) return(normalizePath(e, mustWork = TRUE))
-  inLibrary <- {
-    lib <- tryCatch(normalizePath(system.file(package = "ACTA"), mustWork = FALSE), error = function(e) "")
-    nzchar(lib) && startsWith(normalizePath(APP_DIR), lib)
-  }
-  if (inLibrary) normalizePath(getwd()) else APP_DIR
+  lib <- tryCatch(normalizePath(system.file(package = "ACTA"), mustWork = FALSE),
+                  error = function(e) "")
+  inLib <- function(p) nzchar(lib) && startsWith(normalizePath(p, mustWork = FALSE), lib)
+  if (!inLib(APP_DIR)) return(APP_DIR)
+  w <- normalizePath(getwd())
+  ## getwd() IS NOT ENOUGH ON ITS OWN. shiny::runApp() setwd()s to the app directory before it
+  ## sources this file, so calling runApp() on the INSTALLED app leaves getwd() pointing at the
+  ## library -- exactly what case 2 above exists to avoid, and every run artefact, staged
+  ## diagnostic case and log would land there. acta_app() is the supported entry point because it
+  ## records the caller's folder in ACTA_WORK_DIR first. Refuse rather than write into a library.
+  if (inLib(w))
+    stop("ACTA app: this would use the R library as its working folder.\n",
+         "  Start R in the folder holding your workbook and Titration_FCS, then:\n",
+         "      library(ACTA); acta_app()\n",
+         "  or set ACTA_WORK_DIR to that folder before launching.", call. = FALSE)
+  w
 })
 if (!identical(WORK_DIR, CODE_DIR))
   message("ACTA app: code in ", CODE_DIR, "\n            work in ", WORK_DIR)
@@ -784,9 +795,20 @@ server <- function(input, output, session) {
     p <- list.files(WORK_DIR, pattern = "^ACTA_Report.*\\.pdf$", full.names = TRUE)
     if (length(p)) p[[which.max(file.mtime(p))]] else NA_character_
   }
+  ## NOT browseURL(). On macOS and Linux it hands the path to a shell, and its quoting does not
+  ## make an arbitrary filename safe there. The paths reaching this function are not fixed names:
+  ## they are list.files()/list.dirs() results from the working folder, so whoever can write into
+  ## that folder chooses them -- and titration folders live on shared drives. processx passes an
+  ## argv array and builds no command line, which is the same reasoning already applied to .rq()
+  ## and to the osascript call above. Guarded by test_arg_safety.R.
   openPath <- function(p) {
     if (is.na(p) || !file.exists(p)) { say("Nothing to open."); return(invisible()) }
-    try(utils::browseURL(normalizePath(p)), silent = TRUE); say("Opened ", basename(p))
+    p <- normalizePath(p)
+    opener <- if (.Platform$OS.type == "windows") NULL
+              else if (identical(Sys.info()[["sysname"]], "Darwin")) "/usr/bin/open" else "xdg-open"
+    try(if (is.null(opener)) shell.exec(p)
+        else processx::run(opener, p, error_on_status = FALSE), silent = TRUE)
+    say("Opened ", basename(p))
   }
 
   ## ---- titer entry ----------------------------------------------------------------------------
@@ -1015,6 +1037,39 @@ server <- function(input, output, session) {
     lapply(seq_along(d), function(i) observeEvent(input[[paste0("oq_", i)]], {
       if (rv$oqRunning) return()
       dir <- d[i]; nm <- basename(dir)
+      ## NEVER RUN A CASE THAT LIVES INSIDE THE INSTALLED LIBRARY. actaOQRun() starts by doing
+      ## unlink(<case>/Outputs, recursive = TRUE) and then writes the export, report and plots
+      ## back at the case root -- and for a package-only user that root is
+      ## system.file("extdata", "oq_small"), i.e. inside the R library. Libraries are routinely
+      ## group-writable (this machine's is drwxrwxr-x root:admin), so on a shared host one
+      ## analyst's artefacts and machine name would land where every other user of that library
+      ## can read them, and a concurrent run would have its Outputs deleted underneath it. On a
+      ## managed read-only library the button just fails. Stage the case into the working folder
+      ## and run the copy instead.
+      ##
+      ## REUSE an existing staged copy, never copy over it. file.copy(recursive = TRUE) defaults
+      ## overwrite to TRUE, so a second click would merge the package original back over the
+      ## staged case and silently revert anything edited there -- and the run would then report on
+      ## inputs the operator did not supply. It is reachable within one session: oqDirs() is a
+      ## reactive with no reactive dependencies, so it is evaluated once and keeps handing back
+      ## the library path even after the copy exists.
+      lib <- tryCatch(normalizePath(system.file(package = "ACTA"), mustWork = FALSE),
+                      error = function(e) "")
+      if (nzchar(lib) && startsWith(normalizePath(dir), lib)) {
+        staged <- file.path(DIAG_DIR, nm)
+        if (dir.exists(staged)) {
+          say("Using the copy of ", nm, " already in ", DIAG_DIR, ".")
+        } else {
+          dir.create(DIAG_DIR, recursive = TRUE, showWarnings = FALSE)
+          if (!isTRUE(all(file.copy(dir, DIAG_DIR, recursive = TRUE))) || !dir.exists(staged)) {
+            say("Could not copy ", nm, " out of the installed package into ", DIAG_DIR,
+                " -- not run.")
+            return(invisible())
+          }
+          say("Copied ", nm, " out of the installed package to ", staged, ".")
+        }
+        dir <- staged
+      }
       rv$oq <- NULL; rv$oqName <- nm; rv$oqRunning <- TRUE
       rv$pct <- NA; rv$stage <- NULL; rv$t0 <- Sys.time()
       unlink(OQ_RES)
