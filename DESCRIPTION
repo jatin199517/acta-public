@@ -1,7 +1,7 @@
 Package: ACTA
 Type: Package
 Title: Anybody Can Titrate Antibody - Automated Flow Cytometry Reagent Titration
-Version: 3.0.2
+Version: 3.0.3
 Authors@R: c(
     person("Jatin", "Sharma", email = "jatin1995@gmail.com", role = c("aut", "cre")),
     person("Lyell Immunopharma, Inc.", role = "cph"))
@@ -14,6 +14,7 @@ Description: An R workflow for analysing flow cytometry reagent titration
     viability dyes and peptide-MHC multimers.
 License: AGPL-3
 Encoding: UTF-8
+biocViews: Software, FlowCytometry, CellBasedAssays, QualityControl, Visualization
 Depends:
     R (>= 4.4.0)
 Imports:

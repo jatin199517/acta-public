@@ -176,7 +176,8 @@ subfolders are the runs: each run's `*TitrationExport*.xlsx` is read from the ru
 - **Five themes** ship: `graph-blue` in `Template/`, and `lab-record`, `navy-chrome`,
   `maroon-chrome` and `teal-chrome` in `Template/Other_Templates/`. The generator uses whichever
   `*dashboard_template*.html` is in `Template/` and requires exactly one, so switching theme means
-  moving the one you want into `Template/` and the current one out.
+  moving the one you want into `Template/` and the current one out. Do that in a clone. The copy
+  inside an installed package is usually not writable, and a reinstall would put it back.
 - **Self-contained HTML.** The data is embedded, so the file can be emailed or archived and still
   opens.
 
@@ -199,6 +200,12 @@ library(ACTA)
 This provides `run_acta()` and `actaOQRun()`, and the three diagnostic cases. You can validate the
 install straight away — see *Validate your installation* below. pandoc and a TeX engine are not
 installed; see the table below.
+
+That one call pulls in 139 packages. Most are on CRAN, but the flow stack — `flowCore`,
+`flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
+packages sit behind those. `remotes` finds them because the `DESCRIPTION` declares `biocViews`,
+which is the field it reads to decide whether to look at the Bioconductor repositories at all.
+Nothing to configure. Expect 20-40 minutes the first time if none of it is already installed.
 
 **From a clone**, for the Shiny app, the desktop launchers and the working folder layout:
 
@@ -275,8 +282,15 @@ Each dataset covers a unique test case, across two instruments from different ve
 
 ## Running
 
-Copy the blank instructions workbook out of `Template/` and fill it in. You may replace the text
-`TEMPLATE` from this file but keep the rest of the filename as is. Move your FCS files to a
+Copy the blank instructions workbook out of `Template/` and fill it in. If you installed the
+package and have no clone, the template ships inside it — copy it out to somewhere you can write:
+
+```r
+file.copy(dir(system.file("pipeline", "Template", package = "ACTA"),
+              pattern = "^TEMPLATE.*\\.xlsx$", full.names = TRUE), ".")
+```
+
+You may replace the text `TEMPLATE` from this file but keep the rest of the filename as is. Move your FCS files to a
 folder (as specified in `Dirname` in the Layout sheet) and move this folder inside the umbrella
 folder `Titration_FCS`. Then either launch the app or call `run_acta()`. The script resolves and
 sets its own working directory.

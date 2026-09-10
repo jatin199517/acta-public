@@ -50,6 +50,7 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer
+             "test_install_path.R",   # what an install-only user can reach, incl. biocViews
              "verify_oq_sanitised.R") # the OQ cases carry nothing that cannot be published
 
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))
@@ -71,12 +72,25 @@ for (i in seq_along(SCRIPTS)) {
   code <- system2("Rscript", shQuote(f), stdout = lg, stderr = lg)
   logs[[SCRIPTS[i]]] <- lg
   res$seconds[i] <- proc.time()[["elapsed"]] - t0
-  res$status[i]  <- if (identical(as.integer(code), 0L)) "PASS" else "FAIL"
+  ## THREE STATES, NOT TWO. A script that skips its whole body exits 0, so an exit-status-only
+  ## verdict printed PASS for a file that asserted nothing. test_app_package.R does exactly that
+  ## when the checkout is not installed, and its own SKIPPED banner went into a log this runner
+  ## only prints for FAILURES. The banner stopped lying; this had not.
+  res$status[i]  <- if (!identical(as.integer(code), 0L)) "FAIL"
+                    ## "TESTS SKIPPED" is the WHOLE-FILE banner. A bare "SKIPPED" is not enough:
+                    ## test_app_support.R prints a SECTION skip ("SKIPPED -- no run snapshot
+                    ## available") and would then be reported as if it had asserted nothing.
+                    else if (any(grepl("TESTS SKIPPED", readLines(lg, warn = FALSE)))) "SKIP"
+                    else "PASS"
   cat(sprintf("  %-6s %-24s %5.1f s\n", res$status[i], SCRIPTS[i], res$seconds[i]))
 }
 
-bad <- res$status != "PASS"
-cat(sprintf("%s\n%d of %d passed in %.0f s\n", strrep("-", 62), sum(!bad), nrow(res),
+bad  <- res$status %in% c("FAIL", "MISSING")
+skip <- res$status == "SKIP"
+cat(sprintf("%s\n%d of %d passed%s in %.0f s\n", strrep("-", 62),
+            sum(res$status == "PASS"), nrow(res),
+            if (any(skip)) sprintf(", %d SKIPPED (%s)", sum(skip),
+                                   paste(res$script[skip], collapse = ", ")) else "",
             sum(res$seconds, na.rm = TRUE)))
 if (any(bad)) {
   for (s in res$script[bad]) {

@@ -6579,9 +6579,9 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## pair (git tag, this record) replaces it. A tag is the stronger half: it is content-addressed
   ## and cannot drift, whereas a directory is something a person can edit.
   ## Recorded SEPARATELY from script_version, which is parsed out of the ACTA_Script_*.R FILENAME
-  ## and so reports 3_0 where DESCRIPTION says 3.0.0. The filename is the pipeline's own idea of
-  ## its version; DESCRIPTION is the package's. When ACTA is not installed there is no package
-  ## version to report and the field says so rather than guessing.
+  ## and so reports 3_0, where DESCRIPTION carries the full patch version. The filename is the
+  ## pipeline's own idea of its version; DESCRIPTION is the package's. When ACTA is not installed
+  ## there is no package version to report and the field says so rather than guessing.
   .sv <- tryCatch({
     v <- res$script_version
     if (length(v) == 1L && !is.na(v) && nzchar(v)) as.character(v) else NULL

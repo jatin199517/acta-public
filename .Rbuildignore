@@ -12,3 +12,14 @@
 # ACTA_3.0.0.tar.gz -- caught by the "hidden files and directories" NOTE, which is worth reading
 # rather than dismissing as cosmetic. Anchored on the filename so it holds wherever the gates live.
 \.acta_scrub_tokens\.R$
+
+# RUN ARTEFACTS FROM THE DIAGNOSTIC CASES. Running an OQ case in place writes Outputs/ next to its
+# FCS, and 48 MB of it was sitting in inst/extdata/oq_small/. It never reached GITHUB, because the
+# publish script builds from `git ls-files` and these are gitignored -- so `install_github` was
+# unaffected. But R CMD build reads the FILESYSTEM, so the tarball carried all of it: 114 MB
+# instead of 70 MB, plus a "non-portable file paths" NOTE for the longest plot filenames. Same
+# lesson as the token list above, one directory over: .gitignore protects the repo, this protects
+# the tarball, and neither substitutes for the other.
+(^|/)Outputs(/|$)
+(^|/)Diagnostics_log(/|$)
+(^|/)\.DS_Store$

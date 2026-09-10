@@ -58,6 +58,10 @@ jobs:
           # magrittr, rmarkdown, tibble, tidyselect, tinytex and xml2 are DESCRIPTION Imports, needed
           # because this job runs `R CMD INSTALL .`. They arrive transitively on ubuntu and did not on
           # macOS, so v3.0 passed on one runner and failed on the other.
+          #
+          # remotes is a DEV tool, not a dependency: test_install_path.R asks remotes itself whether
+          # our DESCRIPTION makes it consult the Bioconductor repos. Without it that gate stands down
+          # to a structural check and the end-to-end closure proof does not run at all.
           packages: |
             any::flowCore
             any::flowWorkspace
@@ -80,6 +84,7 @@ jobs:
             any::jsonlite
             any::shiny
             any::processx
+            any::remotes
             any::magick
             any::lubridate
             any::stringr

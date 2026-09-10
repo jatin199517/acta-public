@@ -16,7 +16,7 @@
 ## working directory, which is exactly what the README tells a user to assemble after installing.
 suppressMessages(library(shiny))
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
-ok <- TRUE
+ok <- TRUE; skipped <- NA_character_
 chk <- function(w, c) { if (!c) ok <<- FALSE; cat(sprintf("  [%s] %s\n", if (c) "ok" else "FAIL", w)) }
 
 ## The subject must be THIS checkout's package, not whatever ACTA happens to be installed -- the
@@ -29,11 +29,14 @@ want <- tryCatch(unname(read.dcf(file.path(ACTA_REPO_ROOT, "DESCRIPTION"))[1, "V
                  error = function(e) NA_character_)
 have <- tryCatch(as.character(utils::packageVersion("ACTA")), error = function(e) NA_character_)
 if (is.na(want)) {
-  cat("  [skip] no DESCRIPTION here, so there is no package layout to test\n")
+  skipped <- "no DESCRIPTION here, so there is no package layout to test"
+  cat("  [skip]", skipped, "\n")
 } else if (is.na(have) || !identical(have, want)) {
-  cat(sprintf(paste0("  [skip] ACTA %s is not installed (found: %s).\n",
+  skipped <- sprintf("ACTA %s is not installed (found: %s)", want,
+                     if (is.na(have)) "none" else have)
+  cat(sprintf(paste0("  [skip] %s.\n",
                      "         Install this checkout first:  R CMD INSTALL %s\n"),
-              want, if (is.na(have)) "none" else have, ACTA_REPO_ROOT))
+              skipped, ACTA_REPO_ROOT))
 } else {
   suppressMessages(library(ACTA))
   pipe <- system.file("pipeline", package = "ACTA")
@@ -44,21 +47,41 @@ if (is.na(want)) {
   ## flowMeans::flowMeans() instead, so you need XQuartz to START A RUN, not to attach the
   ## library. Asserted in a FRESH process: the parent has already loaded everything, so checking
   ## loadedNamespaces() in here would always pass.
+  ## --no-save --no-restore, NOT --vanilla. --vanilla also implies --no-init-file, which drops
+  ## any library path added by a .Rprofile -- so under renv the parent finds ACTA and the child
+  ## cannot, and both assertions below fail on a healthy tree. The parent's .libPaths() is
+  ## passed in too, so the child looks exactly where the parent does.
+  ## stderr is CAPTURED: without it a failure printed no reason, the same unreadable-gate
+  ## problem run_all.R was already fixed for.
+  ## A SENTINEL LINE, because stdout and stderr are merged here. library(ACTA) writes warnings to
+  ## stderr and renv writes a banner there, and the previous parse did paste(.probe, collapse = "")
+  ## -- no separator -- so the answer glued itself onto the last warning line and the exact-match
+  ## intersect() then DISCARDED the glued token. One eagerly-loaded package read as none, silently,
+  ## in the one gate guarding the regression that shipped 3.0 unloadable. Marking the answer makes
+  ## the parse independent of whatever else the child prints.
+  ## Requiring the sentinel also detects a dead child better than the exit status alone: no
+  ## sentinel means no answer, whatever the status says.
+  ## deparse() for the paths rather than sprintf: a library path containing a quote would otherwise
+  ## close the string literal and inject R into the child.
+  .code <- paste0(
+    sprintf(".libPaths(%s); ", paste(deparse(.libPaths()), collapse = "")),
+    'suppressMessages(library(ACTA)); ',
+    'cat(paste0("\nACTA_PULLED:", paste(intersect(loadedNamespaces(),',
+    ' c("tcltk","flowMeans")), collapse=","), "\n"))')
   .probe <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
-    c("--vanilla", "-e", shQuote(paste0(
-        'suppressMessages(library(ACTA)); ',
-        'cat(paste(intersect(loadedNamespaces(), c("tcltk","flowMeans")), collapse=","))'))),
-    stdout = TRUE, stderr = FALSE))
-  ## THE EXIT STATUS MATTERS AS MUCH AS THE OUTPUT. With stdout = TRUE a child that dies produces
-  ## character(0), so "nothing was eagerly loaded" and "nothing ran at all" look identical and the
-  ## check reports ok either way. Assert both: the probe ran, AND it loaded neither package.
-  .st <- attr(.probe, "status")
-  .ran <- is.null(.st) || identical(as.integer(.st), 0L)
-  .pulled <- Filter(nzchar, strsplit(paste(.probe, collapse = ""), ",")[[1]])
+    c("--no-save", "--no-restore", "-e", shQuote(.code)), stdout = TRUE, stderr = TRUE))
+  .mark <- grep("^ACTA_PULLED:", .probe, value = TRUE)
+  .st   <- attr(.probe, "status")
+  .ran  <- (is.null(.st) || identical(as.integer(.st), 0L)) && length(.mark) == 1L
+  .pulled <- if (length(.mark) == 1L)
+    Filter(nzchar, strsplit(trimws(sub("^ACTA_PULLED:", "", .mark[[1]])), ",")[[1]]) else character(0)
   chk("the headless-load probe actually ran", .ran)
   chk("library(ACTA) pulls in neither tcltk nor flowMeans (headless-loadable)",
       .ran && length(.pulled) == 0L)
-  if (length(.pulled)) cat("          eagerly loaded:", paste(.pulled, collapse = ", "), "\n")
+  ## Printed whenever EITHER assertion fails, not only when the probe did not run -- a mangled
+  ## answer arrives on a child that exited 0, which is exactly how the defect above hid.
+  if (!.ran || length(.pulled))
+    cat("          probe output:", paste(utils::head(.probe, 8), collapse = " | "), "\n")
 
   chk("the app ships beside the pipeline, not in a folder of its own",
       length(list.files(pipe, pattern = "^ACTA_App[.]R$")) == 1L)
@@ -94,5 +117,11 @@ if (is.na(want)) {
                                                  collapse = "")))
   })
 }
-cat(if (ok) "\nAPP-FROM-PACKAGE TESTS PASS\n" else "\nFAILURES ABOVE\n")
+## A SKIP IS NOT A PASS. Every assertion here sits behind "is this checkout installed?", and
+## bumping DESCRIPTION guarantees that is false until someone reinstalls -- so the whole file
+## skipped and still printed TESTS PASS. That is how the v3.0 headless-load regression could have
+## returned unnoticed. Exit stays 0, because not being installed is not a failure and CI installs
+## first; the BANNER is what had to stop lying.
+if (!is.na(skipped)) cat(sprintf("\nAPP-FROM-PACKAGE TESTS SKIPPED -- %s\n", skipped))
+cat(if (!ok) "\nFAILURES ABOVE\n" else if (is.na(skipped)) "\nAPP-FROM-PACKAGE TESTS PASS\n" else "")
 quit(status = if (ok) 0 else 1)
