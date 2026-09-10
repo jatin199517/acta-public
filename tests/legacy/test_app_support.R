@@ -278,7 +278,22 @@ if (!length(.wf)) cat("  [skip] no CI workflow file found from here\n") else {
   ## Shipped with R itself or only used interactively -- r-lib/actions does not install these.
   .base <- c("BiocManager", "grDevices", "rstudioapi")
   .y    <- readLines(.wf[1], warn = FALSE)
-  .have <- unique(sub(".*any::", "", grep("any::", .y, value = TRUE)))
+  ## PER JOB, from the PARSED yaml. Two reasons this is not a union over the whole file.
+  ## (1) A ref only counts as a declaration for the job that installs it. `suite` is the job
+  ##     that runs `R CMD INSTALL .`, so an Import declared only in `oq` would satisfy a
+  ##     whole-file check while the install still failed -- the exact failure class this
+  ##     section exists to catch.
+  ## (2) Reading the PARSED block means a comment that merely MENTIONS `any::something` cannot
+  ##     enter the list. Both of today's near-misses came from grepping the file as text.
+  .byjob <- lapply(yaml::read_yaml(.wf[1])$jobs, function(j)
+    unlist(lapply(j$steps, function(st)
+      if (!is.null(st$uses) && grepl("setup-r-dependencies", st$uses))
+        strsplit(trimws(st$with$packages), "[[:space:],]+")[[1]])))
+  .byjob <- Filter(length, .byjob)
+  .refs  <- lapply(.byjob, function(t) sub("^any::", "", grep("^any::", t, value = TRUE)))
+  ## `suite` is the installing job; fall back to the union if it is ever renamed.
+  .inst  <- if (!is.null(.refs$suite)) .refs$suite else unique(unlist(.refs))
+  .have <- unique(.inst)
   .miss <- setdiff(setdiff(.need, .base), .have)
   chk(sprintf("every listOfLibrary package is declared in CI (%d checked, %d declared)",
               length(setdiff(.need, .base)), length(.have)),
@@ -290,6 +305,36 @@ if (!length(.wf)) cat("  [skip] no CI workflow file found from here\n") else {
   .extra <- setdiff(.have, .need)
   if (length(.extra))
     cat("          note: declared in CI but not in listOfLibrary:", paste(.extra, collapse = ", "), "\n")
+
+  ## AND EVERY TOKEN IN THAT BLOCK MUST BE A PACKAGE REF. `packages: |` is a YAML block scalar,
+  ## so a `#` line inside it is literal text, not a comment, and the action splits the whole
+  ## string on whitespace. Two explanatory lines placed in there became 29 bogus refs and pak
+  ## aborted on `#` -- breaking CI on both runners while the check below still passed green,
+  ## because it only ever grepped for `any::`. A list that cannot install anything is not a
+  ## declaration, so assert the SHAPE of the block, not just its contents.
+  .pkgblk <- unlist(.byjob, use.names = FALSE)
+  .odd <- grep("^any::[A-Za-z]", .pkgblk, value = TRUE, invert = TRUE)
+  chk(sprintf("every token in the CI packages block is a package ref (%d checked)", length(.pkgblk)),
+      length(.odd) == 0L)
+  if (length(.odd))
+    cat("          not a ref:", paste(utils::head(.odd, 8), collapse = " "), "\n")
+  ## AND THE PACKAGE'S OWN Imports, which are a DIFFERENT list. listOfLibrary is what the
+  ## pipeline script attaches at run time; DESCRIPTION Imports is what `R CMD INSTALL` must
+  ## resolve. The check above compares only the first, so when the suite job gained an
+  ## `R CMD INSTALL .` step it could not see that six Imports were undeclared -- they arrived
+  ## transitively on ubuntu, did not on macOS, and the v3.0 run failed there while passing on
+  ## ubuntu. Two lists, two checks.
+  .desc <- file.path(ACTA_REPO_ROOT, "DESCRIPTION")
+  if (file.exists(.desc)) {
+    .imp <- trimws(strsplit(read.dcf(.desc)[1, "Imports"], ",")[[1]])
+    .imp <- .imp[nzchar(.imp)]
+    .bse <- rownames(installed.packages(priority = "base"))
+    .want <- sort(setdiff(.imp, .bse))
+    .gap  <- setdiff(.want, .inst)
+    chk(sprintf("every DESCRIPTION Import is declared in CI (%d checked)", length(.want)),
+        length(.gap) == 0L)
+    if (length(.gap)) cat("          missing from the workflow:", paste(.gap, collapse = ", "), "\n")
+  }
 }
 
 cat(if (ok) "\nALL APP-SUPPORT TESTS PASS\n" else "\nFAILURES ABOVE\n")

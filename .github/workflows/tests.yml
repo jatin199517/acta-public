@@ -50,6 +50,14 @@ jobs:
         with:
           # The authoritative list is `listOfLibrary` in ACTA_Script_*.R; these are the names needed
           # to SOURCE the helpers and run the gates, which is a subset -- the gates do not gate.
+          # NOTHING BUT `any::<pkg>` LINES BELOW THIS POINT. `packages: |` is a YAML block scalar, so a
+          # `#` inside it is not a comment -- it is literal text, and setup-r-dependencies splits the
+          # whole string on whitespace. Two comment lines placed in there once became 29 bogus package
+          # refs and pak aborted on `#`, breaking the job on both runners. Explanations go out here.
+          #
+          # magrittr, rmarkdown, tibble, tidyselect, tinytex and xml2 are DESCRIPTION Imports, needed
+          # because this job runs `R CMD INSTALL .`. They arrive transitively on ubuntu and did not on
+          # macOS, so v3.0 passed on one runner and failed on the other.
           packages: |
             any::flowCore
             any::flowWorkspace
@@ -75,6 +83,13 @@ jobs:
             any::magick
             any::lubridate
             any::stringr
+            any::magrittr
+            any::rmarkdown
+            any::tibble
+            any::tidyselect
+            any::tinytex
+            any::xml2
+            any::yaml
       # INSTALL THE PACKAGE FIRST, when this release IS one. test_app_package.R drives the Shiny
       # app against the installed namespace, where it can see only the exported names -- and it
       # SKIPS if the package is absent. Without this step that gate would be inert on every runner,
@@ -130,6 +145,7 @@ jobs:
             any::rmarkdown
             any::lubridate
             any::stringr
+            any::xml2
       - name: run the three diagnostic cases
         run: |
           Rscript -e '
