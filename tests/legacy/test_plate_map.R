@@ -1,4 +1,4 @@
-## Guards make_plate_layout_great_again(), the "Plate map" section added in 2_99 and
+## Guards make_plate_layout_great_again(), the "Plate map" section added in 3_0 and
 ## rebuilt on ggplate later the same version.
 ##
 ## The map's whole value is that a transcription error is visible on it, so a map that is itself
@@ -33,7 +33,7 @@ mk <- function(...) h$make_plate_layout_great_again(...)
 
 ## The real sheets, read exactly as the script reads them: header annotations stripped, nothing else.
 layoutOf <- function(case) {
-  f <- Sys.glob(file.path(vd, "Diagnostics", case, "*Instructions*.xlsx"))
+  f <- Sys.glob(file.path(actaTestCaseRoot(), case, "*Instructions*.xlsx"))
   if (!length(f)) return(NULL)
   d <- suppressMessages(readxl::read_excel(f[[1]], sheet = "Layout_Plate"))
   names(d) <- h$actaStripHeaderAnnotation(names(d))
@@ -184,7 +184,7 @@ chk("ggplate is declared in the script's package list", grepl('"ggplate"', scr))
 chk("...and in the report's",                            grepl('"ggplate"', rmd))
 chk("the report prints PlateMapList rather than rebuilding it", grepl("PlateMapList\\[\\[", rmd))
 chk("ggplate is in the validated-package baseline",
-    "ggplate" %in% read.delim(file.path(vd, "Diagnostics", "validated_packages.tsv"),
+    "ggplate" %in% read.delim(file.path(actaTestCaseRoot(), "validated_packages.tsv"),
                               stringsAsFactors = FALSE)[[1]])
 
 cat(if (ok) "\nPLATE MAP: all checks passed\n" else "\nPLATE MAP: FAILURES ABOVE\n")

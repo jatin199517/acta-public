@@ -1,4 +1,4 @@
-## Guards the `Combinatorial_group (n)` declaration added in 2_99: the per-value numeric test, the
+## Guards the `Combinatorial_group (n)` declaration added in 3_0: the per-value numeric test, the
 ## per-group reduction, and the conflict report.
 ##
 ## Two failure modes this exists for, both silent:
@@ -7,7 +7,7 @@
 ##      EVERY row -- switching the flag off for groups that were declared correctly.
 ##   2. Reading the value off ONE well. Layout_Plate has a row per well; statsForExport keeps only
 ##      the maxSI row. A number filled in on some rows and not the winning one would report FALSE.
-## Rscript <this> [version_dir]   -- defaults to 2_99.
+## Rscript <this> [version_dir]   -- defaults to 3_0.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()
 cat("version_dir:", basename(vd), "\n")
@@ -59,7 +59,7 @@ chk("  value degrades to NA rather than picking one", is.na(r$value) && isFALSE(
 
 cat("=== the shipped OQ workbooks carry the column ===\n")
 for (n in 1:3) {
-  f <- file.path(vd, "Diagnostics", paste0("OQ_Test", n),
+  f <- file.path(actaTestCaseRoot(), paste0("OQ_Test", n),
                  sprintf("OQ_Test%d_Ab_Titration_Instructions_%s.xlsx", n,
                          sub("_WIP$", "", basename(vd))))
   if (!file.exists(f)) { cat(sprintf("  [skip] OQ_Test%d workbook not found\n", n)); next }

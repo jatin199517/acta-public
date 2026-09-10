@@ -1,6 +1,6 @@
 ## Sanitisation gate for the publicly shareable OQ cases.
 ##
-## Run from anywhere:  Rscript 2_99/tests/verify_oq_sanitised.R [case_dir ...]
+## Run from anywhere:  Rscript 3_0/tests/verify_oq_sanitised.R [case_dir ...]
 ## With no arguments it scans EVERY Diagnostics/OQ_Test* case. That default is deliberate: this
 ## script used to hardcode a single folder name, and when the cases were moved under Diagnostics/
 ## it pointed at a path that no longer existed and exited with an error -- while still being cited
@@ -99,7 +99,11 @@ source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 ## 2026-09-08 it covers workbook PARTS as well as text files. If that build step is ever dropped,
 ## nothing applies the private list to a release and this gate will not tell you so.
 if (isTRUE(.reduced)) {
-  .is_public   <- file.exists(file.path(ACTA_VERSION_DIR, ".acta_public"))
+  ## Looked for at the REPO ROOT as well as the version folder. The release build writes the
+  ## marker at the root of the tree it produces; in a version folder those are the same place, but
+  ## under the package layout ACTA_VERSION_DIR is inst/pipeline/ and the marker is two levels up.
+  ## Anchoring on one of them meant the published 3.0 tree failed its own fresh-clone check.
+  .is_public   <- any(file.exists(file.path(c(ACTA_REPO_ROOT, ACTA_VERSION_DIR), ".acta_public")))
   .override_ok <- identical(Sys.getenv("ACTA_SCRUB_REDUCED_OK"), "1")
   if (.is_public) {
     cat("NOTE: ...and this tree carries .acta_public, so generic-only patterns are expected here.\n")
@@ -238,22 +242,40 @@ if (!length(tracked)) {
   ## checked exactly as before. The other option -- building the strings with paste0() so a literal
   ## grep cannot see them -- was rejected: teaching ourselves to hide text from our own gate is how
   ## a gate stops meaning anything.
-  FIXTURE_FILE <- "tests/test_diagnostics.R"
+  ## Matched as a PATTERN, not a literal path: this gate sits at tests/ in a version folder and at
+  ## tests/legacy/ under the package layout, and an exact-string compare silently WITHDREW the
+  ## allowance the moment the file moved -- turning the declared fixture back into three "leaks".
+  ## Still anchored at tests/, so a same-named file elsewhere in the tree cannot claim it.
+  FIXTURE_FILE <- "tests/[legacy/]test_diagnostics.R"
+  FIXTURE_RE   <- "^tests/(legacy/)?test_diagnostics[.]R$"
   FIXTURE_ID   <- "someone(\\.name)?"
-  nFix <- 0L
+  nFix <- 0L; nDesc <- 0L
   for (rel in txt) {
     f <- file.path(vd, rel)
     if (!file.exists(f)) next
     ln <- tryCatch(readLines(f, warn = FALSE), error = function(e) character(0))
-    if (identical(rel, FIXTURE_FILE)) {
+    if (grepl(FIXTURE_RE, rel)) {
       masked <- gsub(FIXTURE_ID, "<declared-fixture>", ln, perl = TRUE)
       nFix <- sum(masked != ln)
+      ln <- masked
+    }
+    ## A SECOND DECLARED ALLOWANCE: the package DESCRIPTION. R REQUIRES a maintainer address for
+    ## the `cre` role and that address is MEANT to be public -- it ships in every installed copy and
+    ## is how users report bugs. The sweep flags it because an email is identity-shaped, which is the
+    ## right default everywhere else in this tree. Declared, masked before grepping, and the
+    ## allowance is PRINTED every run, exactly like the fixture above: a human decided this one, the
+    ## gate did not stop looking. ONLY the Authors@R address is masked -- any other identity in
+    ## DESCRIPTION is still a leak.
+    if (identical(rel, "DESCRIPTION")) {
+      masked <- sub("email[[:space:]]*=[[:space:]]*\"[^\"]+\"", "email = \"<declared-maintainer>\"", ln)
+      nDesc <- sum(masked != ln)
       ln <- masked
     }
     i <- grep(BAD, ln, ignore.case = TRUE, perl = TRUE)
     for (k in i) { nV <- nV + 1L
       cat(sprintf("  LEAK %s:%d %s\n", rel, k, substr(trimws(ln[k]), 1, 70))) }
   }
+  if (nDesc) cat(sprintf("  note: DESCRIPTION swept with the declared maintainer address masked on %d line(s)\n", nDesc))
   if (!nV) cat("  clean\n")
   ## Said out loud, every run: an allowance that is silent is an allowance nobody audits.
   if (nFix)

@@ -29,6 +29,11 @@
 # ZERO test data -- 41 files instead of 88, which passes every local suite because the files are on
 # disk, and fails from a fresh clone. This rule removes the need for a `git add -f`.
 !**/Diagnostics/OQ_Test*/Titration_FCS/**
+# AND THE PACKAGE LAYOUT, where the same cases sit at inst/extdata/oq_small/ instead of
+# Diagnostics/. The rule above is anchored on a directory NAME, so a package release drops the
+# sanitised FCS straight back under `*.fcs`. Verified against a synthetic 3.0 tree: 1 of 1 test FCS
+# was DROPPED before this line existed -- the fourth time this exact anchoring failure has bitten.
+!**/oq_small/OQ_Test*/Titration_FCS/**
 
 # Large generated reports (regenerable from .Rmd)
 *.pdf
@@ -159,6 +164,11 @@ ACTA_app_run_log.tsv
 # be committed. verify_oq_sanitised.R and build_oq_test.R load it from beside themselves and run in
 # a loudly-announced reduced mode when it is absent -- which is what a public clone looks like.
 **/tests/.acta_scrub_tokens.R
+# ...and wherever else the gates live. Under the package layout they are at tests/legacy/, which the
+# rule above does not match, so the PRIVATE token list became committable in the public repo. It is
+# kept out of the release today only because it is untracked in the development repo -- one layer
+# where there should be two. (R CMD build needs its own guard for the same file; see .Rbuildignore.)
+**/tests/**/.acta_scrub_tokens.R
 
 # Local planning notes. Kept beside the code they describe, deliberately not tracked.
 Plans/

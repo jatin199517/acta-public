@@ -10,7 +10,7 @@
 ## LAZINESS MATTERS TO THIS TEST. An argument the callee never touches is never forced, so a stub
 ## that discards its arguments proves nothing; the stub below READS the value, as every real plugin
 ## reads `quantile`/`K`.
-## Rscript <this> [version_dir]   -- defaults to 2_99.
+## Rscript <this> [version_dir]   -- defaults to 3_0.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()
 cat("version_dir:", basename(vd), "\n")
@@ -176,10 +176,13 @@ if (!have) cat("  [skip] pandoc/LaTeX not available here, so the render cannot b
   d <- file.path(tempdir(), sprintf("texinj_%s", basename(tempfile(""))))
   dir.create(d, showWarnings = FALSE)
   writeLines("CANARY-b7f3-DO-NOT-EMBED", file.path(d, "secret.txt"))
-  fn <- normalizePath(file.path(vd, "ACTA_Functions.R"), winslash = "/")
+  ## The helpers may be one sibling file or several R/ sources, depending on the layout, so this
+  ## emits one source() line per file rather than assuming a single ACTA_Functions.R.
+  fn <- actaTestFunctionsFiles(vd)
   writeLines(c("---", "title: t", "output: pdf_document", "---", "",
                "```{r, echo=FALSE, results='asis'}",
-               sprintf("source(%s, local = TRUE)", encodeString(fn, quote = '"')),
+               vapply(fn, function(p) sprintf("source(%s, local = TRUE)",
+                                              encodeString(p, quote = '"')), ""),
                ## the two shapes that leaked, with the fix applied
                'v <- "csv` \\\\input{secret.txt} `"',
                'cat(sprintf("A: \\\\texttt{%s}\\n\\n", .actaTexEsc(v)))',
@@ -238,7 +241,7 @@ if (Sys.info()[["sysname"]] == "Darwin" && nzchar(Sys.which("osascript"))) {
   unlink(d, recursive = TRUE)
 
   cat("=== the shipped app uses the argv form ===\n")
-  app <- readLines(file.path(vd, "ACTA_App.R"), warn = FALSE)
+  app <- readLines(actaTestAppFile(vd), warn = FALSE)
   chk("pickPath builds an `on run argv` handler", any(grepl("on run argv", app, fixed = TRUE)))
   chk("pickPath reads the path from argv",
       any(grepl("item 1 of argv", app, fixed = TRUE)))

@@ -1,0 +1,61 @@
+Package: ACTA
+Type: Package
+Title: Anybody Can Titrate Antibody - Automated Flow Cytometry Reagent Titration
+Version: 3.0.0
+Authors@R: c(
+    person("Jatin", "Sharma", email = "jatin1995@gmail.com", role = c("aut", "cre")),
+    person("Lyell Immunopharma, Inc.", role = "cph"))
+Description: An R workflow for analysing flow cytometry reagent titration
+    experiments. A run reads a flowset of FCS files plus one Excel instructions
+    workbook, gates positive and negative populations with openCyto, and reports
+    a Stain Index per stain quantity together with a Michaelis-Menten fit, a PDF
+    report, and an HTML dashboard across runs. "Reagent" covers antibodies and
+    non-antibody stains alike, including fluorophore-conjugated streptavidin,
+    viability dyes and peptide-MHC multimers.
+License: AGPL-3
+Encoding: UTF-8
+Depends:
+    R (>= 4.4.0)
+Imports:
+    diptest,
+    dplyr,
+    flowCore,
+    flowMeans,
+    flowWorkspace,
+    ggcyto,
+    ggplate,
+    ggplot2,
+    graphics,
+    grDevices,
+    grid,
+    jsonlite,
+    kableExtra,
+    knitr,
+    lubridate,
+    magrittr,
+    mclust,
+    methods,
+    openCyto,
+    openxlsx,
+    processx,
+    readxl,
+    rmarkdown,
+    shiny,
+    stats,
+    stringr,
+    tcltk,
+    this.path,
+    tibble,
+    tidyr,
+    tidyselect,
+    tinytex,
+    tools,
+    utils,
+    xml2
+Suggests:
+    BiocManager,
+    flowGate,
+    rstudioapi
+URL: https://github.com/jatin199517/acta-public
+BugReports: https://github.com/jatin199517/acta-public/issues
+RoxygenNote: 7.3.2

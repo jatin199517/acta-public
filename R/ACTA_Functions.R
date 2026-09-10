@@ -3093,9 +3093,9 @@ facetPages <- function(stain_volume, per_page = 12L) {
 ## preprocessing_method silently means an -Inf (no-op) Costain floor.
 gateCaption <- function(row, compensation = NULL) {
   g <- function(col) {
-    if (!col %in% names(row)) return("—")
+    if (!col %in% names(row)) return("\u2014")
     v <- row[[col]][1]
-    if (is.null(v) || length(v) == 0 || is.na(v) || !nzchar(trimws(as.character(v)))) "—"
+    if (is.null(v) || length(v) == 0 || is.na(v) || !nzchar(trimws(as.character(v)))) "\u2014"
     else trimws(as.character(v))
   }
   cap <- paste0("Gating method: ", g("gating_method"),
@@ -3218,7 +3218,7 @@ adaptiveBins<-function(gs, pop, min_bins=50, max_bins=300){
   return(max(min_bins, min(max_bins, bins)))
 }
 
-## Computes percentile-based axis limits (0.5th–99.5th percentile) with 10%
+## Computes percentile-based axis limits (0.5th--99.5th percentile) with 10%
 ## symmetric padding, plus a square binwidth in data units for geom_bin2d,
 ## for a given population and pair of channels across ALL samples in a
 ## GatingSet. Returns list(xlim, ylim, binwidth).
@@ -3255,7 +3255,7 @@ computePlotParams <- function(gs, pop, xchannel, ychannel, bins) {
 ## Empty bins (count = 0, NA after log10) are rendered as dark navy.
 ##
 ## Use bins= (scalar) for most plots. For plots where x and y data ranges
-## differ substantially (e.g. DUMP gate), pass binwidth= instead — a length-2
+## differ substantially (e.g. DUMP gate), pass binwidth= instead -- a length-2
 ## vector c(x_width, y_width) in data units. This keeps bins visually square
 ## and prevents horizontal stripe artefacts caused by a narrow y-range.
 ## `xlim`/`ylim`: BIN ONLY THE VISIBLE WINDOW. Borrowed from URSULA's computePlotParams, which
@@ -4845,7 +4845,14 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
     stop(sprintf("run_acta: expected exactly one ACTA_Script*.R in '%s'; found %d.",
                  code_dir, length(script)), call. = FALSE)
 
-  env <- new.env(parent = globalenv())
+  ## THE SCRIPT SEES WHATEVER run_acta ITSELF SEES. parent.env(environment()) is this function's
+  ## ENCLOSING environment: namespace:ACTA when installed as a package, R_GlobalEnv when the
+  ## helpers were source()d into a version folder. So the pipeline script reaches every helper by
+  ## lexical scoping in BOTH layouts, and none of them has to be exported to make that work.
+  ## Written self-referentially on purpose: asNamespace("ACTA") would bind to whatever ACTA is
+  ## INSTALLED, which on a development machine can be a stale release -- exactly the trap that
+  ## made smoke_app.R test ACTA 2.90.0 instead of the checkout.
+  env <- new.env(parent = parent.env(environment()))
   assign("ACTA_WORK_DIR",    version_dir, envir = env)
   assign("ACTA_CODE_DIR",    code_dir,    envir = env)
   assign("ACTA_WRITE_PLOTS", isTRUE(plots), envir = env)
@@ -5099,7 +5106,7 @@ actaRunArtefacts <- function(res) {
                list(label = "Titration export", path = res$export_file, skipped = NA_character_)
              else list(label = "Titration export", path = NA_character_, skipped = "not written"),
     ## Plots were REQUESTED but none exist -> say so. Leaving `skipped` NA alongside a NA path made
-    ## the UI print the literal "Plots (0 PNG) — NA", since it falls back to `skipped` whenever there
+    ## the UI print the literal "Plots (0 PNG) -- NA", since it falls back to `skipped` whenever there
     ## is no path.
     plots  = if (isTRUE(res$wrote_plots) && length(pngs))
                list(label = sprintf("Plots (%d PNG)", length(pngs)), path = res$plots_dir,
@@ -6004,7 +6011,7 @@ actaDependencyChecks <- function(version_dir, app_pkgs = c("shiny", "processx", 
     add("latex", "LaTeX (xelatex, for the PDF report)", "pass", NA_character_, NA_character_)
   else
     add("latex", "LaTeX (xelatex, for the PDF report)", "warn",
-        paste("not found -- clear “Generate report” and the export is still written.",
+        paste("not found -- clear \u201cGenerate report\u201d and the export is still written.",
               "To enable it: tinytex::install_tinytex(), or MacTeX from https://www.tug.org/mactex/"),
         "https://www.tug.org/mactex/")
 
@@ -6561,6 +6568,45 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## to, and reported as a NOTE rather than a verdict: versions legitimately move, and a check that
   ## fails on every routine upgrade is a check somebody switches off. What this buys is that a
   ## verdict which moved after an upgrade can be explained instead of investigated from scratch.
+  ## WHICH ACTA PRODUCED THIS. The frozen version FOLDER used to be the answer -- you could go
+  ## and look at 2_98/. A package has no such folder, so the run has to say so itself, and the
+  ## pair (git tag, this record) replaces it. A tag is the stronger half: it is content-addressed
+  ## and cannot drift, whereas a directory is something a person can edit.
+  ## Recorded SEPARATELY from script_version, which is parsed out of the ACTA_Script_*.R FILENAME
+  ## and so reports 3_0 where DESCRIPTION says 3.0.0. The filename is the pipeline's own idea of
+  ## its version; DESCRIPTION is the package's. When ACTA is not installed there is no package
+  ## version to report and the field says so rather than guessing.
+  .sv <- tryCatch({
+    v <- res$script_version
+    if (length(v) == 1L && !is.na(v) && nzchar(v)) as.character(v) else NULL
+  }, error = function(e) NULL)
+  ## ONLY REPORT A PACKAGE VERSION IF THE PACKAGE IS WHAT RAN. packageVersion("ACTA") answers
+  ## about whatever is INSTALLED, which on a development machine is routinely an older ACTA than
+  ## the checkout under test -- this record first printed "package 2.90.0" for a run that used
+  ## the 3_0 sources. Same self-referential test as run_acta(): the enclosing environment of
+  ## these helpers is namespace:ACTA when installed and a plain environment when they were
+  ## source()d, so a stale install cannot fool it.
+  .fromPkg <- isNamespace(parent.env(environment()))
+  .av <- if (.fromPkg)
+           tryCatch(as.character(utils::packageVersion("ACTA")), error = function(e) NA_character_)
+         else NA_character_
+  .sha <- tryCatch({
+    o <- suppressWarnings(system2("git", c("-C", shQuote(code_dir), "rev-parse", "--short", "HEAD"),
+                                  stdout = TRUE, stderr = FALSE))
+    if (length(o) == 1L && nzchar(o)) o else NA_character_
+  }, error = function(e) NA_character_)
+  add("acta_version", "Which ACTA produced this run", "pass",
+      sprintf("package %s; script %s%s",
+              if (is.na(.av)) "sourced, not installed" else .av,
+              if (!is.null(.sv))                                 .sv          else "unknown",
+              if (is.na(.sha)) "" else sprintf("; git %s", .sha)))
+  tryCatch(writeLines(c(sprintf("acta_package_version\t%s", if (is.na(.av)) "NA" else .av),
+                        sprintf("acta_script_version\t%s",
+                                if (!is.null(.sv))                                 .sv          else "NA"),
+                        sprintf("git_sha\t%s", if (is.na(.sha)) "NA" else .sha),
+                        sprintf("r_version\t%s", R.version.string)),
+                      file.path(outDir, "acta_version.tsv")),
+           error = function(e) invisible(NULL))
   .pv <- tryCatch(actaPackageVersions(code_dir), error = function(e) NULL)
   if (!is.null(.pv)) {
     tryCatch(utils::write.table(.pv, file.path(outDir, "package_versions.tsv"), sep = "\t",

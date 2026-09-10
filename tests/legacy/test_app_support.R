@@ -260,9 +260,17 @@ cat("=== CI declares every package the pipeline loads ===\n")
 ## The workflow lives at Publish/github/workflows/ in the development repo and at
 ## .github/workflows/ in the released one; whichever is present is checked, and if neither is
 ## (someone running these tests from a bare copy) it is a SKIP rather than a failure.
-.wf <- Filter(file.exists, c(file.path(dirname(vd), "Publish", "github", "workflows", "tests.yml"),
-                             file.path(vd, ".github", "workflows", "tests.yml"),
-                             file.path(dirname(vd), ".github", "workflows", "tests.yml")))
+## ANCHORED ON THE REAL TREE, NOT ON `vd`. `vd` is actaTestAppDir(), which returns a TEMP STAGE
+## whenever the folder has no working workbook -- which is every fresh clone, so both the flat
+## public repo and the package layout. dirname(<temp stage>) never holds a workflow, so this
+## check printed "[skip] no CI workflow file found from here" on EVERY CI run and only ever
+## executed in a development folder that happened to have a workbook beside it. The gate that
+## exists to catch a dependency missing from CI was itself inert in CI -- confirmed in run #9.
+.wf <- Filter(file.exists, c(
+  file.path(ACTA_REPO_ROOT,          ".github", "workflows", "tests.yml"),
+  file.path(ACTA_VERSION_DIR,        ".github", "workflows", "tests.yml"),
+  file.path(ACTA_REPO_ROOT,          "Publish", "github", "workflows", "tests.yml"),
+  file.path(dirname(ACTA_REPO_ROOT), "Publish", "github", "workflows", "tests.yml")))
 if (!length(.wf)) cat("  [skip] no CI workflow file found from here\n") else {
   .scr  <- Sys.glob(file.path(vd, "ACTA_Script*.R"))[1]
   .line <- grep("^listOfLibrary", readLines(.scr, warn = FALSE), value = TRUE)[1]

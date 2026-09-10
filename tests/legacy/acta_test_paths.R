@@ -14,7 +14,7 @@
 ##     .../tests/  ->  ACTA_VERSION_DIR (code)  ->  ACTA_REPO_ROOT  ->  ACTA_CASE_ROOT
 ##
 ## An explicit first argument still overrides the version folder -- that is how the suite is pointed
-## at another version (`Rscript 2_99/tests/test_preflight.R 2_89`). A path that does not exist
+## at another version (`Rscript 3_0/tests/test_preflight.R 2_89`). A path that does not exist
 ## is a HARD ERROR and never a silent fall back to this folder's own version: falling back would
 ## report a PASS for a version nobody tested.
 ## ---------------------------------------------------------------------------------------------
@@ -152,8 +152,55 @@ actaTestAppDir <- function() {
     dir.create(dg, showWarnings = FALSE)
     file.copy(list.files(ACTA_CASE_ROOT, full.names = TRUE), dg, recursive = TRUE)
   }
+  ## THE APP ITSELF. In a version folder it sits beside the script, so the copy of ACTA_VERSION_DIR
+  ## above already brought it. In the package layout it lives in inst/pipeline/ beside the script,
+  ## (= inst/pipeline/) does not cover -- and smoke_app.R does shinyAppFile("ACTA_App.R") relative to
+  ## this stage, so without this the whole smoke test dies on a path before testing anything.
+  if (!file.exists(file.path(d, "ACTA_App.R"))) {
+    af <- file.path(ACTA_REPO_ROOT, "inst", "pipeline", "ACTA_App.R")
+    if (file.exists(af)) file.copy(af, file.path(d, "ACTA_App.R"))
+  }
+  ## THE HELPERS, AS A SIBLING FILE, and this is not optional under the package layout.
+  ## actaVersionFiles() resolves "ACTA Functions" from a sibling ACTA_Functions.R first and falls
+  ## back to the INSTALLED ACTA namespace. inst/pipeline/ deliberately has no such file, so the app
+  ## fell through to whatever ACTA happens to be installed on the machine -- here a stale 2.90.0,
+  ## which lacks actaTitrationGroups(), so the pre-flight died with "could not find function" and
+  ## the smoke test was measuring an old release instead of this checkout. Same rule as
+  ## actaTestFunctions(): a test must exercise the sources in THIS tree. Concatenated because R/ may
+  ## hold more than one file and the sibling contract is a single ACTA_Function*.R.
+  if (!file.exists(file.path(d, "ACTA_Functions.R"))) {
+    rf <- sort(list.files(file.path(ACTA_REPO_ROOT, "R"), pattern = "[.]R$", full.names = TRUE))
+    if (length(rf))
+      writeLines(unlist(lapply(rf, readLines, warn = FALSE)), file.path(d, "ACTA_Functions.R"))
+  }
   .acta_app_dir <<- normalizePath(d)
   .acta_app_dir
+}
+
+## THE SHINY APP's source file. Beside the script in BOTH layouts -- inst/pipeline/ in a package,
+## package layout, which is NOT inside ACTA_VERSION_DIR (= inst/pipeline/). Tests that read the app
+## as TEXT need this; tests that RUN it get a copy staged into actaTestAppDir() instead.
+actaTestAppFile <- function(vd = actaTestVersionDir()) {
+  f <- file.path(vd, "ACTA_App.R")
+  if (file.exists(f)) return(normalizePath(f, winslash = "/"))
+  f <- file.path(ACTA_REPO_ROOT, "inst", "pipeline", "ACTA_App.R")
+  if (file.exists(f)) return(normalizePath(f, winslash = "/"))
+  stop(sprintf("acta_test_paths: no ACTA_App.R beside '%s' or under '%s/inst/pipeline'", vd,
+               ACTA_REPO_ROOT), call. = FALSE)
+}
+
+## The helper SOURCES as file paths, for the one test that has to source them from generated code
+## rather than get them out of an environment. Same two-source rule as actaTestFunctions(): a
+## sibling ACTA_Functions.R in a version folder, or the package's own R/ files. Returns a vector,
+## because R/ may hold more than one file and the caller must source all of them.
+actaTestFunctionsFiles <- function(vd = actaTestVersionDir()) {
+  fn <- file.path(vd, "ACTA_Functions.R")
+  if (file.exists(fn)) return(normalizePath(fn, winslash = "/"))
+  rf <- sort(list.files(file.path(ACTA_REPO_ROOT, "R"), pattern = "[.]R$", full.names = TRUE))
+  if (!length(rf))
+    stop(sprintf("acta_test_paths: no ACTA_Functions.R in '%s' and no R/ sources under '%s'",
+                 vd, ACTA_REPO_ROOT), call. = FALSE)
+  normalizePath(rf, winslash = "/")
 }
 
 ## The helper library in its own environment, which is how every test gets at the functions under

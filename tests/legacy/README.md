@@ -9,11 +9,11 @@ Three tiers, in the order you would use them:
 | **Regression gate** (`regression_capture.R` + `regression_compare.R`) | a refactor changed *nothing* observable, at a finer grain than the OQ assertions | ~2 min per snapshot |
 
 ```sh
-Rscript 2_99/tests/run_all.R          # all fast gates, one line each, exit 0 = all passed
-Rscript 2_99/tests/test_preflight.R   # or any single gate
+Rscript 3_0/tests/run_all.R          # all fast gates, one line each, exit 0 = all passed
+Rscript 3_0/tests/test_preflight.R   # or any single gate
 ```
 
-> **On the `2_99/` prefix in every command below.** These paths are written for the DEVELOPMENT
+> **On the `3_0/` prefix in every command below.** These paths are written for the DEVELOPMENT
 > repository, where each version lives in its own folder alongside the others. A standalone checkout
 > -- which is what the published repository is -- has no version folder: the code sits at the root,
 > so drop the prefix and run `Rscript tests/run_all.R`. Nothing else changes; every script finds its
@@ -26,9 +26,9 @@ Every script in this folder locates **itself** and derives the version folder an
 there, so all of these are equivalent:
 
 ```sh
-Rscript 2_99/tests/run_all.R                       # from the repo root
-(cd 2_99 && Rscript tests/run_all.R)                # from the version folder
-(cd /tmp && Rscript "$ACTA/2_99/tests/run_all.R")   # from anywhere at all
+Rscript 3_0/tests/run_all.R                       # from the repo root
+(cd 3_0 && Rscript tests/run_all.R)                # from the version folder
+(cd /tmp && Rscript "$ACTA/3_0/tests/run_all.R")   # from anywhere at all
 ```
 
 This was not always true, and it mattered: the scripts used to disagree — most resolved the version
@@ -46,7 +46,7 @@ source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 
 which provides `ACTA_TEST_DIR`, `ACTA_VERSION_DIR`, `ACTA_REPO_ROOT`, `actaTestVersionDir()` and
 `actaTestFunctions()`. A first argument overrides the version folder
-(`Rscript 2_99/tests/test_preflight.R 2_89`); a path that does not exist is a **hard error**,
+(`Rscript 3_0/tests/test_preflight.R 2_89`); a path that does not exist is a **hard error**,
 never a silent fall back to this folder's own version, because falling back would report a PASS for a
 version nobody tested.
 
@@ -72,8 +72,8 @@ version nobody tested.
 ## The OQ cases
 
 ```r
-h <- new.env(); sys.source("2_99/ACTA_Functions.R", envir = h)
-r <- h$actaOQRun("2_99/Diagnostics/OQ_Test1")   # writes Outputs/log.txt with the verdict table
+h <- new.env(); sys.source("3_0/ACTA_Functions.R", envir = h)
+r <- h$actaOQRun("3_0/Diagnostics/OQ_Test1")   # writes Outputs/log.txt with the verdict table
 ```
 
 Each case folder holds only its **inputs** — the instructions workbook, `Titration_FCS/`,
@@ -99,10 +99,10 @@ an **identical** snapshot. That makes this a pass/fail gate rather than a judgem
 difference after a refactor is a real behaviour change.
 
 ```sh
-Rscript 2_99/tests/regression_capture.R 2_99 baseline.rds   # before the change
+Rscript 3_0/tests/regression_capture.R 3_0 baseline.rds   # before the change
 #   ... make the change ...
-Rscript 2_99/tests/regression_capture.R 2_99 after.rds      # after
-Rscript 2_99/tests/regression_compare.R baseline.rds after.rds  # exit 0 = identical
+Rscript 3_0/tests/regression_capture.R 3_0 after.rds      # after
+Rscript 3_0/tests/regression_compare.R baseline.rds after.rds  # exit 0 = identical
 ```
 
 The snapshot captures the per-well `stats`, the QC verdicts, the full gate tree with counts and

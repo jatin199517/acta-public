@@ -949,7 +949,7 @@ server <- function(input, output, session) {
   ## which does nothing when two roots hold cases of the SAME NAME -- and two of them routinely do:
   ## the version folder's Diagnostics/ and, for anyone who has installed the package, its
   ## extdata/oq_small/. That rendered FOUR identical-looking buttons for two cases, and the copy
-  ## inside an installed package carries THAT package's workbook -- 2_90 while this folder is 2_99 --
+  ## inside an installed package carries THAT package's workbook -- 2_90 while this folder is 3_0 --
   ## so half of them ran the current code against a version-locked workbook it must not accept.
   ##
   ## `roots` is in PREFERENCE order and must not be re-sorted across roots: the previous sort() was

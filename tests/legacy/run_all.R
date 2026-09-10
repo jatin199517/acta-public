@@ -1,8 +1,8 @@
 ## ---------------------------------------------------------------------------------------------
 ## Run every fast gate in this folder and print one line per script.
 ##
-##     Rscript 2_99/tests/run_all.R            # this version, from anywhere
-##     Rscript 2_99/tests/run_all.R 2_87       # another version's copies of these scripts
+##     Rscript 3_0/tests/run_all.R            # this version, from anywhere
+##     Rscript 3_0/tests/run_all.R 2_87       # another version's copies of these scripts
 ##
 ## Each script runs in its OWN Rscript process, deliberately: they load the same package stack and
 ## source the same helper library, and a fatal error in one must not take the rest of the suite with
@@ -49,7 +49,7 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_arg_safety.R",     # no workbook cell is ever evaluated (2_94 review H-1)
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
-             "smoke_app.R",           # the Shiny server logic, via testServer
+             "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer
              "verify_oq_sanitised.R") # the OQ cases carry nothing that cannot be published
 
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))

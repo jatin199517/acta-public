@@ -1,0 +1,14 @@
+^Setup\.R$
+^Setup\.bat$
+^ACTA App\.bat$
+^ACTA App\.command$
+^Titration_FCS$
+^\.gitattributes$
+^.*\.Rproj$
+^\.Rproj\.user$
+# THE PRIVATE SCRUB TOKEN LIST MUST NEVER ENTER A TARBALL.
+# .gitignore keeps it out of the REPOSITORY; it does nothing here, because R CMD build reads the
+# FILESYSTEM and does not consult git at all. Without this rule the file was packaged into
+# ACTA_3.0.0.tar.gz -- caught by the "hidden files and directories" NOTE, which is worth reading
+# rather than dismissing as cosmetic. Anchored on the filename so it holds wherever the gates live.
+\.acta_scrub_tokens\.R$

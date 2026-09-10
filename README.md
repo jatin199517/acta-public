@@ -125,11 +125,22 @@ launches it; on Linux run `shiny::runApp("ACTA_App.R")`. Five sections:
 
 Every action the app offers is available as a function call.
 
+From an installed package:
+
 ```r
-h <- new.env(); sys.source("ACTA_Functions.R", envir = h)   # helpers only; runs no analysis
-r <- h$run_acta("/path/to/working/folder",                  # holds the workbook, FCS and outputs
+library(ACTA)
+r <- run_acta("/path/to/working/folder",          # holds the workbook, FCS and outputs
+              report = TRUE, plots = TRUE, quiet = FALSE,
+              code_dir = system.file("pipeline", package = "ACTA"))
+```
+
+Or from a clone, without installing:
+
+```r
+h <- new.env(); sys.source("R/ACTA_Functions.R", envir = h)  # helpers only; runs no analysis
+r <- h$run_acta("/path/to/working/folder",
                 report = TRUE, plots = TRUE, quiet = FALSE,
-                code_dir = "/path/to/code")                 # defaults to the working folder
+                code_dir = ".")                              # defaults to the working folder
 ```
 
 `run_acta()` resolves the pipeline script beside `code_dir`, runs it in its own environment, and
@@ -175,7 +186,28 @@ drive is mounted differently will show rows correctly but broken links.
 
 ## Installation
 
-Run this **in the folder you cloned into** — the one holding `Setup.R` next to `ACTA_Script_*.R`.
+ACTA is an R package. There are two ways to install it.
+
+**As a package**, to drive ACTA from R:
+
+```r
+# install.packages("remotes")
+remotes::install_github("jatin199517/acta-public")
+library(ACTA)
+```
+
+This provides `run_acta()` and `actaOQRun()`, and the three diagnostic cases. You can validate the
+install straight away — see *Validate your installation* below. pandoc and a TeX engine are not
+installed; see the table below.
+
+**From a clone**, for the Shiny app, the desktop launchers and the working folder layout:
+
+```sh
+git clone https://github.com/jatin199517/acta-public.git
+cd acta-public
+```
+
+Then run this **in the folder you cloned into** — the one holding `Setup.R` next to `R/`.
 
 ```sh
 Rscript Setup.R              # or: Rscript Setup.R --no-tex   to skip the PDF report
@@ -209,10 +241,10 @@ What each platform needs beyond R:
 | **Setup launcher** | Ships with the tool | none — use `Rscript Setup.R` | none — use `Rscript Setup.R` | `Setup.bat` |
 | **App launcher** | Ships with the tool | none — use `Rscript` or the R console | `ACTA App.command` | `ACTA App.bat` |
 
-**The PDF report needs both a TeX engine and pandoc.** `rmarkdown` runs pandoc to turn the report
-into LaTeX, then the TeX engine turns that into the PDF. `Setup.R` installs the TeX engine and the
-LaTeX packages. **It does not install pandoc** — it only checks for it and reports it in the closing
-summary, so install pandoc yourself from [pandoc.org](https://pandoc.org/installing.html).
+The PDF report needs both a TeX engine and pandoc. `rmarkdown` runs pandoc to turn the report into
+LaTeX, then the TeX engine turns that into the PDF. `Setup.R` installs the TeX engine and the LaTeX
+packages. It does not install pandoc — it checks for it and reports it in the closing summary.
+Install pandoc from [pandoc.org](https://pandoc.org/installing.html).
 
 If you do not want the PDF, skip both and use `run_acta(report=FALSE)`.
 

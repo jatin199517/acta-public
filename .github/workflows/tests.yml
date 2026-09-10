@@ -75,8 +75,21 @@ jobs:
             any::magick
             any::lubridate
             any::stringr
+      # INSTALL THE PACKAGE FIRST, when this release IS one. test_app_package.R drives the Shiny
+      # app against the installed namespace, where it can see only the exported names -- and it
+      # SKIPS if the package is absent. Without this step that gate would be inert on every runner,
+      # which is the same trap the CI-declares check fell into. No-op for the flat release.
+      - name: install the package (package layout only)
+        run: |
+          if [ -f DESCRIPTION ]; then R CMD INSTALL . ; else echo "flat layout, nothing to install"; fi
       - name: run the gates
-        run: Rscript tests/run_all.R
+        # LAYOUT-AGNOSTIC. The flat release keeps the gates at tests/; the package release keeps
+        # them at tests/legacy/, because R CMD check runs tests/*.R and these need FCS and minutes.
+        # One workflow serves both lines rather than forking it per release.
+        run: |
+          f=tests/run_all.R; [ -f "$f" ] || f=tests/legacy/run_all.R
+          echo "running $f"
+          Rscript "$f"
 
   oq:
     name: diagnostic cases (OQ)
@@ -120,11 +133,19 @@ jobs:
       - name: run the three diagnostic cases
         run: |
           Rscript -e '
-            h <- new.env(); sys.source("ACTA_Functions.R", envir = h)
+            # Same two layouts: helpers at the root (flat) or under R/ (package); cases in
+            # Diagnostics/ or inst/extdata/oq_small/; and in the package layout the code lives
+            # apart from the data, so actaOQRun needs code_dir.
+            fn  <- if (file.exists("ACTA_Functions.R")) "ACTA_Functions.R" else "R/ACTA_Functions.R"
+            cas <- if (dir.exists("Diagnostics")) "Diagnostics" else "inst/extdata/oq_small"
+            cd  <- if (dir.exists("inst/pipeline")) "inst/pipeline" else NULL
+            cat("helpers:", fn, " cases:", cas, "\n")
+            h <- new.env(); sys.source(fn, envir = h)
             bad <- character(0)
             for (n in 1:3) {
-              d <- sprintf("Diagnostics/OQ_Test%d", n)
-              r <- h$actaOQRun(d, quiet = TRUE)
+              d <- sprintf("%s/OQ_Test%d", cas, n)
+              r <- if (is.null(cd)) h$actaOQRun(d, quiet = TRUE)
+                   else h$actaOQRun(d, code_dir = cd, quiet = TRUE)
               st <- vapply(r$recs, function(x) as.character(x$status), character(1))
               cat(sprintf("%s: %s  (%d records, %d fail)\n", d, as.character(r$verdict),
                           length(st), sum(st == "fail")))

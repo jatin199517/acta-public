@@ -8,7 +8,7 @@
 ## never in ACTA itself, so production code carries no dependency on it -- but an upstream change to
 ## the naming or the order is caught rather than mis-plotted.
 ##
-## Rscript <this> [version_dir]   -- defaults to 2_99
+## Rscript <this> [version_dir]   -- defaults to 3_0
 ## One cwd contract for the whole suite -- see acta_test_paths.R. Run this script from anywhere.
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 vd <- actaTestVersionDir()

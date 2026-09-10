@@ -1,0 +1,74 @@
+# EXPORTS ARE THE APP'S REQUIREMENTS, NOT THE PIPELINE'S.
+# The pipeline script and the report are sourced by run_acta() into an environment parented on this
+# namespace, so they reach all 203 helpers by lexical scoping and need NOTHING exported. The Shiny
+# app is different: it is loaded by shiny::runApp, does library(ACTA), and then calls helpers by
+# bare name -- so what it uses must be exported. The dashboard generator is deliberately
+# self-contained and never sources the helpers, so it needs nothing either.
+# That is why this list is 29 and not 107: 107 was every name any consumer mentioned, which exposed
+# the internals as public API. Regenerate by intersecting R/ definitions with inst/app/ACTA_App.R.
+# run_acta() and actaOQRun() are in here because the app calls them; they are also the documented
+# entry points for driving ACTA from R.
+
+# S4 GENERICS MUST BE IMPORTED, NOT LEFT TO THE SEARCH PATH. A function inside a namespace resolves
+# a symbol via namespace -> imports -> base, and NEVER via whatever the user has attached. The
+# pipeline calls flowCore/flowWorkspace generics BARE (colnames, exprs, sampleNames, ...), which
+# works when the helpers are source()d into the global env because the script attaches those
+# packages -- and silently breaks under a namespace, where `colnames` resolves to base::colnames and
+# does not dispatch. MEASURED: colnames(flowSet) returned 0 channels with only ACTA attached and 13
+# with flowCore attached, which made actaCompensate() build a 0x0 identity matrix and die in
+# .check_spillover with "The spillover matrix must have colnames!". Wrong quietly, not loudly.
+import(flowCore)
+import(flowWorkspace)
+import(ggcyto)
+import(openCyto)
+
+# FUNCTIONS THIS PACKAGE CALLS BY BARE NAME, DECLARED RATHER THAN LEFT TO THE SEARCH PATH.
+# A namespace resolves namespace -> imports -> base -> globalenv -> attached packages, so a name
+# that is NOT in base does eventually reach an attached package and appears to work -- which is why
+# the pipeline runs today: the script attaches all 21 packages from listOfLibrary before anything is
+# called. That makes it luck, not design: an exported ACTA function called from a plain session,
+# with nothing attached, would fail. Declared here so it cannot.
+# (Contrast the flowCore generics imported above: those DO exist in base, so lookup stopped at
+# base::colnames and never reached the attached package -- silently wrong instead of merely fragile.)
+importFrom(magrittr, "%>%")
+importFrom(dplyr, across, case_when, group_by, mutate, select, summarize)
+importFrom(tidyselect, all_of, contains, everything)
+importFrom(tibble, as_tibble)
+importFrom(tidyr, pivot_longer)
+importFrom(ggplot2, aes, element_text, facet_wrap, geom_bin2d, guide_axis, labs,
+           scale_fill_gradientn, scale_x_continuous, scale_y_continuous, theme, theme_bw)
+importFrom(flowMeans, flowMeans)
+importFrom(stats, mad, median, quantile, runif, setNames)
+importFrom(utils, str)
+importFrom(methods, as)
+
+
+export("ACTA_GLYPH")
+export("actaArchiveThenCopy")
+export("actaCompCsvCandidates")
+export("actaCompensationRecords")
+export("actaCopyDestReachable")
+export("actaDependencyChecks")
+export("actaDiagAppend")
+export("actaDiagLogPath")
+export("actaDiagnosticBundle")
+export("actaElnLabel")
+export("actaFirstError")
+export("actaOQRun")
+export("actaPrevalidateRecords")
+export("actaReadyMessage")
+export("actaRepairPath")
+export("actaRunArtefacts")
+export("actaRunLogAppend")
+export("actaRunLogEntry")
+export("actaScanExports")
+export("actaStageCompCsv")
+export("actaStripHeaderAnnotation")
+export("actaTiterOptions")
+export("actaTitrationGroups")
+export("actaValidateDashboardTemplate")
+export("actaVersionFile")
+export("actaVersionFiles")
+export("gate_manual")
+export("run_acta")
+export("writeTitrationExport")

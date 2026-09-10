@@ -46,7 +46,7 @@ chk("the shared validator is available from ACTA_Functions.R", is.function(opcFi
 
 cat("=== every shipped workbook is a well-formed package ===\n")
 books <- sort(c(Sys.glob(file.path(vd, "Template", "*.xlsx")),
-                Sys.glob(file.path(vd, "Diagnostics", "OQ_Test*", "*Instructions*.xlsx")),
+                Sys.glob(file.path(actaTestCaseRoot(), "OQ_Test*", "*Instructions*.xlsx")),
                 Sys.glob(file.path(vd, "*Instructions*.xlsx"))))
 chk("there are workbooks to check at all", length(books) >= 4L)
 ## THE SUBJECT IS THE STAGED BLOB, NOT THE WORKING FILE. What ships is the committed content, and in
@@ -55,10 +55,17 @@ chk("there are workbooks to check at all", length(books) >= 4L)
 ## this gate failed on bytes nobody will ever receive, while saying nothing about the bytes that do
 ## publish. `git show :./path` is immutable once staged, so it is the honest subject. Falls back to
 ## the working file when the workbook is not staged (a bare copy, or a file not yet added).
+## ANCHORED AT THE FILE'S OWN DIRECTORY, not at vd. `:./x` is resolved relative to whatever `git -C`
+## points at, so the previous version had to strip a vd prefix off the path -- which silently stopped
+## working the moment a workbook lived outside vd. In the package layout the Template is under
+## inst/pipeline/ but the case workbooks are under inst/extdata/oq_small/, so the prefix did not
+## match, `rel` stayed ABSOLUTE, and `:./​<abs>` is not a path git can resolve: every case workbook
+## reported "not staged" and fell back to the working file, which is the one subject this gate exists
+## to avoid. dirname/basename needs no prefix arithmetic and holds for any layout.
 .stagedCopy <- function(p) {
-  rel <- sub(paste0("^", gsub("([.|()\\^{}+$*?\\[\\]])", "\\\\\\1", vd), "/"), "", p)
   tf  <- tempfile(fileext = ".xlsx")
-  st  <- suppressWarnings(system2("git", c("-C", shQuote(vd), "show", shQuote(paste0(":./", rel))),
+  st  <- suppressWarnings(system2("git", c("-C", shQuote(dirname(p)), "show",
+                                           shQuote(paste0(":./", basename(p)))),
                                   stdout = tf, stderr = FALSE))
   if (!identical(as.integer(st), 0L) || !file.exists(tf) || file.size(tf) == 0) { unlink(tf); return(NA_character_) }
   tf
@@ -176,13 +183,13 @@ cat("=== actaFindInstructions(): which files count as THE workbook ===\n")
 ## on a hidden file the analyst never created.
 fd <- file.path(tempdir(), sprintf("findinstr_%s", basename(tempfile(""))))
 dir.create(fd, showWarnings = FALSE)
-real <- "EXP1_Ab_Titration_Instructions_2_99.xlsx"
+real <- "EXP1_Ab_Titration_Instructions_3_0.xlsx"
 for (f in c(real,
             paste0(real, ".orig"),                 # a backup, as left by the repair
             paste0("~$", real),                    # Excel's lock file, present while it is OPEN
             paste0("._", real),                    # macOS AppleDouble over OneDrive/SMB
-            "EXP1_Ab_Titration_Instructions_2_99.xlsx.bak",
-            "EXP1_Ab_Titration_Instructions_2_99.xls",
+            "EXP1_Ab_Titration_Instructions_3_0.xlsx.bak",
+            "EXP1_Ab_Titration_Instructions_3_0.xls",
             "EXP1_Ab_Titration_Layout_2_86.xlsx",  # the pre-2_87 name: must NOT count
             "notes.txt"))
   invisible(file.create(file.path(fd, f)))
@@ -194,7 +201,7 @@ chk("an empty folder returns character(0), not NA or \"\"",
     identical(h$actaFindInstructions(file.path(fd, "nope")), character(0)))
 ## Two REAL workbooks must still both be reported -- the callers turn that into their own error, and
 ## silently picking one would run the wrong layout.
-invisible(file.create(file.path(fd, "EXP2_Ab_Titration_Instructions_2_99.xlsx")))
+invisible(file.create(file.path(fd, "EXP2_Ab_Titration_Instructions_3_0.xlsx")))
 chk("two real workbooks are both reported, for the caller to reject",
     length(h$actaFindInstructions(fd)) == 2L)
 unlink(fd, recursive = TRUE)
@@ -214,7 +221,7 @@ cat("=== what ACTA WRITES is a well-formed package, at its final path ===\n")
 ## make this gate cry wolf on the very machine ACTA is developed on, so [trash]-only findings are
 ## reported as the environment's doing and anything else still fails.
 SYNC_ONLY <- "^part with no content type: \\[trash\\]/[0-9]+\\.dat$"
-gen <- Sys.glob(file.path(vd, "Diagnostics", "OQ_Test*", "Outputs", "*TitrationExport*.xlsx"))
+gen <- Sys.glob(file.path(actaTestCaseRoot(), "OQ_Test*", "Outputs", "*TitrationExport*.xlsx"))
 if (!length(gen)) cat("  (no previous OQ export on disk -- run the OQ cases to cover this)\n")
 for (g in gen) {
   f <- opcFindings(g)

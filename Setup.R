@@ -128,7 +128,7 @@ if (!.hasPipeline(here)) {
          "\n\nThis happens when Setup.R is run in a way that hides its own path -- pasting it into\n",
          "the console, or RStudio's Run-Selected-Lines, both give no file path at all.\n",
          ## The placeholder is DESCRIBED, not named: this message ships in two layouts. The
-         ## development repo has version folders (2_99), the public repo is FLAT and has none,
+         ## development repo has version folders (3_0), the public repo is FLAT and has none,
          ## so naming a version folder sent a public user to a directory that does not exist.
          "Point it at the folder holding ACTA_Script_*.R -- in a release that is the folder you\n",
          "cloned into. Two one-line fixes, either is fine:\n",
@@ -473,7 +473,6 @@ line("pandoc (PDF report)", if (pandocOK()) character(0) else "pandoc",
 if (!pandocOK())
   cat("                       -> install it once per machine:\n",
       "                          https://pandoc.org/installing.html\n",
-      "                          (RStudio ships its own, so running ACTA from RStudio also works)\n",
       sep = "")
 if (.Platform$OS.type != "windows" && Sys.info()[["sysname"]] == "Darwin" &&
     !nzchar(Sys.which("Xquartz")) && !dir.exists("/opt/X11"))
