@@ -183,8 +183,16 @@ chk("the four dropped packages stay dropped",
 ## injects its own packages at knit time and they are exactly the ones a minimal TeX tends to lack, so
 ## a check that reads only the .Rmd verified 6 of 16 -- and, because header-includes are emitted
 ## FIRST, a missing package of ours masks every one of theirs.
+## `tabu` IS VERSION-DEPENDENT and must not be asserted as a constant -- the comment a few
+## lines below has always said so (1.4.0 injects `tabu`; the release that replaced it injects
+## `xltabular`), and the fallback check right after this one already requires the UNION. This
+## assertion hardcoded `tabu` alone, so it passed on a machine with kableExtra 1.4.0 and failed
+## on every CI runner, which installs the current release. That is what kept the public badge
+## red from v2.98 through v2.99.2. Require the version-INDEPENDENT injections, and accept
+## either spelling of the tabular package.
 chk("kableExtra's knit-time injections are included",
-    all(c("tabu", "threeparttablex", "pdflscape", "makecell", "multirow", "wrapfig") %in% .tp))
+    all(c("threeparttablex", "pdflscape", "makecell", "multirow", "wrapfig") %in% .tp) &&
+      any(c("tabu", "xltabular") %in% .tp))
 ## The FALLBACK matters as much as the live read: it is what runs when kableExtra's internal list
 ## cannot be read, i.e. exactly when there is no way to tell which variant is installed. 1.4.0 injects
 ## `tabu`; the release that replaced it injects `xltabular`, which is what a colleague was missing. A
