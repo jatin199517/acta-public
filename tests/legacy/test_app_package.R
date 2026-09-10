@@ -37,6 +37,29 @@ if (is.na(want)) {
 } else {
   suppressMessages(library(ACTA))
   pipe <- system.file("pipeline", package = "ACTA")
+  ## ACTA MUST LOAD ON A HEADLESS MACHINE. flowMeans depends on tcltk, which needs XQuartz on
+  ## macOS, so an importFrom(flowMeans, ...) made `library(ACTA)` itself fail where there is no
+  ## X11 -- and took `R CMD INSTALL` down with it, since its last step is to load the package.
+  ## ACTA 3.0 shipped unloadable on any Mac without XQuartz because of it. flowMeans is called as
+  ## flowMeans::flowMeans() instead, so you need XQuartz to START A RUN, not to attach the
+  ## library. Asserted in a FRESH process: the parent has already loaded everything, so checking
+  ## loadedNamespaces() in here would always pass.
+  .probe <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+    c("--vanilla", "-e", shQuote(paste0(
+        'suppressMessages(library(ACTA)); ',
+        'cat(paste(intersect(loadedNamespaces(), c("tcltk","flowMeans")), collapse=","))'))),
+    stdout = TRUE, stderr = FALSE))
+  ## THE EXIT STATUS MATTERS AS MUCH AS THE OUTPUT. With stdout = TRUE a child that dies produces
+  ## character(0), so "nothing was eagerly loaded" and "nothing ran at all" look identical and the
+  ## check reports ok either way. Assert both: the probe ran, AND it loaded neither package.
+  .st <- attr(.probe, "status")
+  .ran <- is.null(.st) || identical(as.integer(.st), 0L)
+  .pulled <- Filter(nzchar, strsplit(paste(.probe, collapse = ""), ",")[[1]])
+  chk("the headless-load probe actually ran", .ran)
+  chk("library(ACTA) pulls in neither tcltk nor flowMeans (headless-loadable)",
+      .ran && length(.pulled) == 0L)
+  if (length(.pulled)) cat("          eagerly loaded:", paste(.pulled, collapse = ", "), "\n")
+
   chk("the app ships beside the pipeline, not in a folder of its own",
       length(list.files(pipe, pattern = "^ACTA_App[.]R$")) == 1L)
   chk("inst/pipeline carries NO sibling ACTA_Functions.R, so the namespace is used",

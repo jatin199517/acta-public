@@ -26,7 +26,13 @@ plotLimits<-function(fs, channel){
 ## of the negative population. x must be finite (callers drop non-finite first).
 .flowmeans_bound <- function(x, K, cluster, quantile) {
   if (!(cluster %in% c("neg", "pos"))) stop("cluster must be 'neg' or 'pos'")
-  fm  <- flowMeans(x = matrix(x, ncol = 1, dimnames = list(NULL, "v")),
+  ## flowMeans:: RATHER THAN AN IMPORT, and this is load-bearing. flowMeans depends on tcltk,
+  ## which on macOS needs XQuartz. An importFrom() makes flowMeans load whenever ACTA loads, so
+  ## on a headless machine `library(ACTA)` itself failed -- and `R CMD INSTALL` failed with it,
+  ## because its last step is to check the package can be loaded. That is how ACTA 3.0 shipped
+  ## unloadable on any Mac without XQuartz. `::` defers the load to the call, which restores the
+  ## pre-package behaviour: you need XQuartz to START A RUN, not to load the library.
+  fm  <- flowMeans::flowMeans(x = matrix(x, ncol = 1, dimnames = list(NULL, "v")),
                    varNames = "v", MaxN = K, NumC = K)
   cl  <- fm@Labels[[1]]
   mns <- tapply(x, cl, mean)
