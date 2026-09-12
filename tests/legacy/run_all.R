@@ -51,6 +51,7 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer
              "test_install_path.R",   # what an install-only user can reach, incl. biocViews
+             "test_readme_calls.R",   # the README's own R examples resolve against this layout
              "verify_oq_sanitised.R") # the OQ cases carry nothing that cannot be published
 
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))

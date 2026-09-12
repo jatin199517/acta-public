@@ -49,6 +49,8 @@ importFrom(methods, as)
 ## before sourcing it, so the app sees the library as its working folder rather than the
 ## caller's. acta_app() records getwd() into ACTA_WORK_DIR first, which is why it works.
 export("acta_app")
+## Exported because the Shiny app runs under the namespace and calls it by bare name.
+export("actaOQStageOutOfLibrary")
 export("ACTA_GLYPH")
 export("actaArchiveThenCopy")
 export("actaCompCsvCandidates")

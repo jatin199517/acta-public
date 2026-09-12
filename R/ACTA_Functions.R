@@ -1669,7 +1669,14 @@ actaTitrationRowMask <- function(metadata, dirname, alias, alias_col = "Alias") 
   !is.na(d) & nzchar(d) & d == dirname & a == alias
 }
 
-actaFindAntibodyFcs <- function(root, ab, drop_unstained = TRUE) {
+## STAINTYPE IS THE ONLY THING THAT CLASSIFIES A WELL. This used to also drop any file with
+## "Unstain" in its NAME, which made the filename a second, silent classifier: a stained file a
+## colleague had called "CD3_Unstained_comparison.fcs" would vanish from the run, and an unstained
+## well whose file was not named that way was loaded and titrated. Neither is visible in the
+## layout, which is the document the operator actually checks -- and the plate map was added to the
+## report so that check is possible. So discovery now finds every .fcs and the StainType column
+## alone decides, at one place, in the script.
+actaFindAntibodyFcs <- function(root, ab) {
   if (!dir.exists(root)) return(character(0))
   rel   <- list.files(root, pattern = "\\.fcs$", recursive = TRUE, full.names = FALSE)
   if (!length(rel)) return(character(0))
@@ -1681,7 +1688,6 @@ actaFindAntibodyFcs <- function(root, ab, drop_unstained = TRUE) {
   relAb <- ifelse(isPl, sub("^[^/]+/", "", rel), rel)
   sel   <- usable & startsWith(toupper(relAb), toupper(paste0(ab, "/")))
   out   <- rel[sel]
-  if (drop_unstained) out <- out[!grepl("Unstain", out, ignore.case = TRUE)]
   as.character(out)
 }
 
@@ -2633,10 +2639,15 @@ actaOpcScrub <- function(path) {
 ##          becomes NA, boundaryIndex becomes NA, and gs[[NA]] throws
 ##          "The data to be assigned is missing sample: NA". It also makes pp_costain_floor
 ##          hand back a -Inf floor, silently degrading a *_costain gate to un-floored flowMeans.
-##  WARNING more than one Costain well -- supported on purpose (the pp_* plugins pool all
-##          Costain events for the quantile, and the script's channel lookup takes [1]), but
-##          usually a layout slip worth seeing.
+##  ERROR   more than one Costain well. This was once a warning, on the grounds that the pp_*
+##          plugins pool all Costain events for the quantile and the script's channel lookup
+##          takes [1] -- but pooling means the floor the gate is built on belongs to no single
+##          well, so it is fatal alongside the zero case. The header said WARNING here long
+##          after the code stopped agreeing.
 ##  WARNING more than one Unstained well -- harmless, they are all dropped before gating.
+##  TOLERATED, silently: NO Unstained well. It is not required. Costain sets the gate floor and
+##          is; Unstained is dropped before gating and contributes nothing to the result, so a
+##          group without one is a legitimate layout, not an omission.
 ##
 ## Groups whose Dirname is NA are ignored, matching how `antibody` is derived.
 validateLayoutGroups <- function(metadata, groups, digits = 6, stop_on_error = TRUE,
@@ -2917,12 +2928,35 @@ actaPrevalidateRecords <- function(metadata, gating_template, info, groups, fcs_
       if (!length(hit)) next                     ## already reported as a missing folder
       ## Per titration: a combinatorial folder has one layout row per well PER MARKER, so counting
       ## by Dirname would compare one set of files against N sets of rows and fail every time.
-      nWell <- sum(actaTitrationRowMask(metadata, groups$dirname[.g], groups$alias[.g]) &
-                   !isLayoutValue(metadata$StainType, "Unstained"))
-      if (length(hit) != nWell)
-        countBad <- c(countBad, sprintf(paste0("  %s: %d FCS file(s) in '%s' but %d non-Unstained ",
-                                               "layout row(s) -- they must correspond"),
-                                        groups$key[.g], length(hit), groups$dirname[.g], nWell))
+      ## EVERY row, Unstained included. Discovery no longer drops files by name, so the two sides
+      ## of this comparison both count the Unstained well -- excluding it on the layout side only
+      ## would report a mismatch on every healthy run.
+      nWell <- sum(actaTitrationRowMask(metadata, groups$dirname[.g], groups$alias[.g]))
+      if (length(hit) != nWell) {
+        ## NAME THE LIKELY CAUSE. Discovery stopped excluding files by name in 3.0.5, so the
+        ## commonest way to land here is a folder holding an unstained control that the layout
+        ## does not list -- and in a combinatorial folder it must be listed once per titration.
+        ## Without this the operator sees a bare count mismatch and nothing connecting it to the
+        ## change, which is how a correct hard stop still wastes an afternoon.
+        ## UNACCOUNTED-FOR unstained files, not all of them. Counting every unstained-looking
+        ## file meant a folder whose unstained control IS listed satisfied the test whenever the
+        ## surplus was a stray or re-acquired file -- and post-3.0.5 a listed unstained file is
+        ## the normal case, so that was the common shape of the mismatch, not the rare one.
+        .gr  <- metadata[actaTitrationRowMask(metadata, groups$dirname[.g], groups$alias[.g]), ,
+                         drop = FALSE]
+        .un  <- sum(grepl("unstain", basename(hit), ignore.case = TRUE)) -
+                sum(isLayoutValue(.gr$StainType, "Unstained"))
+        countBad <- c(countBad, sprintf(paste0("  %s: %d FCS file(s) in '%s' but %d ",
+                                               "layout row(s) -- they must correspond%s"),
+                                        groups$key[.g], length(hit), groups$dirname[.g], nWell,
+                                        if (.un > 0L && length(hit) - nWell > 0L &&
+                                            .un >= length(hit) - nWell)
+                                          sprintf(paste0("\n      (%d file(s) look unstained: an ",
+                                                         "unstained control in the folder now ",
+                                                         "needs its own layout row, one per ",
+                                                         "titration in a combinatorial folder)"),
+                                                  .un) else ""))
+      }
     }
     resolve("fcs_per_dirname", "Every Dirname resolves to FCS files", missFcs, fcs_root)
     resolve("fcs_row_count", "FCS file count matches the layout rows", countBad, fcs_root)
@@ -2958,10 +2992,11 @@ actaPrevalidateRecords <- function(metadata, gating_template, info, groups, fcs_
             else sprintf("'%s' (Dirname '%s')", ab, groups$dirname[.g])
       g <- metadata[actaTitrationRowMask(metadata, groups$dirname[.g], groups$alias[.g]), ,
                     drop = FALSE]
-      ## An Unstained row is EXPECTED to have no file here: the loader excludes anything with
-      ## "Unstain" in the file NAME, so that well is legitimately absent from `files`.
-      gKeep  <- g[!isLayoutValue(g$StainType, "Unstained"), , drop = FALSE]
-      lw     <- toupper(paste0(trimws(as.character(gKeep$Row)), trimws(as.character(gKeep$Column))))
+      ## THE UNSTAINED ROW IS CHECKED LIKE ANY OTHER. It used to be excused here, because
+      ## discovery dropped its file by name so the well was legitimately absent. Discovery no
+      ## longer does that, so an Unstained well must match an FCS $WELLID like every other well --
+      ## and a missing or misplaced unstained control is now reported rather than assumed.
+      lw     <- toupper(paste0(trimws(as.character(g$Row)), trimws(as.character(g$Column))))
       noFile <- lw[!lw %in% wid]
       noRow  <- wid[!is.na(wid) & !wid %in% lw]
       if (length(noFile))
@@ -4840,12 +4875,67 @@ actaReportIntermediates <- function(dirs, ext = c("tex", "log", "aux", "out", "t
 }
 
 run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet = FALSE,
-                     code_dir = version_dir) {
+                     code_dir = NULL) {
   version_dir <- normalizePath(version_dir, mustWork = TRUE)
-  ## code_dir holds the script/.Rmd/generator; version_dir holds the layout, FCS and outputs. Equal
-  ## in normal use; separated so a diagnostic case can carry only its inputs and be driven by the
-  ## working version's code rather than a second copy that has to be kept in sync.
+  ## code_dir holds the script/.Rmd/generator; version_dir holds the layout, FCS and outputs. They
+  ## were the same folder until 3.0 made ACTA a package, and separating them is what lets a
+  ## diagnostic case carry only its inputs and be driven by the working version's code rather than
+  ## a second copy that has to be kept in sync.
+  ##
+  ## RESOLVED, NOT DEFAULTED. The default used to be version_dir, which is right for a flat
+  ## checkout and wrong for every package install: `library(ACTA); run_acta()` from a folder of
+  ## data looked for the pipeline among the data and stopped. Three people formed that exact
+  ## expectation independently before this changed, which is the design saying the default was
+  ## wrong rather than the users being careless.
+  ##
+  ## The fallback is ANNOUNCED and RECORDED, never silent. Sitting in a clone whose code differs
+  ## from the installed package, a bare call now uses the INSTALLED code -- so the message names
+  ## the version and the path, and $code_dir carries it into the returned list, where the OQ and
+  ## anything automating ACTA can assert on it. An unannounced fallback here would be the same
+  ## class of fault as the stale-copy problem the OQ buttons already guard against.
+  .resolved <- NA_character_
+  .passed   <- if (is.null(code_dir)) NA_character_ else "yes"
+  if (is.null(code_dir)) {
+    .n <- length(list.files(version_dir, pattern = "^ACTA_Script.*\\.R$"))
+    ## ZERO AND MORE-THAN-ONE ARE DIFFERENT QUESTIONS. Zero means "this is a data folder, use the
+    ## package". Two means the folder is AMBIGUOUS, and falling back there silently ran the
+    ## package's code while announcing "no ACTA_Script*.R in the working folder" -- a message that
+    ## was simply false, about a folder the caller plainly meant to be used. Ambiguity is reported.
+    if (.n > 1L)
+      stop(sprintf(paste0("run_acta: %d ACTA_Script*.R files in '%s' -- exactly one, or none if ",
+                          "you mean to use the installed package.\n  Remove the spare, or pass ",
+                          "code_dir to say which folder holds the pipeline."),
+                   .n, version_dir), call. = FALSE)
+    if (.n == 1L) {
+      code_dir <- version_dir
+    } else {
+      .pkg <- tryCatch(system.file("pipeline", package = "ACTA"), error = function(e) "")
+      if (nzchar(.pkg) && length(list.files(.pkg, pattern = "^ACTA_Script.*\\.R$")) == 1L) {
+        code_dir <- .pkg
+        .resolved <- tryCatch(as.character(utils::packageVersion("ACTA")),
+                              error = function(e) NA_character_)
+      } else {
+        stop(sprintf(paste0("run_acta: no ACTA_Script*.R in '%s', and none in the installed ",
+                            "package either.\n  Pass code_dir explicitly -- the folder holding ",
+                            "ACTA_Script*.R:\n      run_acta(code_dir = \"inst/pipeline\")   # from a ",
+                            "clone\n      run_acta(code_dir = system.file(\"pipeline\", package = ",
+                            "\"ACTA\"))   # from an install"), version_dir), call. = FALSE)
+      }
+    }
+  }
   code_dir <- normalizePath(code_dir, mustWork = TRUE)
+  ## BOTH BRANCHES ANNOUNCE. The first version messaged only the package fallback -- the SAFE one --
+  ## and said nothing when the script came from the working folder, which is the branch that can
+  ## surprise you: a run folder that is a copied 2_xx version directory, or one received from
+  ## elsewhere, carries its own ACTA_Script*.R and that is what gets sourced. Silence there was the
+  ## guard placed where it could not help.
+  if (!isTRUE(quiet)) {
+    if (!is.na(.resolved))
+      message("ACTA: no ACTA_Script*.R in the working folder; using the installed package ",
+              .resolved, "\n  ", code_dir)
+    else if (identical(code_dir, version_dir) && is.na(.passed))
+      message("ACTA: running the ACTA_Script*.R found in the working folder\n  ", code_dir)
+  }
   script <- list.files(code_dir, pattern = "^ACTA_Script.*\\.R$", full.names = TRUE)
   if (length(script) != 1)
     stop(sprintf("run_acta: expected exactly one ACTA_Script*.R in '%s'; found %d.",
@@ -4868,6 +4958,9 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
 
   report_ok <- NA; report_error <- NA_character_
   t0 <- proc.time()[["elapsed"]]
+  ## Wall clock as well as CPU: the plot artefacts are judged by file mtime below, and proc.time()
+  ## cannot be compared against one.
+  .wall0 <- Sys.time()
   if (isTRUE(report)) {
     if (!requireNamespace("rmarkdown", quietly = TRUE))
       stop("run_acta(report = TRUE) needs the 'rmarkdown' package.", call. = FALSE)
@@ -5007,8 +5100,16 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
     analysis_error = if (!analysis_ok && !is.na(report_error)) report_error else NA_character_,
     report_ok     = report_ok,
     report_error  = report_error,
-    wrote_plots   = isTRUE(plots),
+    ## THE OUTCOME, NOT THE REQUEST. This was isTRUE(plots) -- the argument echoed back -- so it
+    ## said TRUE for a run that asked for plots and produced none, and the README promised it
+    ## meant "were the plots written". Judged by a file in Plots/ no older than this run.
+    wrote_plots   = { d <- file.path(version_dir, "Plots")
+                      isTRUE(plots) && dir.exists(d) &&
+                        isTRUE(any(file.mtime(list.files(d, full.names = TRUE)) >= .wall0)) },
     version_dir   = version_dir,
+    ## WHICH CODE RAN. Not derivable from the other fields once code_dir can be resolved rather
+    ## than passed, and a validated pipeline should not leave that to a console message.
+    code_dir      = code_dir,
     script        = basename(script),
     script_version = pick("ScriptVersion"),
     elapsed_s     = elapsed,
@@ -5036,11 +5137,38 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
     ## THIS run's export, by the name the script itself built -- not the newest match in the folder.
     ## Globbing meant a run that failed before writing anything reported a PREVIOUS run's export as
     ## its own, which is the same misreading the `report` field above already guards the PDF against.
+    ## THIS run's report. Derived from the .Rmd's own basename, not by globbing the folder -- the
+    ## same discipline as export_file below and for the same reason. There was NO field for it at
+    ## all until 3.0.5: a caller could learn that the render succeeded but not where the PDF went,
+    ## so anything automating ACTA had to list the directory and guess. Found by handing the README
+    ## to an agent that had never seen the tool and watching what it could not do.
+    ## `rmd` only exists when report = TRUE, hence the exists() guard rather than a bare reference.
+    report_file   = { p <- if (isTRUE(report_ok) && exists("rmd", inherits = FALSE) &&
+                                length(rmd) == 1L)
+                             file.path(version_dir, sub("[.][Rr]md$", ".pdf", basename(rmd)))
+                           else NA_character_
+                      if (!is.na(p) && file.exists(p)) p else NA_character_ },
     export_file   = { nm <- pick("exportName")
                       p  <- if (length(nm) == 1L && !is.na(nm) && nzchar(nm))
                               file.path(version_dir, basename(nm)) else NA_character_
                       if (!is.na(p) && file.exists(p)) p else NA_character_ },
-    plots_dir     = { d <- file.path(version_dir, "Plots"); if (dir.exists(d)) d else NA_character_ },
+    ## GATED ON `plots`, not merely on the folder being there. The script creates Plots/ and never
+    ## removes it, so run_acta(plots = FALSE) after any earlier plotting run returned
+    ## wrote_plots = FALSE alongside a plots_dir full of the PREVIOUS run's PNGs -- a caller
+    ## automating ACTA would attach last week's plots to this week's run. Same discipline as
+    ## export_file and report_file: this run's artefact or NA.
+    ## Same test as wrote_plots: a folder left behind by an earlier run is not this run's output.
+    ## Gating on the ARGUMENT alone still handed back a stale folder whenever plots were requested
+    ## and the run produced none.
+    ## isTRUE() AROUND any(), not bare any(). One unstattable entry in Plots/ -- a dangling
+    ## symlink, a file removed between list.files() and file.mtime(), a path the OS will not stat
+    ## -- gives NA, any(c(NA, FALSE)) is NA, and if(NA) raises "missing value where TRUE/FALSE
+    ## needed" from inside list(...), which aborts run_acta() itself. A run that failed for a
+    ## diagnosable reason would return no diagnosis at all.
+    plots_dir     = { d <- file.path(version_dir, "Plots")
+                      if (isTRUE(plots) && dir.exists(d) &&
+                          isTRUE(any(file.mtime(list.files(d, full.names = TRUE)) >= .wall0)))
+                        d else NA_character_ },
     env           = env
   )
   out
@@ -6094,8 +6222,73 @@ actaOQExpected <- function(oq_dir) {
   tryCatch(jsonlite::fromJSON(f, simplifyVector = TRUE), error = function(e) NULL)
 }
 
+## A DIAGNOSTIC CASE MUST NEVER BE RUN IN PLACE INSIDE AN R LIBRARY. actaOQRun() opens by deleting
+## <case>/Outputs, <case>/Plots and any stale export or report at the case root, then writes tens of
+## megabytes of fresh artefacts there. Correct for a case in the caller's own folder; wrong for one
+## inside a library, which is frequently group-writable -- two analysts sharing one would delete each
+## other's in-flight output and leave hostnames and run paths where the other can read them -- and on
+## a managed read-only library it fails outright.
+##
+## EVERY library on .libPaths(), not just the first. system.file() reports only the first ACTA it
+## finds, so with a personal library ahead of a site library a case named literally under the site
+## one sailed past an earlier version of this guard and wrote there. Writing into any R library is
+## wrong, so all of them are checked. The trailing separator matters too: a bare startsWith()
+## conflates .../library/ACTA with .../library/ACTAtools.
+##
+## THE BASELINE TRAVELS WITH THE CASE. actaOQFinish() resolves the OQ-validated package set as
+## file.path(dirname(oq_dir), "validated_packages.tsv"), so a copy whose parent lacks that file turns
+## the dependency-drift assertion into a SKIP while the verdict still reads "PASS (with notes)".
+## That is exactly what staging to <work>/Diagnostics/ did from 3.0.4 -- the check stopped asserting
+## and nothing said so. Hence a dedicated parent, with the sibling copied into it.
+##
+## Returns the folder to run, unchanged when no staging was needed, plus whether the baseline came
+## along. Shared by actaOQRun() and the app so there is one implementation and one thing to gate.
+actaOQStageOutOfLibrary <- function(oq_dir, dest_parent = file.path(tempdir(), "acta_oq")) {
+  oq_dir <- normalizePath(oq_dir, mustWork = TRUE)
+  libs <- unique(c(.libPaths(), dirname(system.file(package = "ACTA"))))
+  libs <- libs[nzchar(libs)]
+  inLib <- any(vapply(libs, function(l) {
+    n <- tryCatch(normalizePath(l, mustWork = FALSE), error = function(e) "")
+    nzchar(n) && startsWith(oq_dir, paste0(n, .Platform$file.sep))
+  }, logical(1)))
+  ## baseline is REPORTED, not assumed, even when no staging happens -- a caller trusting the
+  ## field should get the truth about the folder it is actually going to run.
+  if (!inLib)
+    return(list(dir = oq_dir, staged = FALSE,
+                baseline = file.exists(file.path(dirname(oq_dir), "validated_packages.tsv"))))
+
+  dir.create(dest_parent, recursive = TRUE, showWarnings = FALSE)
+  dest <- file.path(dest_parent, basename(oq_dir))
+  unlink(dest, recursive = TRUE)
+  if (!isTRUE(all(file.copy(oq_dir, dest_parent, recursive = TRUE))) || !dir.exists(dest))
+    stop(sprintf("actaOQRun: '%s' is inside an R library and could not be copied out to '%s'.",
+                 oq_dir, dest_parent), call. = FALSE)
+  base <- file.path(dirname(oq_dir), "validated_packages.tsv")
+  okBase <- if (file.exists(base))
+    isTRUE(file.copy(base, file.path(dest_parent, basename(base)), overwrite = TRUE)) else FALSE
+  list(dir = normalizePath(dest, mustWork = TRUE), staged = TRUE, baseline = okBase)
+}
+
 actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible(), code_dir = NULL) {
   oq_dir <- normalizePath(oq_dir, mustWork = TRUE)
+  .st <- actaOQStageOutOfLibrary(oq_dir)
+  if (!identical(.st$dir, oq_dir)) {
+    progress(sprintf("case is inside an R library; running a copy in %s", .st$dir))
+    if (!quiet)
+      message("actaOQRun: the case is inside an R library, which a diagnostic run deletes from ",
+              "and writes to.\n  Running a copy instead: ", .st$dir)
+    oq_dir <- .st$dir
+  }
+  ## WARN WHENEVER THE BASELINE IS MISSING, staged or not. This used to sit inside the staging
+  ## branch, so the one case that matters in practice -- a case already sitting in the operator's
+  ## Diagnostics/ folder without the sibling .tsv -- recorded package_versions as `skip` while the
+  ## verdict still read "PASS (with notes)" and nothing anywhere said the check had stopped
+  ## comparing. An assertion that quietly stops asserting is the recurring fault in this codebase.
+  if (!isTRUE(.st$baseline))
+    warning("actaOQRun: no validated_packages.tsv beside '", oq_dir, "', so the package-version ",
+            "check will report skip rather than comparing against the validated set.",
+            call. = FALSE)
+
   ## Code comes from the working version by default, so the case holds only its inputs -- layout,
   ## FCS, expected.json -- and can never be running a stale copy of the pipeline.
   ##

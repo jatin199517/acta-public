@@ -100,8 +100,30 @@ skip_tex  <- any(args %in% c("--no-tex", "--notex")) ||
 .hasPipeline <- function(d)
   !is.na(d) && dir.exists(d) && length(list.files(d, pattern = "^ACTA_Script.*[.]R$")) == 1L
 
+## THE PACKAGE LAYOUT PUTS THE PIPELINE TWO LEVELS DOWN, at inst/pipeline/. Everything below was
+## written for the flat release, where ACTA_Script_*.R sat at the root beside this file, and it
+## searched its own folder, the working directory, and ONE level under it -- so from 3.0 onward
+## both documented clone commands (`Rscript Setup.R`, `Setup.bat`) aborted with "cannot find the
+## ACTA folder", and the error's advice sent the user back to the folder they were already in.
+## Four releases. The same 3.0 restructure that stranded the README's run_acta() example and the
+## desktop launchers stranded this too, and nothing here referenced Setup.R so no gate saw it.
+.pipelineUnder <- function(d) {
+  if (is.na(d) || !dir.exists(d)) return(NA_character_)
+  p <- file.path(d, "inst", "pipeline")
+  if (.hasPipeline(p)) normalizePath(p) else NA_character_
+}
+
 here <- .setupSelfDir()
+if (!.hasPipeline(here)) {
+  ## Beside this file first: that is the clone root, and it is where a user is told to stand.
+  .p <- .pipelineUnder(.setupSelfDir())
+  if (!is.na(.p)) here <- .p
+}
 if (!.hasPipeline(here)) here <- getwd()
+if (!.hasPipeline(here)) {
+  .p <- .pipelineUnder(getwd())
+  if (!is.na(.p)) here <- .p
+}
 if (!.hasPipeline(here)) {
   ## One level down from the working directory: the repo root holds the version folders, so a user
   ## sitting in it is one step away. Only accepted when there is exactly ONE candidate -- with
@@ -130,13 +152,22 @@ if (!.hasPipeline(here)) {
          ## The placeholder is DESCRIBED, not named: this message ships in two layouts. The
          ## development repo has version folders (3_0), the public repo is FLAT and has none,
          ## so naming a version folder sent a public user to a directory that does not exist.
-         "Point it at the folder holding ACTA_Script_*.R -- in a release that is the folder you\n",
-         "cloned into. Two one-line fixes, either is fine:\n",
+         "Point it at the folder holding ACTA_Script_*.R, or at the folder holding inst/pipeline/.\n",
+         "In a release that is the folder you cloned into. Two one-line fixes, either is fine:\n",
          '  ACTA_DIR <- "<that folder>"; source(file.path(ACTA_DIR, "Setup.R"))\n',
          '  setwd("<that folder>"); source("Setup.R")\n',
          "Or from a terminal, where the path is never ambiguous:\n",
          "  Rscript <that folder>/Setup.R\n", call. = FALSE)
   }
+}
+
+## A WAY TO TEST THE DISCOVERY WITHOUT INSTALLING ANYTHING. The folder search above was wrong for
+## four releases and no gate noticed, because nothing could exercise Setup.R cheaply: every route
+## through it installs packages and a TeX engine. With this set, it reports what it resolved and
+## stops. test_install_path.R uses it; it changes nothing for a real run.
+if (nzchar(Sys.getenv("ACTA_SETUP_RESOLVE_ONLY"))) {
+  cat("ACTA_SETUP_RESOLVED:", here, "\n")
+  quit(save = "no", status = 0L)
 }
 
 cat("ACTA one-step setup\n")

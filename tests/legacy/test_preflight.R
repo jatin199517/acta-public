@@ -306,5 +306,104 @@ chk("a bare Dirname vector is still accepted",
                       stringsAsFactors = FALSE)
       !length(lg(d, "X")$fatal) })
 
+## ---------------------------------------------------------------------------------------------
+## STAINTYPE IS THE ONLY CLASSIFIER. actaFindAntibodyFcs() used to also drop any file whose NAME
+## contained "Unstain", which made the filename a second and invisible classifier: a stained file
+## called CD3_Unstained_comparison.fcs disappeared from the run, and an unstained well whose file
+## was not named that way was loaded and titrated. Neither shows up in the layout, which is the
+## document the operator checks, and the report's plate map exists so that check is possible.
+## Discovery now returns every .fcs and the StainType column decides, once, in the script.
+cat("\n=== discovery does not classify by filename ===\n")
+local({
+  root <- file.path(tempdir(), "acta_fcs_name_gate"); unlink(root, recursive = TRUE)
+  dir.create(file.path(root, "AB"), recursive = TRUE, showWarnings = FALSE)
+  nms <- c("AB/run_A1_Unstained.fcs",          # an unstained control, named so
+           "AB/CD3_Unstained_comparison.fcs",  # a STAINED file that merely says unstained
+           "AB/run_A2.fcs", "AB/run_A3.fcs")
+  for (f in nms) file.create(file.path(root, f))
+  got <- h$actaFindAntibodyFcs(root, "AB")
+  chk(sprintf("every .fcs is returned regardless of its name (%d of %d)", length(got), length(nms)),
+      setequal(got, nms))
+  chk("a file named *Unstained* is NOT dropped by discovery",
+      "AB/run_A1_Unstained.fcs" %in% got)
+  chk("a stained file whose name merely contains Unstained is NOT dropped",
+      "AB/CD3_Unstained_comparison.fcs" %in% got)
+  ## And the parameter that used to do it is gone, so nothing can re-enable it by passing TRUE.
+  chk("actaFindAntibodyFcs has no drop_unstained argument",
+      !("drop_unstained" %in% names(formals(h$actaFindAntibodyFcs))))
+  unlink(root, recursive = TRUE)
+})
+## Textual, because the fixture above only covers the one function: nothing in the shipped tree may
+## match "Unstain" against a PATH again. StainType comparisons go through isLayoutValue(), which is
+## an exact match on a column, so they do not look like this.
+local({
+  files <- c(actaTestFunctionsFiles(vd),
+             list.files(file.path(ACTA_REPO_ROOT, "inst", "pipeline"),
+                        pattern = "[.](R|Rmd)$", full.names = TRUE))
+  hits <- character(0)
+  for (f in files) {
+    ln <- readLines(f, warn = FALSE)
+    ln <- ln[!grepl("^\\s*#", ln)]
+    ## CASE-INSENSITIVE AND WIDER THAN ONE FUNCTION. The first version matched only
+    ## grepl("Unstain" with a capital U, which could not see the lower-case grepl("unstain",
+    ## basename(hit)) this very release added a few functions away -- so the idiom it forbids was
+    ## the idiom it could not detect, and a reintroduced second classifier would have shipped.
+    ## The allow-list is the one intentional use: a pre-flight DIAGNOSTIC that counts
+    ## unstained-looking files to explain a count mismatch. It classifies nothing.
+    bad <- grep("(grepl|grep|startsWith|str_detect|regexpr)\\(.*(unstain)", ln,
+                value = TRUE, ignore.case = TRUE)
+    ## The allow-list is ONE known line, not a shape. Excusing any line containing
+    ## `basename(hit)` excused a reintroduced filter that reused that variable name -- and `hit`
+    ## is exactly what the neighbouring discovery code calls its FCS paths, so the evasion was a
+    ## rename away. Allowed: the single diagnostic in ACTA_Functions.R that COUNTS unstained-looking
+    ## files to explain a row-count mismatch and subtracts the listed rows. It classifies nothing,
+    ## and it must appear exactly once.
+    okline <- grepl("basename(hit)", bad, fixed = TRUE) &
+              grepl("sum(grepl(", bad, fixed = TRUE) &
+              identical(basename(f), "ACTA_Functions.R")
+    if (sum(okline) > 1L)
+      hits <- c(hits, sprintf("%s: the counting diagnostic appears %d times, expected once",
+                              basename(f), sum(okline)))
+    bad <- bad[!okline]
+    if (length(bad)) hits <- c(hits, sprintf("%s: %s", basename(f), trimws(bad)))
+  }
+  chk("no shipped file matches \"Unstain\" against a filename or path", length(hits) == 0L)
+  for (x in hits) cat("         ", x, "\n")
+})
+
+## COSTAIN IS REQUIRED PER GROUP, UNSTAINED IS NOT. Costain sets the gate floor, so zero leaves
+## it at -Inf -- no floor at all, which looks like a successful run -- and more than one pools
+## events so the floor belongs to no single well. Unstained is dropped before gating and
+## contributes nothing to the result, so a group without one is a legitimate layout. Pinned here
+## because the difference is invisible in the output: a run with no floor still produces numbers.
+cat("\n=== Costain required per group, Unstained optional ===\n")
+local({
+  mk <- function(types, qty) data.frame(
+    Dirname = "X", Alias = "X", PlateID = 1,
+    Row = LETTERS[seq_along(types)], Column = 1,
+    StainType = types, StainQty = qty, stringsAsFactors = FALSE)
+  res <- function(types, qty) {
+    n <- character(0)
+    r <- withCallingHandlers(
+      h$validateLayoutGroups(mk(types, qty), "X", stop_on_error = FALSE, return_all = TRUE),
+      warning = function(w) { n <<- c(n, conditionMessage(w)); invokeRestart("muffleWarning") })
+    list(fatal = length(r$fatal), warn = length(n))
+  }
+  a <- res(c("Stain","Stain","Stain","Costain"), c(1,2,3,0))
+  chk("NO Unstained well is accepted silently -- not fatal, not even a note",
+      a$fatal == 0L && a$warn == 0L)
+  b <- res(c("Stain","Stain","Stain","Costain","Unstained"), c(1,2,3,0,0))
+  chk("one Unstained well is accepted", b$fatal == 0L && b$warn == 0L)
+  cc <- res(c("Stain","Stain","Stain","Costain","Unstained","Unstained"), c(1,2,3,0,0,0))
+  chk("two Unstained wells warn but do not fail", cc$fatal == 0L && cc$warn == 1L)
+  d <- res(c("Stain","Stain","Stain"), c(1,2,3))
+  chk("NO Costain well is fatal", d$fatal == 1L)
+  e <- res(c("Stain","Stain","Stain","Costain","Costain"), c(1,2,3,0,0))
+  chk("two Costain wells are fatal", e$fatal == 1L)
+  f <- res(c("Stain","Stain","costain","unstained"), c(1,2,0,0))
+  chk("StainType matching is case-insensitive (lower-case costain/unstained recognised)",
+      f$fatal == 0L && f$warn == 0L)
+})
+
 cat(if (ok) "\nALL PRE-FLIGHT TESTS PASS\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0 else 1)

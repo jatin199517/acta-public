@@ -21,6 +21,7 @@
 suppressMessages(library(shiny))
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 ok <- TRUE; skipped <- NA_character_
+.rqq <- function(x) encodeString(as.character(x), quote = "'")
 chk <- function(w, c) { if (!c) ok <<- FALSE; cat(sprintf("  [%s] %s\n", if (c) "ok" else "FAIL", w)) }
 
 ## The subject must be THIS checkout's package, not whatever ACTA happens to be installed -- the
@@ -86,6 +87,67 @@ if (is.na(want)) {
   ## answer arrives on a child that exited 0, which is exactly how the defect above hid.
   if (!.ran || length(.pulled))
     cat("          probe output:", paste(utils::head(.probe, 8), collapse = " | "), "\n")
+
+  ## `library(ACTA); run_acta()` FROM A FOLDER OF DATA MUST WORK. code_dir used to default to
+  ## version_dir, so the bare call looked for the pipeline among the user's FCS and stopped with
+  ## "expected exactly one ACTA_Script*.R". Three people formed that expectation independently
+  ## before it changed. Asserted without running an analysis: point it at an EMPTY folder and the
+  ## error must be about the missing workbook, which only happens once code_dir already resolved.
+  chk("run_acta() resolves code_dir rather than defaulting it to the run folder",
+      is.null(formals(ACTA::run_acta)$code_dir))
+  local({
+    e <- file.path(tempdir(), "acta_bare_gate"); unlink(e, recursive = TRUE)
+    dir.create(e, recursive = TRUE, showWarnings = FALSE)
+    msg <- tryCatch({ ACTA::run_acta(e, report = FALSE, plots = FALSE, quiet = TRUE); "" },
+                    error = function(err) conditionMessage(err))
+    chk("a bare run_acta() gets past code_dir to the inputs (no ACTA_Script complaint)",
+        !grepl("ACTA_Script", msg, fixed = TRUE))
+    chk("and it is the workbook it then complains about",
+        grepl("Titration_Instructions|Instructions|workbook", msg))
+    if (grepl("ACTA_Script", msg, fixed = TRUE)) cat("         got:", msg, "\n")
+    unlink(e, recursive = TRUE)
+  })
+  ## Which code ran is RECORDED, not merely messaged -- an announced fallback is only auditable
+  ## if the run keeps the answer. Checked against the function's own source, because the returned
+  ## list is only available from a completed run and this gate must stay fast.
+  ## (The first version of this assertion was `... || TRUE`, which passes unconditionally. An
+  ## assertion that cannot fail is worse than none: it reports coverage it does not have.)
+  .rasrc <- paste(deparse(ACTA::run_acta), collapse = " ")
+  chk("the returned list constructs code_dir", grepl("code_dir *= *code_dir", .rasrc))
+  chk("the returned list constructs report_file", grepl("report_file *=", .rasrc))
+
+  ## THE NO-INSTALL CLONE PATH MUST DISPATCH S4 GENERICS. When ACTA is not installed the app
+  ## sources <root>/R/*.R into the global environment, which does NOT reproduce what the namespace
+  ## gives those helpers: NAMESPACE carries four wholesale import()s, and without them a bare
+  ## generic whose name also exists in base resolves to base and never dispatches. colnames() is
+  ## the one that bit -- colnames(flowSet) returns 0 channels instead of 13 and the run is SILENTLY
+  ## wrong, not broken. Measured at 0 before the attach loop was added. Run in a child with ACTA
+  ## hidden, because this process has it loaded.
+  local({
+    .code <- paste0(
+      sprintf(".libPaths(%s); ", paste(deparse(.libPaths()), collapse = "")),
+      'requireNamespace <- function(package, ...) if (identical(package, "ACTA")) FALSE else ',
+      'base::requireNamespace(package, ...); ',
+      sprintf('setwd(%s); Sys.setenv(ACTA_WORK_DIR = %s); ',
+              .rqq(ACTA_REPO_ROOT), .rqq(ACTA_REPO_ROOT)),
+      sprintf('suppressMessages(suppressWarnings(sys.source(%s, envir = globalenv()))); ',
+              .rqq(actaTestAppFile())),
+      'f <- list.files(file.path("inst","extdata","oq_small"), pattern="[.]fcs$", ',
+      'recursive=TRUE, full.names=TRUE)[1]; ',
+      'fs <- suppressWarnings(flowCore::read.flowSet(f)); ',
+      'cat(paste0("\nACTA_DISPATCH:", length(colnames(fs)), ":", ',
+      'length(flowCore::colnames(fs)), "\n"))')
+    out <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+      c("--no-save", "--no-restore", "-e", shQuote(.code)), stdout = TRUE, stderr = TRUE))
+    mk <- grep("^ACTA_DISPATCH:", out, value = TRUE)
+    chk("the no-install clone path could be probed", length(mk) == 1L)
+    if (length(mk) == 1L) {
+      n <- as.integer(strsplit(sub("^ACTA_DISPATCH:", "", mk[[1]]), ":", fixed = TRUE)[[1]])
+      chk(sprintf("bare colnames(flowSet) dispatches without the namespace (%d of %d channels)",
+                  n[1], n[2]),
+          n[1] > 0L && identical(n[1], n[2]))
+    } else cat("         probe said:", paste(utils::head(out, 6), collapse = " | "), "\n")
+  })
 
   chk("the app ships beside the pipeline, not in a folder of its own",
       length(list.files(pipe, pattern = "^ACTA_App[.]R$")) == 1L)

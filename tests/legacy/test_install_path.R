@@ -103,19 +103,68 @@ chk("NAMESPACE exports acta_app, the documented way to launch the app from an in
 for (lf in c("ACTA App.command", "ACTA App.bat")) {
   f <- file.path(vd, lf)
   if (!file.exists(f)) next
+  ## CODE ONLY. Reading the comments too made this fail-open: a launcher whose comment mentioned
+  ## inst/pipeline/ACTA_App.R while its code still named the old path would have passed.
   txt <- readLines(f, warn = FALSE)
-  named <- unique(unlist(regmatches(txt, gregexpr("[A-Za-z0-9_/\\\\.]*ACTA_App[.]R", txt))))
-  named <- gsub("\\\\", "/", named)
-  ## ANY, not ALL: each launcher names a preferred path and a fallback for the flat layout, and
-  ## in this layout the fallback deliberately does not exist. What must hold is that at least one
-  ## candidate resolves, because the launcher takes the first that does.
-  hit <- named[file.exists(file.path(vd, named))]
-  chk(sprintf("%s names an app file that exists (%s)", lf,
-              if (length(hit)) paste(hit, collapse = ", ") else "none of: " %s0% paste(named, collapse = ", ")),
-      length(hit) > 0L)
+  ## TO END OF LINE, not whole lines only. Dropping comment LINES left a trailing comment intact,
+  ## and because the check is ANY-of, `APP="wrong/place/ACTA_App.R"  # real one is
+  ## inst/pipeline/ACTA_App.R` passed -- the exact fail-open the previous fix claimed to close.
+  ## READ THE ASSIGNED VALUE, not any mention of the filename. Comment-stripping was the wrong
+  ## instrument twice over: the first version read whole files, the second stripped only whole
+  ## comment LINES, and neither addressed the real weakness -- the check is ANY-of, and each
+  ## launcher names ACTA_App.R on three or four lines (the assignment, an exists probe, an error
+  ## message). Breaking the ONE line that matters left the others satisfying it. So parse the
+  ## assignment: `APP="..."` in sh, `set "APP=..."` in cmd, including the flat-layout fallback.
+  ## Nothing here depends on recognising a comment, which is why it is no longer trying to.
+  asg <- c(sub('^[[:space:]]*APP=[\"\']?([^\"\'#]*)[\"\']?.*$', "\\1",
+               grep('^[[:space:]]*APP=', txt, value = TRUE)),
+           sub('^[[:space:]]*\\[ -f "\\$APP" \\] \\|\\| APP=[\"\']?([^\"\'#]*)[\"\']?.*$', "\\1",
+               grep('\\|\\| APP=', txt, value = TRUE)),
+           sub('^[[:space:]]*set[[:space:]]+"APP=([^"]*)".*$', "\\1",
+               grep('^[[:space:]]*set[[:space:]]+"APP=', txt, value = TRUE, ignore.case = TRUE)))
+  asg <- unique(trimws(gsub("\\\\", "/", asg[nzchar(trimws(asg))])))
+  hit <- asg[file.exists(file.path(vd, asg))]
+  chk(sprintf("%s assigns an app path that exists (%s)", lf,
+              if (length(hit)) paste(hit, collapse = ", ")
+              else paste("none of:", paste(asg, collapse = ", "))),
+      length(asg) > 0L && length(hit) > 0L)
   chk(sprintf("%s points the app at the repo root via ACTA_WORK_DIR", lf),
       any(grepl("ACTA_WORK_DIR", txt, fixed = TRUE)))
 }
+
+## SETUP.R MUST FIND THE PIPELINE FROM THE REPO ROOT. It searched its own folder, the working
+## directory, and one level below -- correct for the flat release, where ACTA_Script_*.R sat at
+## the root. 3.0 moved it to inst/pipeline/, two levels down, so both documented clone commands
+## (`Rscript Setup.R` and `Setup.bat`, which just runs it) aborted with "cannot find the ACTA
+## folder" and advice pointing back at the folder the user was already in. Four releases, and no
+## gate saw it because nothing here referenced Setup.R at all.
+## Run in a STAGED COPY with ACTA_SETUP_RESOLVE_ONLY, so this costs a second and installs nothing.
+sf <- file.path(vd, "Setup.R")
+if (!file.exists(sf)) note("no Setup.R in this layout") else local({
+  st <- file.path(tempdir(), "acta_setup_gate"); unlink(st, recursive = TRUE)
+  dir.create(st, recursive = TRUE, showWarnings = FALSE)
+  file.copy(sf, st)
+  for (d in c(file.path("inst", "pipeline"), "R")) {
+    dir.create(file.path(st, d), recursive = TRUE, showWarnings = FALSE)
+    src <- file.path(vd, d)
+    if (dir.exists(src)) file.copy(list.files(src, full.names = TRUE), file.path(st, d))
+  }
+  out <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+                                  c("--vanilla", shQuote(file.path(st, "Setup.R"))),
+                                  stdout = TRUE, stderr = TRUE,
+                                  env = "ACTA_SETUP_RESOLVE_ONLY=1"))
+  mk  <- grep("^ACTA_SETUP_RESOLVED:", out, value = TRUE)
+  chk("Setup.R resolves a pipeline folder when run from the repo root", length(mk) == 1L)
+  if (length(mk) == 1L) {
+    got <- normalizePath(trimws(sub("^ACTA_SETUP_RESOLVED:", "", mk)), mustWork = FALSE)
+    want <- normalizePath(file.path(st, "inst", "pipeline"), mustWork = FALSE)
+    chk(sprintf("...and it is inst/pipeline, not the root (%s)", basename(got)),
+        identical(got, want))
+  } else {
+    cat("         Setup.R said:", paste(utils::head(out, 6), collapse = " | "), "\n")
+  }
+  unlink(st, recursive = TRUE)
+})
 
 oq <- file.path(vd, "inst", "extdata", "oq_small")
 chk("inst/extdata/oq_small/ ships all three diagnostic cases",

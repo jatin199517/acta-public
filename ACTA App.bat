@@ -24,7 +24,7 @@ if not exist "%APP%" (
 )
 REM The app reads its working folder from here; otherwise it would use its own code folder.
 set "ACTA_WORK_DIR=%CD%"
-echo Launching ACTA from %CD%
+echo Launching ACTA from "%CD%"
 "%RSCRIPT%" -e "shiny::runApp('%APP%', launch.browser = TRUE)"
 echo.
 pause

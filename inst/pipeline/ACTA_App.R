@@ -37,14 +37,28 @@ CODE_DIR <- APP_DIR
 ##   2. the CURRENT directory, when the app is running from inside an installed package. Defaulting
 ##      to CODE_DIR there would put a run log and a results file inside the R library, which on a
 ##      managed machine is not even writable.
-##   3. CODE_DIR -- the version-folder case, unchanged.
+##   3. the CLONE ROOT when the code sits at <root>/inst/pipeline -- a package-layout checkout's
+##      working folder is the root, not the code directory.
+##   4. CODE_DIR -- the flat version-folder case, where code and work really are one directory.
 WORK_DIR <- local({
   e <- Sys.getenv("ACTA_WORK_DIR", unset = "")
   if (nzchar(e)) return(normalizePath(e, mustWork = TRUE))
   lib <- tryCatch(normalizePath(system.file(package = "ACTA"), mustWork = FALSE),
                   error = function(e) "")
   inLib <- function(p) nzchar(lib) && startsWith(normalizePath(p, mustWork = FALSE), lib)
-  if (!inLib(APP_DIR)) return(APP_DIR)
+  if (!inLib(APP_DIR)) {
+    ## A PACKAGE-LAYOUT CLONE's work folder is the CLONE ROOT, not inst/pipeline. Case 3 returned
+    ## APP_DIR, which was right while the code and the run folder were one directory -- in a 3.0
+    ## clone APP_DIR is <clone>/inst/pipeline, so the app took the CODE folder as the working one,
+    ## looked for the workbook there and would have written run artefacts into the source tree.
+    ## It fails closed (no workbook found) rather than corrupting anything, but it fails for a
+    ## reason that tells the operator nothing. The launchers already set ACTA_WORK_DIR to the
+    ## folder they sit in, which is this same root; this makes a bare runApp() agree with them.
+    if (identical(basename(APP_DIR), "pipeline") &&
+        identical(basename(dirname(APP_DIR)), "inst"))
+      return(normalizePath(dirname(dirname(APP_DIR)), mustWork = TRUE))
+    return(APP_DIR)
+  }
   w <- normalizePath(getwd())
   ## getwd() IS NOT ENOUGH ON ITS OWN. shiny::runApp() setwd()s to the app directory before it
   ## sources this file, so calling runApp() on the INSTALLED app leaves getwd() pointing at the
@@ -79,14 +93,49 @@ FN_FILE <- list.files(CODE_DIR, pattern = "^ACTA_Function.*\\.R$", full.names = 
 if (length(FN_FILE) > 1)
   stop(sprintf("Expected at most one ACTA_Function*.R beside the app in '%s'; found %d.",
                CODE_DIR, length(FN_FILE)))
+## THREE SOURCES, not two. The third is a PACKAGE-LAYOUT CLONE with nothing installed -- the
+## route the README says provides the Shiny app and the launchers. inst/pipeline/ deliberately
+## carries no ACTA_Function*.R, Setup.R installs the DEPENDENCIES and not the package itself, and
+## nothing told the user to R CMD INSTALL, so double-clicking a launcher in a fresh clone stopped
+## on "the ACTA package is not installed". The helpers are right there in <root>/R/, which is how
+## acta_test_paths.R has always driven the same code.
+R_DIR <- if (identical(basename(CODE_DIR), "pipeline") &&
+             identical(basename(dirname(CODE_DIR)), "inst"))
+           file.path(dirname(dirname(CODE_DIR)), "R") else NA_character_
+R_FILES <- if (!is.na(R_DIR) && dir.exists(R_DIR))
+             sort(list.files(R_DIR, pattern = "[.]R$", full.names = TRUE)) else character(0)
+
 if (length(FN_FILE) == 1) {
   suppressWarnings(source(FN_FILE[[1]], local = FALSE))
 } else if (requireNamespace("ACTA", quietly = TRUE)) {
   suppressWarnings(library(ACTA))
+} else if (length(R_FILES)) {
+  ## SAY WHAT THIS DOES NOT BUY. Loading the helpers from R/ gets the app up so it can report on
+  ## the setup, but the pipeline script has its own two-source loader and still needs the package,
+  ## so a RUN will stop. Better the operator learns that here than after filling in the form.
+  message("ACTA app: the package is not installed; loading the helpers from ", R_DIR,
+          "\n  The app will start, but a RUN needs the package itself: R CMD INSTALL . ",
+          "from the folder you cloned into.")
+  ## ATTACH THE FLOW STACK FIRST, matching the four wholesale import()s in NAMESPACE. Sourcing
+  ## the helpers into the global environment does NOT reproduce what the namespace gives them:
+  ## a bare S4 generic whose name also exists in base -- colnames() is the one that bit before --
+  ## resolves to the base function and never dispatches, so colnames(flowSet) returns 0 channels
+  ## instead of 13 and the run is SILENTLY wrong rather than broken. MEASURED on this path before
+  ## adding these: 0 vs 13. The flat releases got away with it only because the pipeline script
+  ## attaches everything in listOfLibrary before it touches a flowSet; the app reaches helpers
+  ## earlier than that, so it cannot rely on the script's own library() calls.
+  for (.p in c("flowCore", "flowWorkspace", "ggcyto", "openCyto")) {
+    if (!requireNamespace(.p, quietly = TRUE))
+      stop(sprintf(paste0("The ACTA package is not installed, so the helpers load from %s -- but ",
+                          "that needs '%s' attached and it is not available. Run Setup.R first."),
+                   R_DIR, .p), call. = FALSE)
+    suppressPackageStartupMessages(library(.p, character.only = TRUE))
+  }
+  for (.f in R_FILES) suppressWarnings(source(.f, local = FALSE))
 } else {
-  stop(sprintf(paste0("No ACTA_Function*.R beside the app in '%s' and the ACTA package is not ",
-                      "installed, so the helper library cannot be loaded from either source."),
-               CODE_DIR), call. = FALSE)
+  stop(sprintf(paste0("No ACTA_Function*.R beside the app in '%s', no R/ beside inst/, and the ",
+                      "ACTA package is not installed -- the helper library cannot be loaded from ",
+                      "any source."), CODE_DIR), call. = FALSE)
 }
 ## Both long jobs run in a `--vanilla` child (so Abort can kill them), which means the child has to
 ## load the helper library itself -- and it faces the same two-source choice as everything else.
@@ -112,7 +161,17 @@ invisible(actaRepairPath())
 
 .childLoad <- {
   if (length(FN_FILE) == 1) sprintf("h<-new.env();sys.source(%s,envir=h);", .rq(FN_FILE[[1]]))
-  else                      "suppressMessages(library(ACTA));h<-asNamespace('ACTA');"
+  else if (requireNamespace("ACTA", quietly = TRUE))
+    "suppressMessages(library(ACTA));h<-asNamespace('ACTA');"
+  ## Same third source as the parent. Without this the parent loaded fine from <root>/R/ and the
+  ## child still died on library(ACTA), so a clone user reached the run button and no further.
+  ## Same reasoning as the parent: attach the stack before the helpers, or a bare S4 generic in
+  ## the child resolves to base and the analysis is quietly wrong.
+  else sprintf("%sh<-new.env();%s",
+               paste0(sprintf("suppressPackageStartupMessages(library(%s));",
+                              c("flowCore", "flowWorkspace", "ggcyto", "openCyto")),
+                      collapse = ""),
+               paste0(sprintf("sys.source(%s,envir=h);", .rq(R_FILES)), collapse = ""))
 }
 
 ## ---- global persistence ---------------------------------------------------------------------
@@ -1053,22 +1112,50 @@ server <- function(input, output, session) {
       ## inputs the operator did not supply. It is reachable within one session: oqDirs() is a
       ## reactive with no reactive dependencies, so it is evaluated once and keeps handing back
       ## the library path even after the copy exists.
-      lib <- tryCatch(normalizePath(system.file(package = "ACTA"), mustWork = FALSE),
-                      error = function(e) "")
-      if (nzchar(lib) && startsWith(normalizePath(dir), lib)) {
-        staged <- file.path(DIAG_DIR, nm)
-        if (dir.exists(staged)) {
-          say("Using the copy of ", nm, " already in ", DIAG_DIR, ".")
-        } else {
-          dir.create(DIAG_DIR, recursive = TRUE, showWarnings = FALSE)
-          if (!isTRUE(all(file.copy(dir, DIAG_DIR, recursive = TRUE))) || !dir.exists(staged)) {
-            say("Could not copy ", nm, " out of the installed package into ", DIAG_DIR,
-                " -- not run.")
-            return(invisible())
-          }
-          say("Copied ", nm, " out of the installed package to ", staged, ".")
+      ## ONE IMPLEMENTATION, in actaOQStageOutOfLibrary(). The app used to carry its own copy of
+      ## this logic, and the two then disagreed: this one forgot to bring validated_packages.tsv
+      ## along, so the dependency-drift check silently became a skip from 3.0.4 while the verdict
+      ## still read "PASS (with notes)". The helper copies the baseline and reports whether it
+      ## managed to. An existing staged copy is still reused rather than overwritten.
+      staged <- file.path(DIAG_DIR, nm)
+      if (dir.exists(staged)) {
+        say("Using the copy of ", nm, " already in ", DIAG_DIR, ".")
+        ## AND BRING THE BASELINE IF IT IS NOT ALREADY THERE. DIAG_DIR persists across sessions,
+        ## so a case staged by 3.0.4 -- which forgot validated_packages.tsv -- is reused here and
+        ## the package-version check would silently report skip again, on exactly the upgrade path
+        ## this change exists to close. The helper is bypassed on this branch by design (the copy
+        ## must not be overwritten), so the one thing it does that matters here is done here.
+        ## FROM THE SOURCE ROOTS, not dirname(dir). On a fresh session oqDirs() lists DIAG_DIR
+        ## first and dedupes by basename, so `dir` already IS DIAG_DIR/<case> and dirname(dir) is
+        ## the DESTINATION -- the first version of this looked for the baseline in the folder it
+        ## was trying to populate and so never found it. The roots below are where the file
+        ## actually ships.
+        .dest <- file.path(DIAG_DIR, "validated_packages.tsv")
+        if (!file.exists(.dest)) {
+          .src <- Filter(file.exists,
+                         file.path(c(PKG_CASES, file.path(CODE_DIR, "Diagnostics")),
+                                   "validated_packages.tsv"))
+          if (length(.src) && isTRUE(file.copy(.src[[1]], .dest)))
+            say("Brought validated_packages.tsv alongside it, so the package-version check runs.")
+          else
+            say("Note: no validated_packages.tsv for ", nm,
+                " -- the package-version check will report skip, not compare.")
         }
         dir <- staged
+      } else {
+        st <- tryCatch(actaOQStageOutOfLibrary(dir, dest_parent = DIAG_DIR),
+                       error = function(e) e)
+        if (inherits(st, "error")) {
+          say("Could not copy ", nm, " out of the installed package: ", conditionMessage(st))
+          return(invisible())
+        }
+        if (isTRUE(st$staged)) {
+          say("Copied ", nm, " out of the installed package to ", st$dir, ".")
+          if (!isTRUE(st$baseline))
+            say("Note: validated_packages.tsv did not come with it, so the package-version ",
+                "check will report skip.")
+        }
+        dir <- st$dir
       }
       rv$oq <- NULL; rv$oqName <- nm; rv$oqRunning <- TRUE
       rv$pct <- NA; rv$stage <- NULL; rv$t0 <- Sys.time()

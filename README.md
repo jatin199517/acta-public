@@ -87,7 +87,7 @@ state. The user can add more columns in the Layout sheet that they wish to track
 ### Combinatorial titration
 
 Several reagents can be titrated from one shared set of FCS files, each with its own gate and its own
-Stain Index curve. `Diagnostics/OQ_Test3` is a worked example. For the experimental approach see
+Stain Index curve. `OQ_Test3`, one of the shipped diagnostic cases, is a worked example. For the experimental approach see
 Burn OK, Mair F, Ferrer-Font L. *Combinatorial antibody titrations for high-parameter flow
 cytometry.* Cytometry A, 2024. [doi:10.1002/cyto.a.24828](https://doi.org/10.1002/cyto.a.24828)
 
@@ -111,7 +111,9 @@ The script can be run in two ways.
 #### With the Shiny app
 
 For anyone who would rather not touch R. `ACTA App.command` (macOS) or `ACTA App.bat` (Windows)
-launches it; on Linux run `shiny::runApp("ACTA_App.R")`. Five sections:
+launches it. On Linux, or anywhere without the launchers, run it from the folder you cloned
+into — `shiny::runApp("inst/pipeline/ACTA_App.R")` — or, from an install, `acta_app()`. Five
+sections:
 
 | Section | What it does |
 |---|---|
@@ -125,23 +127,33 @@ launches it; on Linux run `shiny::runApp("ACTA_App.R")`. Five sections:
 
 Every action the app offers is available as a function call.
 
-From an installed package:
+From an installed package. Point it at the folder holding your workbook and `Titration_FCS`, or
+start R in that folder and call it with no arguments:
 
 ```r
 library(ACTA)
-r <- run_acta("/path/to/working/folder",          # holds the workbook, FCS and outputs
-              report = TRUE, plots = TRUE, quiet = FALSE,
-              code_dir = system.file("pipeline", package = "ACTA"))
+r <- run_acta()                                   # the current folder
+r <- run_acta("/path/to/working/folder")          # or name it
 ```
 
-Or from a clone, without installing:
+Or from a clone, without installing. Run this from the folder you cloned into:
 
 ```r
 h <- new.env(); sys.source("R/ACTA_Functions.R", envir = h)  # helpers only; runs no analysis
 r <- h$run_acta("/path/to/working/folder",
                 report = TRUE, plots = TRUE, quiet = FALSE,
-                code_dir = ".")                              # defaults to the working folder
+                code_dir = "inst/pipeline")                  # where ACTA_Script_*.R lives
 ```
+
+`report` and `plots` both default to `TRUE`, and `quiet` to `FALSE`; the clone example passes them
+only to show they exist.
+
+`code_dir` is where the pipeline itself lives, and you do not normally pass it. It is resolved:
+your working folder if that holds an `ACTA_Script*.R`, otherwise the installed package. When it
+falls back to the package it says so, naming the version and the path, and `r$code_dir` records
+what ran — worth reading if you are working in a clone whose code differs from your installed
+copy, because the bare call will use the installed one. Pass `code_dir` yourself to be certain
+which code you get.
 
 `run_acta()` resolves the pipeline script beside `code_dir`, runs it in its own environment, and
 returns a list. The fields you are most likely to branch on:
@@ -150,8 +162,9 @@ returns a list. The fields you are most likely to branch on:
 |---|---|
 | `ok` | did the <u>analysis</u> complete. `TRUE` with `report_ok = FALSE` means the export and plots are on disk and usable but the PDF render failed |
 | `analysis_error` / `report_error` | the message from whichever stage actually failed |
-| `export_file`, `plots_dir` | <u>this</u> run's outputs, by the names the script built |
-| `script_version`, `seed`, `elapsed_s` | provenance for the run |
+| `report_ok`, `wrote_plots` | did the PDF render, and were the plots written. Both are flags; neither is the path |
+| `export_file`, `report_file`, `plots_dir` | <u>this</u> run's outputs, by the names the script built. Each is `NA` rather than a stale path when that artefact was not produced — `plots_dir` is `NA` unless <u>this</u> run wrote into `Plots/`, so a folder left behind by an earlier run is not reported as yours |
+| `code_dir`, `script_version`, `seed`, `elapsed_s` | provenance for the run — `code_dir` is the pipeline that actually ran |
 | `stats`, `qcList`, `mmFits`, `gs` | the per-well statistics, the QC verdicts, the Michaelis-Menten fits, and the GatingSet |
 
 `ACTA_WORK_DIR` (the working folder) and `ACTA_CODE_DIR` (where the code lives) are set for the
@@ -236,7 +249,16 @@ Setup.bat                    :: or: Setup.bat --no-tex
 itself. `source("Setup.R")` from an R console installs the same packages.
 
 `Setup.R` installs the R packages, a TeX engine if there is none, and the LaTeX packages the report
-needs. It reads its package list out of `ACTA_Script_*.R`, so that script is the authoritative
+needs. It does not install ACTA itself. To *run* from a clone, install it too — one command, from
+the folder you cloned into:
+
+```sh
+R CMD INSTALL .
+```
+
+Without that the app will start and report on your setup, but a run stops with "the ACTA package is
+not installed": the pipeline loads its helper library from the installed package, and in this layout
+there is no copy of it beside the script. It reads its package list out of `ACTA_Script_*.R`, so that script is the authoritative
 manifest.
 
 **Requires R ≥ 4.4.0**, which `Setup.R` enforces before it installs anything.
@@ -284,9 +306,37 @@ If you do not want the PDF, skip both and use `run_acta(report=FALSE)`.
 Three diagnostic cases ship with the tool. A pass means that the run finished and it returned
 values as expected.
 
+If you installed the package, the cases came with it and nothing else is needed:
+
 ```r
-h <- new.env(); sys.source("ACTA_Functions.R", envir = h)
-r <- h$actaOQRun("Diagnostics/OQ_Test1")
+library(ACTA)
+r <- actaOQRun(system.file("extdata", "oq_small", "OQ_Test1", package = "ACTA"),
+               code_dir = system.file("pipeline", package = "ACTA"))
+r$verdict        # "PASS", "PASS (with notes)" or "FAIL"
+```
+
+`OQ_Test2` and `OQ_Test3` are the other two cases — substitute the name. To run all three:
+
+```r
+for (nm in c("OQ_Test1", "OQ_Test2", "OQ_Test3"))
+  cat(nm, as.character(actaOQRun(system.file("extdata", "oq_small", nm, package = "ACTA"),
+                                 code_dir = system.file("pipeline", package = "ACTA"))$verdict), "\n")
+```
+
+`packageVersion("ACTA")` is the version you have. A run also reports `script_version`, which is
+the pipeline's own coarser stamp — `3_0` for every 3.0.x — so the two do not match and are not
+meant to.
+
+A case that lives inside your R library is copied to a temporary folder and run there, and the
+run says where. A diagnostic run deletes and rewrites everything under the case folder, and a
+library is often shared with other people or not writable at all, so it is not a place to do
+that. `r$log` is the path to the log it wrote.
+
+From a clone, run this in the folder you cloned into:
+
+```r
+h <- new.env(); sys.source("R/ACTA_Functions.R", envir = h)
+r <- h$actaOQRun("inst/extdata/oq_small/OQ_Test1", code_dir = "inst/pipeline")
 r$verdict        # "PASS", "PASS (with notes)" or "FAIL"
 ```
 
@@ -314,7 +364,15 @@ file.copy(dir(system.file("pipeline", "Template", package = "ACTA"),
               pattern = "^TEMPLATE.*\\.xlsx$", full.names = TRUE), ".")
 ```
 
-You may replace the text `TEMPLATE` from this file but keep the rest of the filename as is. Move your FCS files to a
+You may replace the text `TEMPLATE` from this file but keep the rest of the filename as is — the
+run looks for one `*Titration_Instructions*.xlsx` in the folder and stops if it finds none or
+several.
+
+The trailing `_3_0` is a version stamp, and it is **not** checked: renaming a workbook does not
+make it compatible, and does not make it incompatible either. What has to match is the workbook's
+layout — the sheets and the column names this version reads. There are no compatibility shims for
+an older layout, so start from this version's template rather than carrying a workbook forward and
+hoping. A missing column is reported by name before the analysis runs. Move your FCS files to a
 folder (as specified in `Dirname` in the Layout sheet) and move this folder inside the umbrella
 folder `Titration_FCS`. Then either launch the app or call `run_acta()`. The script resolves and
 sets its own working directory.
@@ -353,12 +411,15 @@ numeric value is expected.
 |---|---|---|---|
 | `Dirname` | `Layout_Plate` | No | Yes — matches each well to its folder of FCS files |
 | `PlateID`, `Row`, `Column` | `Layout_Plate` | No | Yes — matches each FCS file to its well, via `$WELLID` |
-| `StainType` | `Layout_Plate` | No | Yes — tells Stain, Costain and Unstained wells apart |
+| `StainType` | `Layout_Plate` | No | Yes — `Stain`, `Costain` or `Unstained`, and it is the **only** thing that classifies a well. FCS filenames are never inspected, so a file called `CD3_Unstained_comparison.fcs` is a Stain well if the layout says so. Check the plate map in the report against what you loaded |
 | `StainQty` | `Layout_Plate` | No | Yes — the x axis of every curve |
 | `Markername ($PnS)` <u>or</u> `Channel ($PnN)` | `Layout_Plate` | No | Yes — either will do; `Channel` wins if both are set |
 | `Fix`, `Perm` | `Layout_Plate` | No | Yes — the export's `Fix_Perm` column. `Perm` true with `Fix` false is rejected as a layout error |
 | `alias`, `parent`, `pop` | `gating_template` | **Yes** | Yes — they become openCyto node names |
+| exactly one `Costain` well per titration | `Layout_Plate` | No | Yes — it sets the gate floor. None leaves the floor at −∞, which looks like a successful run; more than one pools their events, so the floor belongs to no single well. Both stop the run |
+| an `Unstained` well | `Layout_Plate` | No | No — it is dropped before gating and changes no result, so a titration without one is fine. More than one is a note, not an error. But if the FCS folder *contains* an unstained file, it needs its own layout row like any other well — once per titration in a combinatorial folder — because filenames are not inspected |
 | `groupBy` | `gating_template` | **Yes** | No — but when used it must name a `pData` column exactly |
+| `ELN_ID`, `ELN_Name`, `Operator` | `Layout_Plate` | No | Yes — the pre-flight stops the run if any of the three columns is absent. Per well, so a run can carry more than one operator. `ELN_ID` also names your export and plate-map files |
 
 ## Files written
 
