@@ -291,5 +291,17 @@ if (!length(tok)) note("no path-shaped tokens in the prose") else
 ## have been withdrawn in 3.0 because a reader could not find it.
 chk("the README documents run_acta()", any(grepl("run_acta", md, fixed = TRUE)))
 
+## AND IT MUST NOT TELL ANYONE TO RUN `R CMD INSTALL .`. Both documented routes install the
+## package themselves now -- install_github by definition, and Setup.R since 3.0.10 -- so any
+## mention on the page can only be advice that has gone stale, which is how the run_acta example
+## and the Linux launch line got wrong in the first place. A NEGATIVE mention counts too: saying
+## "you do not need to" is still the page talking about it. Decided 2026-09-12.
+## PROSE ONLY, not fenced blocks. The risk is stale ADVICE, and all of it is prose. Matching the
+## whole file would also block a future troubleshooting section that quoted the app's own message
+## -- the page already quotes its sibling, "the ACTA package is not installed" -- which would make
+## this an obstacle rather than a guard. `prose` is the fenced-block mask the file already builds.
+chk("the README never tells anyone to run R CMD INSTALL",
+    !any(grepl("R CMD INSTALL", prose, fixed = TRUE)))
+
 cat(if (ok) "\nREADME CALLS: all checks passed\n" else "\nREADME CALLS: FAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

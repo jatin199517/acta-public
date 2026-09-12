@@ -249,8 +249,8 @@ Setup.bat                    :: or: Setup.bat --no-tex
 itself. `source("Setup.R")` from an R console installs the same packages.
 
 `Setup.R` installs the R packages, ACTA itself, a TeX engine if there is none, and the LaTeX
-packages the report needs. That is the whole of it — you do not need `R CMD INSTALL .` as a separate
-step, and earlier versions did, which is why you may have seen it mentioned.
+packages the report needs. That is the whole of the R-side install — there is no second command
+to install the package.
 
 It installs ACTA because the pipeline loads its helper library from the installed package: in this
 layout there is no copy of it beside the script, so dependencies alone would let the app start and
@@ -258,8 +258,10 @@ then stop a run with "the ACTA package is not installed". `Setup.R --no-package`
 you are deliberately testing an installed build against a checkout.
 
 What it does *not* install is the two things that are not R packages and cannot be fetched from
-one: pandoc, and XQuartz on macOS. It *does* install a TeX engine if you have none, unless you pass
-`--no-tex`. See the table below. It reads its package list out of `ACTA_Script_*.R` **and** `ACTA_Report_*.Rmd` — the report
+one: pandoc, and XQuartz on macOS. It *does* install a TeX engine if you have none, unless you
+pass `--no-tex`. See the table below.
+
+It reads its package list out of `ACTA_Script_*.R` **and** `ACTA_Report_*.Rmd` — the report
 installs two packages the script never mentions — so those two files together are the manifest.
 
 **Requires R ≥ 4.4.0**, which `Setup.R` enforces before it installs anything.

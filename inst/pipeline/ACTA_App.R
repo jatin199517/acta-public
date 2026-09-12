@@ -95,9 +95,9 @@ if (length(FN_FILE) > 1)
                CODE_DIR, length(FN_FILE)))
 ## THREE SOURCES, not two. The third is a PACKAGE-LAYOUT CLONE with nothing installed -- the
 ## route the README says provides the Shiny app and the launchers. inst/pipeline/ deliberately
-## carries no ACTA_Function*.R, Setup.R installs the DEPENDENCIES and not the package itself, and
-## nothing told the user to R CMD INSTALL, so double-clicking a launcher in a fresh clone stopped
-## on "the ACTA package is not installed". The helpers are right there in <root>/R/, which is how
+## carries no ACTA_Function*.R, and until 3.0.10 Setup.R installed the DEPENDENCIES and not the
+## package, so double-clicking a launcher in a fresh clone stopped on "the ACTA package is not
+## installed". Setup.R installs it now; this path remains for a checkout where nobody ran it yet. The helpers are right there in <root>/R/, which is how
 ## acta_test_paths.R has always driven the same code.
 R_DIR <- if (identical(basename(CODE_DIR), "pipeline") &&
              identical(basename(dirname(CODE_DIR)), "inst"))
@@ -113,9 +113,13 @@ if (length(FN_FILE) == 1) {
   ## SAY WHAT THIS DOES NOT BUY. Loading the helpers from R/ gets the app up so it can report on
   ## the setup, but the pipeline script has its own two-source loader and still needs the package,
   ## so a RUN will stop. Better the operator learns that here than after filling in the form.
+  ## POINT AT Setup.R, not at R CMD INSTALL. Since 3.0.10 Setup.R installs the package, so that
+  ## is the one answer that is both current and correct on Windows -- where the R installer does
+  ## not put the binaries on PATH, so `R CMD INSTALL .` fails with 'R' is not recognized. That is
+  ## the same reason Setup.bat exists and the reason Setup.R installs via install.packages().
   message("ACTA app: the package is not installed; loading the helpers from ", R_DIR,
-          "\n  The app will start, but a RUN needs the package itself: R CMD INSTALL . ",
-          "from the folder you cloned into.")
+          "\n  The app will start, but a RUN needs the package itself. Run Setup.R in the folder ",
+          "you cloned into (Setup.bat on Windows) -- it installs it.")
   ## ATTACH THE FLOW STACK FIRST, matching the four wholesale import()s in NAMESPACE. Sourcing
   ## the helpers into the global environment does NOT reproduce what the namespace gives them:
   ## a bare S4 generic whose name also exists in base -- colnames() is the one that bit before --
