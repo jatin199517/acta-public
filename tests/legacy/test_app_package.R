@@ -100,10 +100,14 @@ if (is.na(want)) {
     dir.create(e, recursive = TRUE, showWarnings = FALSE)
     msg <- tryCatch({ ACTA::run_acta(e, report = FALSE, plots = FALSE, quiet = TRUE); "" },
                     error = function(err) conditionMessage(err))
+    ## ONE ASSERTION, and only the one that is about code_dir. Getting past the resolver means the
+    ## pipeline script is then SOURCED, and the script's first act is its own dependency check --
+    ## so the error that comes back is whatever that machine happens to be missing. On the macOS
+    ## runner it was "there is no package called 'BiocManager'", and a second assertion demanding
+    ## the message mention the workbook failed a healthy tree. It asserted nothing about the
+    ## subject and made the gate depend on the runner's library state.
     chk("a bare run_acta() gets past code_dir to the inputs (no ACTA_Script complaint)",
         !grepl("ACTA_Script", msg, fixed = TRUE))
-    chk("and it is the workbook it then complains about",
-        grepl("Titration_Instructions|Instructions|workbook", msg))
     if (grepl("ACTA_Script", msg, fixed = TRUE)) cat("         got:", msg, "\n")
     unlink(e, recursive = TRUE)
   })
