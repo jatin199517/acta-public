@@ -119,15 +119,20 @@ if (is.na(want)) {
     ## the assertion passing: reword the announcement, or let the resolver take the working-folder
     ## branch, and nothing interrupts run_acta() -- it sources the pipeline exactly as the old
     ## probe did (measured: 42 sys.source calls and a download). A guarantee that holds only on the
-    ## happy path is not a guarantee. Belt and braces: no repos and a throwaway library for the
-    ## duration, so even a fall-through cannot install.
+    ## happy path is not a guarantee.
+    ## Belt and braces for the duration: no repos, and a throwaway library FIRST on .libPaths() so
+    ## install.packages()'s default lib is not the real one. This used to set R_LIBS_USER, which R
+    ## reads only at STARTUP -- .libPaths() was unchanged and that half of the guard did nothing
+    ## while the comment claimed it did. The repos half does not cover Bioconductor either:
+    ## BiocManager::repositories() ignores getOption("repos"). The message handler is the control
+    ## that actually holds; these two narrow the blast radius if a future edit breaks it.
     chk("the probe fixture really is empty before the call",
         length(list.files(e, all.files = TRUE, no.. = TRUE)) == 0L)
     seen <- character(0)
-    .oldRepos <- getOption("repos"); .oldLibs <- Sys.getenv("R_LIBS_USER")
+    .oldRepos <- getOption("repos"); .oldLibPaths <- .libPaths()
     .throwaway <- file.path(tempdir(), "acta_probe_lib")
     dir.create(.throwaway, recursive = TRUE, showWarnings = FALSE)
-    options(repos = character(0)); Sys.setenv(R_LIBS_USER = .throwaway)
+    options(repos = character(0)); .libPaths(c(.throwaway, .oldLibPaths))
     err <- tryCatch(
       withCallingHandlers({ ACTA::run_acta(e, report = FALSE, plots = FALSE); "" },
                           message = function(m) {
@@ -135,18 +140,25 @@ if (is.na(want)) {
                             stop("ACTA_PROBE_STOP")
                           }),
       error = function(err) conditionMessage(err))
-    options(repos = .oldRepos); Sys.setenv(R_LIBS_USER = .oldLibs)
+    options(repos = .oldRepos); .libPaths(.oldLibPaths)
     unlink(.throwaway, recursive = TRUE)
+    chk("the probe put repos and the library path back",
+        identical(getOption("repos"), .oldRepos) && identical(.libPaths(), .oldLibPaths))
     chk("a bare run_acta() announces that it resolved code_dir to the installed package",
         length(seen) >= 1L &&
           grepl("using the installed package", seen[[1]], fixed = TRUE))
     chk("...and the probe stopped there, so the pipeline never ran",
         identical(err, "ACTA_PROBE_STOP"))
-    ## The COMPLAINT, not the word. The announcement itself says "no ACTA_Script*.R in the working
-    ## folder", so matching the bare name failed on a healthy tree; the failure mode being guarded
-    ## is the resolver giving up -- "expected exactly one ACTA_Script*.R ... found 0".
-    chk("the resolver never gave up looking for the script",
-        !any(grepl("expected exactly one ACTA_Script", c(seen, err), fixed = TRUE)))
+    ## POSITIVE, and about the answer rather than about an absence. The version this replaces
+    ## asserted that "expected exactly one ACTA_Script" did NOT appear -- but that text comes from
+    ## a line the abort above makes unreachable, so it could never fail: plant two ACTA_Script
+    ## files, watch the resolver genuinely give up, and it still printed ok. Fourth unfalsifiable
+    ## assertion in this release cycle, and the same lesson each time -- break the thing the
+    ## assertion guards and confirm it goes red BEFORE keeping it.
+    chk("...and it names the installed package's pipeline folder",
+        length(seen) >= 1L &&
+          grepl(gsub("\\\\", "/", normalizePath(system.file("pipeline", package = "ACTA"))),
+                gsub("\\\\", "/", seen[[1]]), fixed = TRUE))
     if (!identical(err, "ACTA_PROBE_STOP"))
       cat("         got:", paste(utils::head(c(seen, err), 4), collapse = " | "), "\n")
     unlink(e, recursive = TRUE)

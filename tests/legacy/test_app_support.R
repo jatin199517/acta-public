@@ -272,11 +272,31 @@ cat("=== CI declares every package the pipeline loads ===\n")
   file.path(ACTA_REPO_ROOT,          "Publish", "github", "workflows", "tests.yml"),
   file.path(dirname(ACTA_REPO_ROOT), "Publish", "github", "workflows", "tests.yml")))
 if (!length(.wf)) cat("  [skip] no CI workflow file found from here\n") else {
-  .scr  <- Sys.glob(file.path(vd, "ACTA_Script*.R"))[1]
-  .line <- grep("^listOfLibrary", readLines(.scr, warn = FALSE), value = TRUE)[1]
-  .need <- eval(parse(text = sub("^listOfLibrary *<-? *", "", .line)))
-  ## Shipped with R itself or only used interactively -- r-lib/actions does not install these.
-  .base <- c("BiocManager", "grDevices", "rstudioapi")
+  ## BOTH MANIFESTS. There are two: the script's, and the REPORT's, which carries its own
+  ## install-then-library walk() and adds names the script's list does not have -- `ragg` and
+  ## `sessioninfo`. This check only ever read the script, so those two were undeclared in either
+  ## CI job and in no DESCRIPTION field, and the weekly oq run installed them into the session
+  ## doing the analysis. A one-manifest audit reported full coverage the whole time.
+  .mf   <- c(Sys.glob(file.path(vd, "ACTA_Script*.R"))[1],
+             Sys.glob(file.path(vd, "ACTA_Report*.Rmd"))[1])
+  .mf   <- .mf[!is.na(.mf) & nzchar(.mf)]
+  ## EACH FILE MUST YIELD A LIST, not merely exist. Asserting only that both files were FOUND was
+  ## the same fault one level up: rename the report's `listOfLibrary` and the audit quietly shrank
+  ## from 22 names to 20 and still reported full coverage. Caught by breaking it -- which is the
+  ## step that keeps finding these.
+  .per  <- lapply(.mf, function(f) {
+    .line <- grep("^listOfLibrary", readLines(f, warn = FALSE), value = TRUE)[1]
+    if (is.na(.line)) character(0) else eval(parse(text = sub("^listOfLibrary *<-? *", "", .line)))
+  })
+  names(.per) <- basename(.mf)
+  chk(sprintf("both install manifests were found AND parsed (%s)",
+              paste(sprintf("%s:%d", names(.per), lengths(.per)), collapse = ", ")),
+      length(.mf) == 2L && all(lengths(.per) > 0L))
+  .need <- unique(unlist(.per))
+  ## Shipped with R itself -- r-lib/actions does not install these. BiocManager and rstudioapi
+  ## used to be excused here too, which is exactly how they came to be missing on the runners
+  ## while the pipeline installed them itself. They are ordinary declarations now.
+  .base <- c("grDevices")
   .y    <- readLines(.wf[1], warn = FALSE)
   ## PER JOB, from the PARSED yaml. Two reasons this is not a union over the whole file.
   ## (1) A ref only counts as a declaration for the job that installs it. `suite` is the job
