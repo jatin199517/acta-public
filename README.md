@@ -248,18 +248,19 @@ Setup.bat                    :: or: Setup.bat --no-tex
 `Rscript Setup.R` fails there with `'Rscript' is not recognized`; the launcher finds `Rscript.exe`
 itself. `source("Setup.R")` from an R console installs the same packages.
 
-`Setup.R` installs the R packages, a TeX engine if there is none, and the LaTeX packages the report
-needs. It does not install ACTA itself. To *run* from a clone, install it too — one command, from
-the folder you cloned into:
+`Setup.R` installs the R packages, ACTA itself, a TeX engine if there is none, and the LaTeX
+packages the report needs. That is the whole of it — you do not need `R CMD INSTALL .` as a separate
+step, and earlier versions did, which is why you may have seen it mentioned.
 
-```sh
-R CMD INSTALL .
-```
+It installs ACTA because the pipeline loads its helper library from the installed package: in this
+layout there is no copy of it beside the script, so dependencies alone would let the app start and
+then stop a run with "the ACTA package is not installed". `Setup.R --no-package` skips that step if
+you are deliberately testing an installed build against a checkout.
 
-Without that the app will start and report on your setup, but a run stops with "the ACTA package is
-not installed": the pipeline loads its helper library from the installed package, and in this layout
-there is no copy of it beside the script. It reads its package list out of `ACTA_Script_*.R`, so that script is the authoritative
-manifest.
+What it does *not* install is the two things that are not R packages and cannot be fetched from
+one: pandoc, and XQuartz on macOS. It *does* install a TeX engine if you have none, unless you pass
+`--no-tex`. See the table below. It reads its package list out of `ACTA_Script_*.R` **and** `ACTA_Report_*.Rmd` — the report
+installs two packages the script never mentions — so those two files together are the manifest.
 
 **Requires R ≥ 4.4.0**, which `Setup.R` enforces before it installs anything.
 

@@ -3,6 +3,7 @@
 ##     Rscript Setup.R                 # from this folder, or with a full path from anywhere
 ##     source("Setup.R")               # or RStudio's Source button
 ##     Rscript Setup.R --no-tex        # skip TeX: everything except the PDF report
+##     Rscript Setup.R --no-package    # skip installing ACTA itself, dependencies only
 ##
 ## It installs the app's packages, the analysis packages, a TeX engine if there is none, and the
 ## LaTeX packages the PDF report needs -- then prints one summary saying what is present and what is
@@ -46,6 +47,14 @@ if (getRversion() < "4.4.0")
 args      <- commandArgs(trailingOnly = TRUE)
 skip_tex  <- any(args %in% c("--no-tex", "--notex")) ||
              isTRUE(get0("ACTA_SKIP_TEX", ifnotfound = FALSE))
+## ACTA ITSELF is a package now, and the pipeline loads its helper library from the installed one:
+## inst/pipeline/ carries no ACTA_Function*.R, by design. So a clone whose dependencies were
+## installed but whose package was not could open the app and never complete a run -- the README
+## had to tell people to run `R CMD INSTALL .` by hand, which is a step nobody should have to be
+## told. Setup.R installs it. --no-package is for the case where you are deliberately testing an
+## already-installed build against a checkout.
+skip_pkg  <- any(args %in% c("--no-package", "--nopackage")) ||
+             isTRUE(get0("ACTA_SKIP_PACKAGE", ifnotfound = FALSE))
 
 ## ---- find this file's folder, so the pipeline files can be read from anywhere -------------------
 ## FIVE routes, because no single one covers every entry point. Reported 2026-08-21: a colleague got
@@ -482,11 +491,81 @@ if (latexOK() && have("tinytex")) {
 
 ## ---- 4. report ------------------------------------------------------------------------------
 cat("\n", strrep("-", 62), "\n", sep = "")
+## ---- ACTA itself ------------------------------------------------------------------------------
+## The package root is the folder holding DESCRIPTION: `here` is <root>/inst/pipeline in the
+## package layout and the version folder in a flat one, so walk up until a DESCRIPTION says ACTA.
+## Nothing to install in the flat layout, and saying so is not a failure.
+pkg_root <- local({
+  d <- here
+  for (i in 1:3) {
+    f <- file.path(d, "DESCRIPTION")
+    if (file.exists(f) &&
+        identical(unname(tryCatch(read.dcf(f, "Package")[1], error = function(e) NA)), "ACTA"))
+      return(normalizePath(d))
+    nd <- dirname(d); if (identical(nd, d)) break; d <- nd
+  }
+  NA_character_
+})
+pkg_ok <- NA
+if (!is.na(pkg_root) && !skip_pkg) {
+  cat("\ninstalling ACTA itself from ", pkg_root, "\n", sep = "")
+  ## repos = NULL, type = "source" on a DIRECTORY is what `R CMD INSTALL .` does, without needing
+  ## a shell or the R binaries to be on PATH -- which on Windows they are not.
+  ## VERIFY THIS INSTALL, BY VERSION. have("ACTA") only asks whether SOME ACTA is loadable from
+  ## somewhere, which anyone who has ever run install_github already satisfies -- so a failed
+  ## install of this checkout reported the OLD version as success and printed READY. Measured:
+  ## ACTA 3.0.9 on the path plus a deliberately broken source tree gave
+  ## "ERROR: unable to collate and parse R files" immediately followed by
+  ## "ACTA 3.0.9 installed" and exit 0. Worse than a wrong message: the clone's newer pipeline
+  ## then runs against the older helper library, and this tool has no compatibility shims across
+  ## versions. Compare what is loadable now against what the source says it should be.
+  want <- unname(tryCatch(read.dcf(file.path(pkg_root, "DESCRIPTION"), "Version")[1],
+                          error = function(e) NA_character_))
+  ## WATCH THE INSTALL'S OWN VERDICT AS WELL AS THE VERSION. install.packages() reports a failed
+  ## build through a WARNING ("had non-zero exit status", "'lib' is not writable"), not an error,
+  ## so try() sees nothing. And the version comparison alone is not enough either: reinstalling
+  ## over an identical version that is already there looks like success whether or not the build
+  ## worked -- which is precisely the upgrade path most people are on. Both signals, or neither.
+  .iw <- character(0)
+  withCallingHandlers(
+    try(install.packages(pkg_root, repos = NULL, type = "source"), silent = TRUE),
+    warning = function(w) { .iw <<- c(.iw, conditionMessage(w)); invokeRestart("muffleWarning") })
+  .ibad <- any(grepl("non-zero exit status|not writable|cannot open|unable to", .iw,
+                     ignore.case = TRUE))
+  for (.w in .iw) cat("  install said: ", .w, "\n", sep = "")
+  got  <- tryCatch(as.character(utils::packageVersion("ACTA")), error = function(e) NA_character_)
+  pkg_ok <- have("ACTA") && !is.na(want) && identical(got, want) && !.ibad
+  cat(if (isTRUE(pkg_ok))
+        sprintf("  ACTA %s installed -- a run can load its helpers from it.\n", got)
+      else paste0(sprintf("  ACTA %s did NOT install (loadable now: %s).\n",
+                          if (is.na(want)) "?" else want, if (is.na(got)) "none" else got),
+                  "  The app will still start, but a run will use whatever ACTA is already there,",
+                  "\n  or stop with \"the ACTA package is not installed\". Re-run this script and\n",
+                  "  read the install errors above.\n"), sep = "")
+} else if (!is.na(pkg_root)) {
+  cat("\nskipping the ACTA package install (--no-package).\n")
+}
+
 badApp <- missing(app); badAna <- missing(analysis)
 line <- function(lbl, bad, n)
   cat(sprintf("%-22s %s\n", lbl,
               if (!length(bad)) sprintf("OK  (%d present)", n)
               else sprintf("MISSING %d: %s", length(bad), paste(bad, collapse = ", "))))
+## ALWAYS REPORT ACTA. Gating the line on "did we try" meant the two paths that skip the install
+## -- --no-package, and a pkg_root that did not resolve -- said nothing about it and still printed
+## READY, which is the exact state this release exists to remove.
+## ONE VERDICT ABOUT ACTA, feeding both the line and the final READY. They were computed
+## separately, so --no-package on a machine with no ACTA printed "MISSING 1: ACTA" and then
+## "READY" and exited 0 -- a summary contradicting itself, and the same false-READY this release
+## exists to remove, moved one path over.
+## ACTA IS ONLY REQUIRED WHERE THE LAYOUT REQUIRES IT. pkg_root is NA in the flat layout, where
+## the helpers sit beside the script and the package is irrelevant -- folding that case in with
+## --no-package made a flat checkout report NOT READY for a package it never needed. Where the
+## package layout IS in play, the install must have worked, or --no-package must have been given
+## and a usable ACTA already be there.
+acta_bad <- !is.na(pkg_root) && !(isTRUE(pkg_ok) || (skip_pkg && have("ACTA")))
+line(if (!is.na(pkg_root) && !skip_pkg) "ACTA package" else "ACTA package (not installed by this run)",
+     if (acta_bad) "ACTA" else character(0), 1)
 line("app packages",      badApp, length(app))
 line("analysis packages", badAna, length(analysis))
 line("LaTeX (PDF report)", if (latexOK()) character(0) else "engine",
@@ -510,7 +589,7 @@ if (.Platform$OS.type != "windows" && Sys.info()[["sysname"]] == "Darwin" &&
   cat("\nXQuartz not detected. flowMeans loads tcltk, which needs X11 on macOS:\n",
       "  https://www.xquartz.org\n", sep = "")
 
-ok <- !length(badApp) && !length(badAna)
+ok <- !length(badApp) && !length(badAna) && !acta_bad
 cat(strrep("-", 62), "\n", sep = "")
 cat(if (ok) "READY -- launch the app with \"ACTA App.command\" (macOS) or \"ACTA App.bat\" (Windows).\n"
     else "NOT READY -- see the missing packages above, then run this script again.\n")

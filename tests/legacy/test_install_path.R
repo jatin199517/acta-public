@@ -166,6 +166,76 @@ if (!file.exists(sf)) note("no Setup.R in this layout") else local({
   unlink(st, recursive = TRUE)
 })
 
+## SETUP.R MUST INSTALL ACTA ITSELF. The pipeline loads its helper library from the installed
+## package -- inst/pipeline/ carries no ACTA_Function*.R by design -- so a clone with only the
+## dependencies could open the app and never finish a run. The README used to tell people to run
+## `R CMD INSTALL .` by hand, which is a step nobody should have to be told about.
+## Checked on the SOURCE plus the resolve-only probe: actually installing here would write into
+## the developer's library, which a gate must not do.
+if (file.exists(sf)) local({
+  ln <- readLines(sf, warn = FALSE)
+  code <- ln[!grepl("^[[:space:]]*#", ln)]
+  chk("Setup.R finds the package root by looking for a DESCRIPTION that says ACTA",
+      any(grepl('read.dcf(f, "Package")', code, fixed = TRUE)))
+  chk("...and installs from that directory, the way R CMD INSTALL . does",
+      any(grepl('install.packages(pkg_root, repos = NULL, type = "source")', code, fixed = TRUE)))
+  chk("...reports whether it worked rather than assuming",
+      any(grepl("pkg_ok <- have(\"ACTA\")", code, fixed = TRUE)))
+  ## MATCH THE PARSER AND THE GUARD, not a string that also appears in a message. The first
+  ## version of the --no-package check passed on the literal inside
+  ## cat("skipping the ACTA package install (--no-package)") -- delete the flag from the parser
+  ## and the gate stayed green while the flag silently stopped working. And the NOT-READY check
+  ## was a shape test: rewriting the verdict as `... || isTRUE(pkg_ok)`, which makes a FAILED
+  ## install print READY, still matched. Sixth and seventh unfalsifiable assertions this cycle.
+  chk("...and a failed install makes Setup.R say NOT READY",
+      any(grepl("acta_bad <- !is.na(pkg_root) && !(isTRUE(pkg_ok) || (skip_pkg && have(\"ACTA\")))",
+                code, fixed = TRUE)) &&
+        any(grepl("ok <- !length(badApp) && !length(badAna) && !acta_bad", code, fixed = TRUE)))
+  ## BEHAVIOURAL, because every textual form of this check leaked. Matching "--no-package" passed
+  ## on the literal inside the skip MESSAGE; matching the guard expression passed because the same
+  ## expression also appears in the summary line, so disconnecting the install guard left it green.
+  ## Running it is cheap and unambiguous: a staged copy, a throwaway R_LIBS_USER, --no-package and
+  ## --no-tex. It writes nothing outside tempdir and nothing must land in that library.
+  local({
+    st <- file.path(tempdir(), "acta_nopkg_gate"); unlink(st, recursive = TRUE)
+    dir.create(st, recursive = TRUE, showWarnings = FALSE)
+    file.copy(sf, st)
+    for (d in c(file.path("inst", "pipeline"), "R")) {
+      dir.create(file.path(st, d), recursive = TRUE, showWarnings = FALSE)
+      src <- file.path(vd, d)
+      if (dir.exists(src)) file.copy(list.files(src, full.names = TRUE), file.path(st, d))
+    }
+    file.copy(file.path(vd, "DESCRIPTION"), st); file.copy(file.path(vd, "NAMESPACE"), st)
+    lib <- file.path(st, "lib"); dir.create(lib, showWarnings = FALSE)
+    ## PREPEND the throwaway, do not REPLACE the library path. Setting R_LIBS_USER alone removes
+    ## the user library from the child, so on any machine whose packages live there -- the default
+    ## on Linux, and true of this project's own CI runners -- the child sees all 31 dependencies as
+    ## missing and installs them from CRAN and Bioconductor inside the gate. The workflow's own
+    ## estimate for that is 20-40 minutes. The redirect only needs to catch what Setup.R WRITES.
+    out <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+      c("--vanilla", shQuote(file.path(st, "Setup.R")), "--no-package", "--no-tex"),
+      stdout = TRUE, stderr = TRUE,
+      env = paste0("R_LIBS_USER=",
+                   paste(c(lib, .libPaths()), collapse = .Platform$path.sep))))
+    chk("--no-package says it is skipping the install",
+        any(grepl("skipping the ACTA package install", out, fixed = TRUE)))
+    chk("...and really does not install ACTA",
+        !dir.exists(file.path(lib, "ACTA")))
+    if (dir.exists(file.path(lib, "ACTA")))
+      cat("         it installed anyway, so the flag is not wired to the install\n")
+    unlink(st, recursive = TRUE)
+  })
+  ## And the verification must be about THIS install: have("ACTA") alone says only that some ACTA
+  ## is loadable from somewhere, which anyone who ran install_github already satisfies.
+  ## THE WHOLE EXPRESSION. Two independent greps caught deletion but not INVERSION: rewriting
+  ## pkg_ok's && as || restores the blocking defect in full and both substrings survive. The
+  ## NOT-READY check a few lines up was tightened to an exact match for exactly this reason and
+  ## this one was not -- the ninth assertion this cycle that matched a string rather than a claim.
+  chk("...verified by version AND by the install's own warning, not just by loadability",
+      any(grepl('pkg_ok <- have("ACTA") && !is.na(want) && identical(got, want) && !.ibad',
+                code, fixed = TRUE)))
+})
+
 oq <- file.path(vd, "inst", "extdata", "oq_small")
 chk("inst/extdata/oq_small/ ships all three diagnostic cases",
     all(dir.exists(file.path(oq, sprintf("OQ_Test%d", 1:3)))))
