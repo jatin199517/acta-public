@@ -357,5 +357,53 @@ if (!length(.wf)) cat("  [skip] no CI workflow file found from here\n") else {
   }
 }
 
+## ---------------------------------------------------------------------------------------------
+## A MISSING PANDOC MUST COST THE PDF AND NOTHING ELSE. The report .Rmd sources the pipeline
+## script, so with report = TRUE the analysis happens inside the knit -- and rmarkdown::render()
+## tests pandoc BEFORE knitting. On a machine without pandoc a full run therefore returned
+## ok = FALSE, wrote_plots = FALSE, export_file = NA and left nothing on disk but the inputs: the
+## whole analysis lost for want of a PDF, and the README's contract ("ok = TRUE with
+## report_ok = FALSE means the export and plots are on disk and usable") false in that very case.
+## run_acta() now checks pandoc up front and downgrades the request instead.
+##
+## Asserted on the SOURCE, because proving it end to end needs a machine without pandoc and this
+## one has it -- the behaviour was measured by hand on a stripped PATH (ok = TRUE, export written,
+## 11 stats rows, report_ok = FALSE naming pandoc). What is cheap to check every time is that the
+## pre-check is still there, still ahead of the work, and still sets report_ok rather than NA.
+cat("\n=== a missing pandoc costs the PDF, not the run ===\n")
+local({
+  src <- unlist(lapply(actaTestFunctionsFiles(vd), readLines, warn = FALSE))
+  i0  <- which(grepl("^run_acta <- function", src))[1]
+  i1  <- i0 - 1L + which(grepl("^  out <- list\\(", src[i0:length(src)]))[1]
+  code <- src[i0:i1]
+  code <- code[!grepl("^\\s*##", code)]
+  iChk <- which(grepl("pandoc_available", code))[1]
+  iRun <- which(grepl("rmarkdown::render|sys[.]source\\(script", code))[1]
+  chk("run_acta checks pandoc before it renders or sources anything",
+      !is.na(iChk) && !is.na(iRun) && iChk < iRun)
+  chk("...and a missing pandoc downgrades the request rather than failing the run",
+      any(grepl("^\\s*report <- FALSE\\s*$", code)))
+  chk("...recording report_ok = FALSE, not NA, so a caller can tell it was asked for",
+      any(grepl("report_ok <- FALSE", code, fixed = TRUE)))
+  chk("...and naming the tool that is missing",
+      any(grepl("pandoc was not found", code, fixed = TRUE)))
+  ## The other half: with no engine at all LaTeX never runs, so there is no log to quote and the
+  ## message stayed the bare "error in running command" -- which this codebase's own comment says
+  ## identifies nothing. actaPdfEngine() is the thing that knows.
+  chk("a failed render names a missing LaTeX engine as the cause",
+      any(grepl("actaPdfEngine()$ok", code, fixed = TRUE)) &&
+        any(grepl("no LaTeX engine found", code, fixed = TRUE)))
+  eng <- tryCatch({
+    .oldPath <- Sys.getenv("PATH")
+    on.exit(Sys.setenv(PATH = .oldPath), add = TRUE)
+    if (requireNamespace("tinytex", quietly = TRUE))
+      try(assignInNamespace("is_tinytex", function(...) FALSE, ns = "tinytex"), silent = TRUE)
+    Sys.setenv(PATH = "/nonexistent")
+    h$actaPdfEngine()$ok
+  }, error = function(e) NA)
+  chk("actaPdfEngine() reports FALSE when no engine and no TinyTeX are reachable",
+      identical(eng, FALSE))
+})
+
 cat(if (ok) "\nALL APP-SUPPORT TESTS PASS\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0 else 1)

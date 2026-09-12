@@ -162,7 +162,7 @@ returns a list. The fields you are most likely to branch on:
 |---|---|
 | `ok` | did the <u>analysis</u> complete. `TRUE` with `report_ok = FALSE` means the export and plots are on disk and usable but the PDF render failed |
 | `analysis_error` / `report_error` | the message from whichever stage actually failed |
-| `report_ok`, `wrote_plots` | did the PDF render, and were the plots written. Both are flags; neither is the path |
+| `report_ok`, `wrote_plots` | did the PDF render, and were the plots written. Both are flags; neither is the path. `report_ok` is `FALSE` rather than `NA` when you asked for a report and did not get one, with the reason in `report_error` — including "pandoc was not found", which is checked before the run starts so a missing pandoc costs you the PDF and nothing else |
 | `export_file`, `report_file`, `plots_dir` | <u>this</u> run's outputs, by the names the script built. Each is `NA` rather than a stale path when that artefact was not produced — `plots_dir` is `NA` unless <u>this</u> run wrote into `Plots/`, so a folder left behind by an earlier run is not reported as yours |
 | `code_dir`, `script_version`, `seed`, `elapsed_s` | provenance for the run — `code_dir` is the pipeline that actually ran |
 | `stats`, `qcList`, `mmFits`, `gs` | the per-well statistics, the QC verdicts, the Michaelis-Menten fits, and the GatingSet |
@@ -299,7 +299,10 @@ Install pandoc from [pandoc.org](https://pandoc.org/installing.html).
 A package install brings neither, so install both if you want the report:
 `tinytex::install_tinytex()` for the TeX engine, and pandoc from the link above.
 
-If you do not want the PDF, skip both and use `run_acta(report=FALSE)`.
+If you do not want the PDF, skip both and use `run_acta(report=FALSE)`. If you ask for one
+without pandoc installed, `run_acta()` says so and carries on without it — the export, the plots
+and the dashboard are unaffected. A missing TeX engine is caught later, when the render fails, and
+`report_error` names it.
 
 ## Validate your installation
 

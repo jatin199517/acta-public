@@ -4957,6 +4957,34 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
   on.exit(setwd(old_wd), add = TRUE)
 
   report_ok <- NA; report_error <- NA_character_
+
+  ## PANDOC IS CHECKED BEFORE ANY WORK HAPPENS, and a missing one downgrades the request instead
+  ## of failing the run. This is not defensive tidying -- it is the difference between losing the
+  ## PDF and losing everything. The report .Rmd SOURCES the pipeline script, so with report = TRUE
+  ## the analysis happens inside the knit; rmarkdown::render() tests pandoc up front and errors
+  ## before knitting, so on a machine without pandoc a 70-second run returned ok = FALSE,
+  ## wrote_plots = FALSE, export_file = NA and left nothing on disk but the inputs. MEASURED, not
+  ## reasoned about. It also made the documented contract false: the README says ok = TRUE with
+  ## report_ok = FALSE means "the export and plots are on disk and usable", which held for a LaTeX
+  ## failure after knitting and not for this.
+  ##
+  ## So: say so, drop the report, and run the analysis. report_ok = FALSE (requested and not
+  ## produced) rather than NA (not requested), with the reason in report_error.
+  if (isTRUE(report)) {
+    .pandocOK <- nzchar(Sys.which("pandoc")) ||
+      (requireNamespace("rmarkdown", quietly = TRUE) &&
+       isTRUE(tryCatch(rmarkdown::pandoc_available(), error = function(e) FALSE)))
+    if (!.pandocOK) {
+      report <- FALSE
+      report_ok <- FALSE
+      report_error <- paste0("pandoc was not found, so the PDF report was skipped and the ",
+                             "analysis ran without it. rmarkdown shells out to pandoc and stops ",
+                             "before knitting, which would have taken the analysis with it. ",
+                             "Install pandoc from https://pandoc.org/installing.html -- nothing ",
+                             "else about the run changes.")
+      if (!isTRUE(quiet)) message("ACTA: ", report_error)
+    }
+  }
   t0 <- proc.time()[["elapsed"]]
   ## Wall clock as well as CPU: the plot artefacts are judged by file mtime below, and proc.time()
   ## cannot be compared against one.
@@ -5070,8 +5098,20 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
                                                error = function(e) character(0))))
       bang <- unique(trimws(grep("^!|^l[.][0-9]+|LaTeX Error|Fatal error", ln, value = TRUE)))
       bang <- bang[nzchar(bang)]
-      report_error <<- if (length(bang))
-        paste0(msg, " -- LaTeX said: ", paste(utils::head(bang, 3), collapse = " | ")) else msg
+      ## NAME THE CAUSE WHEN THERE IS NO LOG TO QUOTE. The lines above only help when LaTeX
+      ## actually ran; with no engine installed it never starts, so `bang` is empty and the
+      ## message stays the bare "error in running command" -- which this file's own comment
+      ## already notes identifies nothing. actaPdfEngine() knows the answer, and actaOQFinish()
+      ## has been adding it for the OQ log all along; every caller should get it, not just the OQ.
+      .why <- character(0)
+      if (!isTRUE(tryCatch(actaPdfEngine()$ok, error = function(e) FALSE)))
+        .why <- c(.why, paste0('no LaTeX engine found -- install.packages("tinytex") then ',
+                               "tinytex::install_tinytex()"))
+      report_error <<- paste(c(msg,
+                               if (length(.why)) paste("cause:", paste(.why, collapse = "; ")),
+                               if (length(bang))
+                                 paste("LaTeX said:", paste(utils::head(bang, 3), collapse = " | "))),
+                             collapse = " -- ")
       FALSE
     })
     options(.tt)

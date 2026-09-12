@@ -1,7 +1,7 @@
 Package: ACTA
 Type: Package
 Title: Anybody Can Titrate Antibody - Automated Flow Cytometry Reagent Titration
-Version: 3.0.8
+Version: 3.0.9
 Authors@R: c(
     person("Jatin", "Sharma", email = "jatin1995@gmail.com", role = c("aut", "cre")),
     person("Lyell Immunopharma, Inc.", role = "cph"))
