@@ -98,17 +98,57 @@ if (is.na(want)) {
   local({
     e <- file.path(tempdir(), "acta_bare_gate"); unlink(e, recursive = TRUE)
     dir.create(e, recursive = TRUE, showWarnings = FALSE)
-    msg <- tryCatch({ ACTA::run_acta(e, report = FALSE, plots = FALSE, quiet = TRUE); "" },
-                    error = function(err) conditionMessage(err))
-    ## ONE ASSERTION, and only the one that is about code_dir. Getting past the resolver means the
-    ## pipeline script is then SOURCED, and the script's first act is its own dependency check --
-    ## so the error that comes back is whatever that machine happens to be missing. On the macOS
-    ## runner it was "there is no package called 'BiocManager'", and a second assertion demanding
-    ## the message mention the workbook failed a healthy tree. It asserted nothing about the
-    ## subject and made the gate depend on the runner's library state.
-    chk("a bare run_acta() gets past code_dir to the inputs (no ACTA_Script complaint)",
-        !grepl("ACTA_Script", msg, fixed = TRUE))
-    if (grepl("ACTA_Script", msg, fixed = TRUE)) cat("         got:", msg, "\n")
+    ## ASSERT ON THE RESOLVER'S OWN ANNOUNCEMENT, and stop the moment it arrives.
+    ##
+    ## Two earlier versions of this probe let run_acta() carry on past the resolver, which meant
+    ## the pipeline script got SOURCED -- and its first act is its own dependency check. That made
+    ## the probe assert on whatever the machine happened to be missing (v3.0.5 went red on macOS
+    ## for "there is no package called 'BiocManager'"), let a gate reach the NETWORK and install
+    ## into the host library, and cost 20 of this file's 20 seconds. Dropping the message-content
+    ## assertion fixed the redness and left the rest.
+    ##
+    ## The resolver announces itself BEFORE the script is looked up or sourced, so that message is
+    ## the subject -- and aborting from the handler means the pipeline never runs at all. No
+    ## network, no installs, no dependence on the library's state, and the assertions are POSITIVE
+    ## rather than "the error was not this one string", which passed on an empty message.
+    ## tryCatch OUTSIDE withCallingHandlers, not the other way round. With the calling handler
+    ## outermost, an error raised inside it looks for handlers established BEFORE that handler was
+    ## registered, so it skipped the tryCatch sitting within and escaped the gate entirely.
+    ## ABORT ON THE FIRST MESSAGE, whatever it says, and assert on its CONTENT afterwards.
+    ## Aborting only on the expected text made the "never runs the pipeline" property contingent on
+    ## the assertion passing: reword the announcement, or let the resolver take the working-folder
+    ## branch, and nothing interrupts run_acta() -- it sources the pipeline exactly as the old
+    ## probe did (measured: 42 sys.source calls and a download). A guarantee that holds only on the
+    ## happy path is not a guarantee. Belt and braces: no repos and a throwaway library for the
+    ## duration, so even a fall-through cannot install.
+    chk("the probe fixture really is empty before the call",
+        length(list.files(e, all.files = TRUE, no.. = TRUE)) == 0L)
+    seen <- character(0)
+    .oldRepos <- getOption("repos"); .oldLibs <- Sys.getenv("R_LIBS_USER")
+    .throwaway <- file.path(tempdir(), "acta_probe_lib")
+    dir.create(.throwaway, recursive = TRUE, showWarnings = FALSE)
+    options(repos = character(0)); Sys.setenv(R_LIBS_USER = .throwaway)
+    err <- tryCatch(
+      withCallingHandlers({ ACTA::run_acta(e, report = FALSE, plots = FALSE); "" },
+                          message = function(m) {
+                            seen <<- c(seen, conditionMessage(m))
+                            stop("ACTA_PROBE_STOP")
+                          }),
+      error = function(err) conditionMessage(err))
+    options(repos = .oldRepos); Sys.setenv(R_LIBS_USER = .oldLibs)
+    unlink(.throwaway, recursive = TRUE)
+    chk("a bare run_acta() announces that it resolved code_dir to the installed package",
+        length(seen) >= 1L &&
+          grepl("using the installed package", seen[[1]], fixed = TRUE))
+    chk("...and the probe stopped there, so the pipeline never ran",
+        identical(err, "ACTA_PROBE_STOP"))
+    ## The COMPLAINT, not the word. The announcement itself says "no ACTA_Script*.R in the working
+    ## folder", so matching the bare name failed on a healthy tree; the failure mode being guarded
+    ## is the resolver giving up -- "expected exactly one ACTA_Script*.R ... found 0".
+    chk("the resolver never gave up looking for the script",
+        !any(grepl("expected exactly one ACTA_Script", c(seen, err), fixed = TRUE)))
+    if (!identical(err, "ACTA_PROBE_STOP"))
+      cat("         got:", paste(utils::head(c(seen, err), 4), collapse = " | "), "\n")
     unlink(e, recursive = TRUE)
   })
   ## Which code ran is RECORDED, not merely messaged -- an announced fallback is only auditable

@@ -62,6 +62,12 @@ jobs:
           # remotes is a DEV tool, not a dependency: test_install_path.R asks remotes itself whether
           # our DESCRIPTION makes it consult the Bioconductor repos. Without it that gate stands down
           # to a structural check and the end-to-end closure proof does not run at all.
+          #
+          # BiocManager and rstudioapi are DESCRIPTION *Suggests* and were declared nowhere, so they
+          # were genuinely absent on the runner -- and the pipeline script installs what it finds
+          # missing. A gate therefore reached the network and mutated the library on every push:
+          # 20 of test_app_package.R's 20 seconds, and the macOS red in run #16, which was that
+          # install's message arriving where a test expected something else.
           packages: |
             any::flowCore
             any::flowWorkspace
@@ -85,6 +91,8 @@ jobs:
             any::shiny
             any::processx
             any::remotes
+            any::BiocManager
+            any::rstudioapi
             any::magick
             any::lubridate
             any::stringr
@@ -127,6 +135,11 @@ jobs:
       - uses: r-lib/actions/setup-tinytex@v2
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          # DECLARE EVERYTHING listOfLibrary NAMES, here most of all: this is the job that actually
+          # runs the pipeline, and the pipeline installs whatever requireNamespace cannot find.
+          # BiocManager and rstudioapi were missing from both jobs; fixing only `suite` left the
+          # weekly run still resolving two package names against the runner's default repo,
+          # unpinned, and library()ing them into the session that then performs the analysis.
           packages: |
             any::flowCore
             any::flowWorkspace
@@ -151,6 +164,8 @@ jobs:
             any::lubridate
             any::stringr
             any::xml2
+            any::BiocManager
+            any::rstudioapi
       - name: run the three diagnostic cases
         run: |
           Rscript -e '
