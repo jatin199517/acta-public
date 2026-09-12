@@ -283,7 +283,157 @@ if (inherits(res, "error")) {
   chk("every declared dependency resolves from the repos remotes will use",
       length(res$missing) == 0L)
   if (length(res$missing)) cat("         missing:", paste(res$missing, collapse = ", "), "\n")
+  ## AND THE README'S OWN NUMBER, which is the kind of claim that goes stale in silence. The page
+  ## tells a new user how many packages one install_github call pulls in; it said 139 while the
+  ## closure measured 142, and nothing anywhere compared the two. A BAND, not equality: upstream
+  ## adds and drops transitive dependencies on its own schedule and a gate that fails for that
+  ## would be switched off. Outside the band means the page needs editing, which is a real finding.
+  ## EVERY README THAT SHIPS, because the two are different documents: the public page makes this
+  ## claim and the in-tree README.md does not, so keying on one file would either check nothing in
+  ## the built tree or fail for a document that never made the claim. Checked wherever it appears;
+  ## a page that does not state a number is noted, not failed.
+  .rm <- Filter(file.exists, c(file.path(ACTA_REPO_ROOT, "README.md"),
+                               file.path(dirname(ACTA_REPO_ROOT), "Publish", "README.public.md")))
+  .got   <- length(res$install)
+  .found <- 0L
+  for (.f in .rm) {
+    .hit <- unlist(regmatches(readLines(.f, warn = FALSE),
+                              gregexpr("pulls in [0-9]+ packages", readLines(.f, warn = FALSE))))
+    for (.h in .hit) {
+      .found <- .found + 1L
+      .said  <- as.integer(sub("[^0-9]*([0-9]+).*", "\\1", .h))
+      chk(sprintf("%s: the package count is within 10 of the measured closure (says %d, measured %d)",
+                  basename(.f), .said, .got),
+          abs(.said - .got) <= 10L)
+      if (abs(.said - .got) > 10L)
+        cat("         that page needs updating to", .got, "\n")
+    }
+  }
+  if (!.found)
+    note(sprintf("no README states a package count; the closure measured %d", .got))
 }
+
+## ---------------------------------------------------------------------------------------------
+## --no-tex MUST MEAN NOTHING TOUCHES TeX. The LaTeX-package step was gated on `latexOK() &&
+## have("tinytex")` -- whether an engine EXISTS -- and not on the flag, so --no-tex skipped
+## INSTALLING an engine and then went straight on to probe eleven .sty files with kpsewhich and
+## tlmgr-install whatever was missing. On a machine that already has TeX that is a CTAN download
+## the user explicitly declined, and it is reachable from this very suite: the --no-package gate
+## above runs Setup.R, and this machine has an engine.
+##
+## BEHAVIOURAL, and with its own falsifiability built in. Every textual form of this check would
+## have been another shape test, and this file already carries the scars of nine of those. Shims
+## for pdflatex, kpsewhich and tlmgr go first on the child's PATH and append their own name to a
+## sentinel file, so the assertion is "did Setup.R execute a TeX binary", answered by whether the
+## file exists. pdflatex is shimmed too, so latexOK() is TRUE regardless of the machine -- without
+## that the control run would find no engine on a CI runner, the block would not execute for the
+## RIGHT reason, and the probe would look like it was working when it could see nothing.
+if (file.exists(sf) && .Platform$OS.type != "windows") local({
+  runSetup <- function(flags) {
+    st <- file.path(tempdir(), "acta_tex_gate"); unlink(st, recursive = TRUE)
+    dir.create(st, recursive = TRUE, showWarnings = FALSE)
+    file.copy(sf, st)
+    for (d in c(file.path("inst", "pipeline"), "R")) {
+      dir.create(file.path(st, d), recursive = TRUE, showWarnings = FALSE)
+      src <- file.path(vd, d)
+      if (dir.exists(src)) file.copy(list.files(src, full.names = TRUE), file.path(st, d))
+    }
+    file.copy(file.path(vd, "DESCRIPTION"), st); file.copy(file.path(vd, "NAMESPACE"), st)
+    lib <- file.path(st, "lib"); dir.create(lib, showWarnings = FALSE)
+    shim <- file.path(st, "shim"); dir.create(shim, showWarnings = FALSE)
+    sent <- file.path(st, "touched.txt")
+    for (b in c("pdflatex", "kpsewhich", "tlmgr")) {
+      f <- file.path(shim, b)
+      ## kpsewhich must report NOT FOUND (exit 1, no stdout) so that texMiss is non-empty and
+      ## Setup.R goes on to the tlmgr step -- otherwise "all present" short-circuits the very
+      ## call this gate is trying to observe.
+      writeLines(c("#!/bin/sh",
+                   sprintf('echo "%s" >> "$ACTA_TEX_SENTINEL"', b),
+                   if (b == "kpsewhich") "exit 1" else 'echo "version 2025"; exit 0'), f)
+      Sys.chmod(f, "0755")
+    }
+    out <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
+      c("--vanilla", shQuote(file.path(st, "Setup.R")), "--no-package", flags),
+      stdout = TRUE, stderr = TRUE,
+      env = c(paste0("R_LIBS_USER=", paste(c(lib, .libPaths()), collapse = .Platform$path.sep)),
+              paste0("PATH=", paste(c(shim, Sys.getenv("PATH")), collapse = .Platform$path.sep)),
+              paste0("ACTA_TEX_SENTINEL=", sent))))
+    list(touched = if (file.exists(sent)) unique(readLines(sent, warn = FALSE)) else character(0),
+         out = out, st = st)
+  }
+  ## THE CONTROL FIRST. If this does not fire, the probe cannot see anything and the real
+  ## assertion below would pass for the wrong reason.
+  ctl <- runSetup(character(0))
+  chk("the TeX probe can see a TeX binary being run (control, no --no-tex)",
+      any(c("kpsewhich", "tlmgr") %in% ctl$touched))
+  if (!any(c("kpsewhich", "tlmgr") %in% ctl$touched))
+    cat("         touched:", paste(ctl$touched, collapse = ", "), "| Setup.R said:",
+        paste(utils::head(grep("LaTeX|TeX", ctl$out, value = TRUE), 4), collapse = " | "), "\n")
+  unlink(ctl$st, recursive = TRUE)
+
+  got <- runSetup("--no-tex")
+  chk("--no-tex runs no kpsewhich and no tlmgr at all",
+      !any(c("kpsewhich", "tlmgr") %in% got$touched))
+  if (any(c("kpsewhich", "tlmgr") %in% got$touched))
+    cat("         it ran:", paste(got$touched, collapse = ", "), "\n")
+  ## And says so in the summary rather than printing a green "0 present" line for a check that
+  ## did not run -- the reporting half of the same defect.
+  chk("...and the summary says the LaTeX package check was skipped",
+      any(grepl("skipped (--no-tex)", got$out, fixed = TRUE)))
+  unlink(got$st, recursive = TRUE)
+})
+
+## ---------------------------------------------------------------------------------------------
+## THE DECLARED DEPENDENCIES MUST MATCH THE ONES THE PIPELINE ACTUALLY ATTACHES.
+## Two gaps, both found by reading the manifests against each other rather than against the code:
+##   * BiocManager and rstudioapi sat in Suggests while listOfLibrary library()s them
+##     UNCONDITIONALLY, so remotes::install_github() did not install them and the pipeline
+##     reached the network mid-run to fetch them, unpinned, into the session doing the analysis.
+##   * purrr was attached and self-installed by the script for ONE call -- walk() over the
+##     install manifest -- and was declared nowhere at all: not in listOfLibrary, not in
+##     DESCRIPTION, and so not in the per-run version record that loop exists to make
+##     reproducible. Replaced with a base for loop; a manifest should not need a package to read
+##     itself.
+local({
+  d <- read.dcf(file.path(vd, "DESCRIPTION"))
+  imp <- trimws(strsplit(d[1, "Imports"], ",")[[1]])
+  sug <- if ("Suggests" %in% colnames(d)) trimws(strsplit(d[1, "Suggests"], ",")[[1]]) else character(0)
+  scr <- list.files(file.path(vd, "inst", "pipeline"), pattern = "^ACTA_Script.*[.]R$",
+                    full.names = TRUE)
+  rmd <- list.files(file.path(vd, "inst", "pipeline"), pattern = "^ACTA_Report.*[.]Rmd$",
+                    full.names = TRUE)
+  txt <- unlist(lapply(c(scr, rmd), readLines, warn = FALSE))
+  lol <- unlist(lapply(grep("^listOfLibrary[[:space:]]*<-", txt, value = TRUE), function(one)
+           trimws(gsub('["\']', "", strsplit(sub(".*c\\(", "", sub("\\).*$", "", one)), ",")[[1]]))))
+  lol <- unique(lol[nzchar(lol)])
+  ## grDevices is shipped with R and is not installable, so it is the one name that may stay out.
+  gap <- setdiff(setdiff(lol, "grDevices"), imp)
+  chk(sprintf("every package the pipeline attaches is a DESCRIPTION Import (%d attached)", length(lol)),
+      length(gap) == 0L)
+  if (length(gap)) cat("         attached but only Suggested or undeclared:",
+                       paste(gap, collapse = ", "), "\n")
+  chk("...so nothing the pipeline attaches is left in Suggests",
+      !length(intersect(lol, sug)))
+  ## purrr is GONE, not merely declared. Checked across every file that ships, because the point
+  ## was to remove the dependency rather than to write it down.
+  files <- c(scr, rmd, file.path(vd, "DESCRIPTION"), file.path(vd, "NAMESPACE"))
+  hits <- unlist(lapply(files[file.exists(files)], function(f) {
+    ln <- readLines(f, warn = FALSE)
+    ln <- ln[!grepl("^[[:space:]]*##", ln)]            # the comment explaining its removal stays
+    grep("purrr", ln, value = TRUE)
+  }))
+  chk("purrr is not a dependency of anything that ships", !length(hits))
+  if (length(hits)) cat("         still references purrr:", paste(utils::head(hits, 3),
+                                                                  collapse = " | "), "\n")
+  ## The loop it was there for must still install and attach every name, or removing purrr
+  ## traded a dependency for a broken installer.
+  loop <- grep("^for \\(\\.pkg in listOfLibrary\\)", txt, value = TRUE)
+  chk("the install manifest is walked by a base for loop over listOfLibrary", length(loop) >= 2L)
+  chk("...and still installs from CRAN, falls back to Bioconductor, and attaches",
+      any(grepl("install.packages(.pkg)", txt, fixed = TRUE)) &&
+        any(grepl("BiocManager::install(.pkg", txt, fixed = TRUE)) &&
+        any(grepl("library(.pkg, character.only = TRUE)", txt, fixed = TRUE)))
+})
 
 cat(if (ok) "\nINSTALL PATH: all checks passed\n" else "\nINSTALL PATH: FAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

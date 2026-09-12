@@ -120,15 +120,44 @@ if (length(FN_FILE) == 1) {
   message("ACTA app: the package is not installed; loading the helpers from ", R_DIR,
           "\n  The app will start, but a RUN needs the package itself. Run Setup.R in the folder ",
           "you cloned into (Setup.bat on Windows) -- it installs it.")
-  ## ATTACH THE FLOW STACK FIRST, matching the four wholesale import()s in NAMESPACE. Sourcing
-  ## the helpers into the global environment does NOT reproduce what the namespace gives them:
-  ## a bare S4 generic whose name also exists in base -- colnames() is the one that bit before --
-  ## resolves to the base function and never dispatches, so colnames(flowSet) returns 0 channels
-  ## instead of 13 and the run is SILENTLY wrong rather than broken. MEASURED on this path before
-  ## adding these: 0 vs 13. The flat releases got away with it only because the pipeline script
-  ## attaches everything in listOfLibrary before it touches a flowSet; the app reaches helpers
-  ## earlier than that, so it cannot rely on the script's own library() calls.
-  for (.p in c("flowCore", "flowWorkspace", "ggcyto", "openCyto")) {
+  ## ATTACH WHAT THE NAMESPACE WOULD HAVE IMPORTED. Sourcing the helpers into the global
+  ## environment does NOT reproduce what a namespace gives them, and there are two distinct
+  ## failure modes:
+  ##   * the four wholesale import()s -- a bare S4 generic whose name ALSO exists in base.
+  ##     colnames() is the one that bit: it resolves to base::colnames and never dispatches, so
+  ##     colnames(flowSet) returned 0 channels instead of 13 and the run was SILENTLY wrong.
+  ##     MEASURED on this path before this loop existed: 0 vs 13.
+  ##   * the importFrom() names -- 23 of them across magrittr, dplyr, tidyselect, tibble, tidyr
+  ##     and ggplot2 (`%>%`, mutate, aes, ...). These are NOT in base, so lookup falls through to
+  ##     the attached packages and the failure is loud rather than silent -- but it is still a
+  ##     failure, and it lands wherever the app first reaches a helper that uses one, which is
+  ##     before the pipeline script has attached anything.
+  ##
+  ## READ OUT OF NAMESPACE, not restated. A hardcoded list is a second copy of the import
+  ## manifest, and the copy nobody runs is the one that goes stale -- the same reason Setup.R
+  ## parses listOfLibrary and actaPackageVersions() parses the same vector rather than repeating
+  ## it. Add an importFrom to NAMESPACE and this path picks it up for free.
+  ## flowMeans is deliberately absent from NAMESPACE (it pulls in tcltk, which needs XQuartz),
+  ## so parsing rather than listing also keeps it out of here for free.
+  ## <<ACTA_NS_IMPORTS>>  -- the block between these markers is lifted verbatim and EXECUTED by
+  ## test_app_support.R, which then asserts what it resolves to. A test that re-implemented these
+  ## regexes would be testing its own copy; the markers mean it runs this one.
+  .nsFile <- file.path(dirname(R_DIR), "NAMESPACE")
+  .nsPkgs <- if (file.exists(.nsFile)) {
+    .txt <- paste(readLines(.nsFile, warn = FALSE), collapse = "\n")
+    .whole <- sub("^import\\(", "", sub("\\)$", "",
+                  regmatches(.txt, gregexpr("import\\([^),]*\\)", .txt))[[1]]))
+    .from  <- vapply(strsplit(gsub("[\n ]+", " ",
+                       sub("importFrom\\(", "", sub("\\)$", "",
+                         regmatches(.txt, gregexpr("importFrom\\([^)]*\\)", .txt))[[1]]))), ","),
+                     function(v) trimws(v[[1]]), character(1))
+    unique(c(.whole, .from))
+  } else c("flowCore", "flowWorkspace", "ggcyto", "openCyto")
+  ## Already attached by every R session, and library() on them is a no-op that only adds noise.
+  .nsPkgs <- setdiff(.nsPkgs, c("stats", "utils", "methods", "grDevices", "graphics", "datasets",
+                                "base", "grid", "tools"))
+  ## <</ACTA_NS_IMPORTS>>
+  for (.p in .nsPkgs) {
     if (!requireNamespace(.p, quietly = TRUE))
       stop(sprintf(paste0("The ACTA package is not installed, so the helpers load from %s -- but ",
                           "that needs '%s' attached and it is not available. Run Setup.R first."),

@@ -74,9 +74,11 @@ and rebuilding the same plot for each point.
 
 ### Deterministic and reproducible
 
-Under identical instructions the outcome is the same, independent of who ran it. Every run records
-its own package versions, seed, and script version, and three complete datasets ship with the tool so
-that it can be checked for function and accuracy.
+Under identical instructions the outcome is the same, independent of who ran it. Every run writes
+`acta_version.tsv` and `package_versions.tsv` beside its outputs, recording the seed, the script and
+package versions, the pipeline folder that ran, and the version of every package the run could have
+used. Three complete datasets ship with the tool so that it can be checked for function and
+accuracy.
 
 ### Data provenance
 
@@ -160,11 +162,13 @@ returns a list. The fields you are most likely to branch on:
 
 | field | meaning |
 |---|---|
-| `ok` | did the <u>analysis</u> complete. `TRUE` with `report_ok = FALSE` means the export and plots are on disk and usable but the PDF render failed |
+| `ok` | did the <u>analysis</u> complete. `TRUE` with `report_ok = FALSE` means the export and plots are on disk and usable, and you did not get a PDF — either the render failed or it was never attempted. `report_skipped` tells you which |
 | `analysis_error` / `report_error` | the message from whichever stage actually failed |
 | `report_ok`, `wrote_plots` | did the PDF render, and were the plots written. Both are flags; neither is the path. `report_ok` is `FALSE` rather than `NA` when you asked for a report and did not get one, with the reason in `report_error` — including "pandoc was not found", which is checked before the run starts so a missing pandoc costs you the PDF and nothing else |
 | `export_file`, `report_file`, `plots_dir` | <u>this</u> run's outputs, by the names the script built. Each is `NA` rather than a stale path when that artefact was not produced — `plots_dir` is `NA` unless <u>this</u> run wrote into `Plots/`, so a folder left behind by an earlier run is not reported as yours |
+| `report_skipped` | why a requested report was never started, or `NA`. Set when the pre-check found no pandoc, so a caller can tell "not attempted" from "attempted and failed" |
 | `code_dir`, `script_version`, `seed`, `elapsed_s` | provenance for the run — `code_dir` is the pipeline that actually ran |
+| `wrote_provenance` | did the run write `acta_version.tsv` and `package_versions.tsv` beside its outputs |
 | `stats`, `qcList`, `mmFits`, `gs` | the per-well statistics, the QC verdicts, the Michaelis-Menten fits, and the GatingSet |
 
 `ACTA_WORK_DIR` (the working folder) and `ACTA_CODE_DIR` (where the code lives) are set for the
@@ -213,7 +217,7 @@ library(ACTA)
 This provides `run_acta()` and `actaOQRun()`, and the three diagnostic cases. You can validate the
 install straight away — see *Validate your installation* below.
 
-That one call pulls in 139 packages. Most are on CRAN, but the flow stack — `flowCore`,
+That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
 packages sit behind those. `remotes` finds them because the `DESCRIPTION` declares `biocViews`,
 which is the field it reads to decide whether to look at the Bioconductor repositories at all.
@@ -439,6 +443,7 @@ numeric value is expected.
 | Titration export | `<date>_<ELN_ID>_TitrationExport_<version>.xlsx` |
 | Report | `ACTA_Report_*.pdf` |
 | Dashboard | a self-contained `.html` |
+| Run provenance | `acta_version.tsv`, `package_versions.tsv` |
 
 ## Licence
 

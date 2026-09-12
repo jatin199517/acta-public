@@ -770,21 +770,47 @@ resolveInstrumentMaxValue <- function(fcs_files) {
 ## MINIMUM: record the exact versions, per run, in a form a later Setup can be checked against.
 ## The package list is read from the SCRIPT rather than duplicated here, for the same reason
 ## Setup.R reads it: two copies of the manifest drift, and the copy nobody runs is the wrong one.
+##
+## READ FROM THE SAME PLACE THE DEPENDENCY PANEL READS, and from DESCRIPTION as well.
+## This parsed the SCRIPT alone while actaScriptPackages() -- the panel's source -- has always
+## unioned the script with the .Rmd, and the .Rmd carries two names the script does not: ragg
+## (its chunks are dev = "ragg_png") and sessioninfo (the Session Information section). So the
+## panel could report on 23 packages while the traceability record for the same run listed 21,
+## and the two missing ones are the report's, which is the artefact an auditor is holding.
+## Two parsers over one manifest is the drift this codebase keeps finding; there is now one.
+##
+## PLUS DESCRIPTION's Imports when ACTA is installed. listOfLibrary is what the pipeline
+## ATTACHES; Imports is what the namespace RESOLVES -- rmarkdown, tinytex, jsonlite, processx,
+## xml2, magrittr, tibble and tidyselect are all used by code that computes or writes a number
+## and appeared in no run record at all. A version record for a validated pipeline should name
+## every package the run could have used, not just the attached ones.
+##
+## BOTH HALVES ARE KEPT EVEN THOUGH THEY NOW OVERLAP. With BiocManager and rstudioapi moved into
+## Imports in this same release, every name in listOfLibrary is also an Import -- so on an
+## INSTALLED package the manifest half adds nothing today. It is not redundant: read from a flat
+## source checkout there is no installed DESCRIPTION to read, and the manifest is then the only
+## source. Dropping either one leaves a route whose record is short, which is why the gate in
+## test_app_support.R falsifies them separately.
+##
+## Widening the set cannot create spurious drift: actaVersionDrift() merges on the BASELINE, so a
+## package absent from an older validated_packages.tsv is not reported as having moved.
 actaPackageVersions <- function(code_dir = NULL, packages = NULL) {
   if (is.null(packages)) {
-    packages <- character(0)
-    sc <- if (!is.null(code_dir))
-            list.files(code_dir, pattern = "^ACTA_Script.*[.]R$", full.names = TRUE) else character(0)
-    if (length(sc)) {
-      txt <- tryCatch(readLines(sc[[1]], warn = FALSE), error = function(e) character(0))
-      hit <- grep("^\\s*listOfLibrary\\s*<-\\s*c\\(", txt)
-      if (length(hit)) {
-        v <- sub(".*c\\(", "", txt[hit[[1]]]); v <- sub("\\).*$", "", v)
-        packages <- gsub('^"|"$', "", trimws(strsplit(v, ",")[[1]]))
-      }
-    }
+    packages <- if (!is.null(code_dir))
+                  tryCatch(actaScriptPackages(code_dir), error = function(e) character(0))
+                else character(0)
+    ## The installed package's own declared dependencies. tryCatch because ACTA need not be
+    ## installed at all -- the flat source route has no DESCRIPTION to read.
+    .imp <- tryCatch({
+      d <- read.dcf(system.file("DESCRIPTION", package = "ACTA"))
+      f <- trimws(unlist(strsplit(paste(d[1, intersect(c("Imports", "Depends"), colnames(d))],
+                                        collapse = ","), ",")))
+      f <- sub("[[:space:]]*\\(.*$", "", f)                  # drop version constraints
+      f[nzchar(f) & f != "R"]
+    }, error = function(e) character(0))
+    packages <- c(packages, .imp, "ACTA")
   }
-  packages <- unique(c("base", packages))
+  packages <- sort(unique(c("base", packages)))
   data.frame(package = packages,
              version = vapply(packages, function(p)
                tryCatch(as.character(utils::packageVersion(p)),
@@ -4957,6 +4983,10 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
   on.exit(setwd(old_wd), add = TRUE)
 
   report_ok <- NA; report_error <- NA_character_
+  ## Why the report was not produced, when it was ASKED for and never started. Distinct from
+  ## report_error, which says what went wrong: a render that failed and a render that never ran
+  ## are different events and were reported as the same one. See actaRunArtefacts().
+  report_skipped <- NA_character_
 
   ## PANDOC IS CHECKED BEFORE ANY WORK HAPPENS, and a missing one downgrades the request instead
   ## of failing the run. This is not defensive tidying -- it is the difference between losing the
@@ -4971,12 +5001,22 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
   ## So: say so, drop the report, and run the analysis. report_ok = FALSE (requested and not
   ## produced) rather than NA (not requested), with the reason in report_error.
   if (isTRUE(report)) {
+    ## REPAIR PATH FIRST, or this check answers about a PATH the render will never see. The
+    ## pipeline script and the app both call actaRepairPath() -- but the script runs AFTER this
+    ## point, and a console `library(ACTA); run_acta()` never goes through the app at all. So on
+    ## the machine this was written for, whose PATH read `/usr/local/bin:/user/bin` with `/usr/bin`
+    ## typo'd away, Sys.which("pandoc") found nothing, the report was skipped as unavailable, and
+    ## the very next thing the run did was put those directories back and render perfectly well
+    ## from the .Rmd by hand. The check has to be asked of the repaired environment, which is the
+    ## one the render inherits.
+    invisible(actaRepairPath(quiet = TRUE))
     .pandocOK <- nzchar(Sys.which("pandoc")) ||
       (requireNamespace("rmarkdown", quietly = TRUE) &&
        isTRUE(tryCatch(rmarkdown::pandoc_available(), error = function(e) FALSE)))
     if (!.pandocOK) {
       report <- FALSE
       report_ok <- FALSE
+      report_skipped <- "pandoc not found"
       report_error <- paste0("pandoc was not found, so the PDF report was skipped and the ",
                              "analysis ran without it. rmarkdown shells out to pandoc and stops ",
                              "before knitting, which would have taken the analysis with it. ",
@@ -5132,14 +5172,78 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
   ## A LaTeX/pandoc failure after a complete analysis still gives ok = TRUE with report_ok = FALSE,
   ## because the export and plots are on disk and are usable -- that distinction is the point.
   analysis_ok <- isTRUE(pick("ACTA_ANALYSIS_COMPLETE"))
+
+  ## ============ EVERY RUN RECORDS ITS OWN PROVENANCE, NOT JUST THE DIAGNOSTIC ONES ============
+  ## The README has promised since 2_94 that "every run records its own package versions, seed and
+  ## script version". Two of those three were not on disk for an ordinary run: actaPackageVersions()
+  ## had exactly one caller, actaOQFinish(), so the versions reached a file only on a DIAGNOSTIC
+  ## run; the report's sessioninfo section covered a run that produced a PDF and nothing else did;
+  ## and the seed was in the returned list and in no artefact at all. A run with report = FALSE --
+  ## which is what the README itself recommends when pandoc is absent -- left no record of the
+  ## environment that produced its numbers. On a validated pipeline that is the claim that matters
+  ## most, so it is now made true rather than softened.
+  ##
+  ## WRITTEN BESIDE THE EXPORT, in version_dir, which is where the operator and the dashboard
+  ## already look. Same two filenames and the same format the OQ writes, so there is one thing to
+  ## learn and the diagnostic and the real run are comparable line for line.
+  ##
+  ## BEST EFFORT, and deliberately after the analysis: a read-only output folder or a sync client
+  ## holding a file open must not turn a completed analysis into a failed run. Nothing downstream
+  ## reads these, so a failure to write costs the record and not the result.
+  ## NO HOME DIRECTORY IN THE RECORD. code_dir is written into a file that ships beside the
+  ## export -- the README now advertises it as part of the run record, so it travels: attached to
+  ## a validation package, emailed to a CRO. On a managed machine the home directory names the
+  ## operator's ACCOUNT, which here is their email address, and the path below it can name the
+  ## employer and an internal document library. The field exists to prove WHICH CODE ran, and it
+  ## still does with the home prefix abbreviated: an installed package resolves under the R
+  ## library and is unaffected, and two clones under one home are still told apart.
+  ## <<ACTA_PROVENANCE>>  -- lifted verbatim and EXECUTED by test_app_support.R, which asserts
+  ## what it writes. The gate that first covered this greped the file for "acta_version.tsv" and
+  ## was satisfied by the OQ's own three copies of that string, so it passed with this whole block
+  ## deleted. Thirteenth assertion of that shape found in this codebase. The marker opens ABOVE
+  ## .abbrev deliberately: with the helper outside the block the gate had to stub it, and then
+  ## dropping the .abbrev() call from the code_dir line below still passed.
+  .abbrev <- function(p) {
+    h <- tryCatch(normalizePath("~", mustWork = FALSE), error = function(e) "")
+    if (nzchar(h) && startsWith(p, h)) paste0("~", substring(p, nchar(h) + 1L)) else p
+  }
+  .prov <- tryCatch({
+    .fromPkg <- isNamespace(parent.env(environment()))
+    .pkgv <- if (.fromPkg) as.character(utils::packageVersion("ACTA")) else NA_character_
+    utils::write.table(actaPackageVersions(code_dir),
+                       file.path(version_dir, "package_versions.tsv"),
+                       sep = "\t", row.names = FALSE, quote = FALSE)
+    writeLines(c(sprintf("acta_package_version\t%s", if (.fromPkg) .pkgv else "sourced, not installed"),
+                 sprintf("acta_script_version\t%s",
+                         { v <- pick("ScriptVersion")
+                           if (length(v) == 1L && !is.na(v) && nzchar(v)) as.character(v) else "NA" }),
+                 sprintf("seed\t%s",
+                         { v <- pick("ACTA_SEED")
+                           if (length(v) == 1L && !is.na(v)) as.character(v) else "NA" }),
+                 sprintf("code_dir\t%s", .abbrev(code_dir)),
+                 sprintf("analysis_complete\t%s", analysis_ok),
+                 sprintf("r_version\t%s", R.version.string)),
+               file.path(version_dir, "acta_version.tsv"))
+    TRUE
+  }, error = function(e) FALSE)
+  ## <</ACTA_PROVENANCE>>
+
   out <- list(
     ok            = analysis_ok,
     ## The error text belongs to whichever stage actually failed. When the render tryCatch fired but
     ## the analysis never finished, the message it caught IS the analysis error, and calling it a
     ## report error sends the reader to the wrong place entirely.
-    analysis_error = if (!analysis_ok && !is.na(report_error)) report_error else NA_character_,
+    ## ...and NOT when the report was skipped before it started. report_error then holds the
+    ## pandoc notice, which has nothing to do with why the analysis stopped -- so a run that
+    ## failed while gating, on a machine without pandoc, reported "install pandoc" as its
+    ## analysis error and sent the reader to the wrong stage twice over.
+    analysis_error = if (!analysis_ok && is.na(report_skipped) && !is.na(report_error))
+                       report_error else NA_character_,
     report_ok     = report_ok,
     report_error  = report_error,
+    ## SET only when the report was requested and never attempted; NA when one was rendered,
+    ## when a render was tried and failed, and when none was asked for.
+    report_skipped = report_skipped,
     ## THE OUTCOME, NOT THE REQUEST. This was isTRUE(plots) -- the argument echoed back -- so it
     ## said TRUE for a run that asked for plots and produced none, and the README promised it
     ## meant "were the plots written". Judged by a file in Plots/ no older than this run.
@@ -5150,6 +5254,9 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
     ## WHICH CODE RAN. Not derivable from the other fields once code_dir can be resolved rather
     ## than passed, and a validated pipeline should not leave that to a console message.
     code_dir      = code_dir,
+    ## Did the two provenance files get written. FALSE means the record is missing, which is worth
+    ## knowing on a validated pipeline rather than discovering when someone goes looking for it.
+    wrote_provenance = isTRUE(.prov),
     script        = basename(script),
     script_version = pick("ScriptVersion"),
     elapsed_s     = elapsed,
@@ -5273,6 +5380,14 @@ actaRunArtefacts <- function(res) {
              ## wrong stage -- the same misattribution the run log used to make.
              else if (isFALSE(res$ok))
                list(label = "Report (PDF)", path = NA_character_, skipped = "analysis did not complete")
+             ## A RENDER THAT NEVER RAN IS NOT A RENDER THAT FAILED. run_acta() checks pandoc
+             ## before doing any work and downgrades the request, so report_ok is FALSE with
+             ## nothing having been attempted -- and this branch then told the operator the
+             ## render failed, pointing them at LaTeX on a machine whose LaTeX was fine. The
+             ## reason travels in res$report_skipped rather than being re-derived here.
+             else if (isFALSE(res$report_ok) && !is.na(res$report_skipped %||% NA_character_))
+               list(label = "Report (PDF)", path = NA_character_,
+                    skipped = sprintf("skipped -- %s", res$report_skipped))
              else if (isFALSE(res$report_ok))
                list(label = "Report (PDF)", path = NA_character_, skipped = "render failed")
              else list(label = "Report (PDF)", path = NA_character_, skipped = "not requested"),
@@ -5946,12 +6061,21 @@ actaRunLogEntry <- function(action, outcome, version_dir, res = NULL, layout = N
 actaRepairPath <- function(quiet = FALSE) {
   if (.Platform$OS.type == "windows") return(character(0))
   onPath  <- strsplit(Sys.getenv("PATH"), .Platform$path.sep, fixed = TRUE)[[1]]
-  wanted  <- c("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin")
-  addBack <- setdiff(wanted, onPath)
-  addBack <- addBack[dir.exists(addBack)]
+  ## TWO CLASSES, AND THEY GO ON DIFFERENT ENDS. The system directories are root-owned, so
+  ## putting them FIRST is what repairs the fault this exists for. /usr/local/bin and
+  ## /opt/homebrew/bin are routinely user- or admin-group-writable -- on the machine this was
+  ## written on, both are owned by the logged-in user -- so prepending them put a directory any
+  ## local admin can drop a binary into AHEAD of /usr/bin, for every tool the run shells out to:
+  ## pandoc, kpsewhich, pdflatex, and the git that stamps the provenance record. They are
+  ## APPENDED instead: still found when nothing else provides them, which is all they were added
+  ## for, and never able to shadow a system tool.
+  sysDirs <- c("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+  optDirs <- c("/usr/local/bin", "/opt/homebrew/bin")
+  pre  <- setdiff(sysDirs, onPath); pre  <- pre[dir.exists(pre)]
+  post <- setdiff(optDirs, onPath); post <- post[dir.exists(post)]
+  addBack <- c(pre, post)
   if (!length(addBack)) return(character(0))
-  Sys.setenv(PATH = paste(paste(addBack, collapse = .Platform$path.sep), Sys.getenv("PATH"),
-                          sep = .Platform$path.sep))
+  Sys.setenv(PATH = paste(c(pre, Sys.getenv("PATH"), post), collapse = .Platform$path.sep))
   if (!quiet)
     message("[ACTA] PATH was missing ", paste(addBack, collapse = ", "),
             " -- added for this session.\n",
@@ -6335,14 +6459,46 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## Found by walking UP until a folder contains an ACTA_Script*.R, rather than assuming the parent.
   ## Cases now live one level deeper (Diagnostics/OQ_TestN), and hardcoding the depth would break
   ## the moment that nesting changed again.
+  ##
+  ## AND THEN THE INSTALLED PACKAGE, which is where run_acta() looks and this did not. The walk
+  ## upward only finds code that is an ANCESTOR of the case, and in the package layout it never
+  ## is: the cases ship at inst/extdata/oq_small/OQ_TestN and the pipeline at inst/pipeline, so
+  ## they are SIBLINGS. Every caller therefore had to pass code_dir by hand -- our own CI does,
+  ## in a comment explaining why -- and anyone driving the OQ from an install without that
+  ## argument got "no folder above ... contains an ACTA_Script*.R" for a perfectly sound setup.
+  ## run_acta() has resolved this since 3.0.5; this is the same ladder, announced the same way.
+  .oqResolved <- NA_character_
   if (is.null(code_dir)) {
     d <- dirname(oq_dir); code_dir <- NA_character_
     for (i in 1:4) {
       if (length(list.files(d, pattern = "^ACTA_Script.*[.]R$"))) { code_dir <- d; break }
       nd <- dirname(d); if (identical(nd, d)) break; d <- nd
     }
-    if (is.na(code_dir))
-      stop(sprintf("actaOQRun: no folder above '%s' contains an ACTA_Script*.R.", oq_dir), call. = FALSE)
+    if (is.na(code_dir)) {
+      .pkg <- tryCatch(system.file("pipeline", package = "ACTA"), error = function(e) "")
+      if (nzchar(.pkg) && length(list.files(.pkg, pattern = "^ACTA_Script.*[.]R$")) == 1L) {
+        code_dir    <- .pkg
+        .oqResolved <- tryCatch(as.character(utils::packageVersion("ACTA")),
+                                error = function(e) NA_character_)
+      } else {
+        ## NAME BOTH PLACES THAT WERE TRIED. "no folder above" described half the search and so
+        ## read as a case-layout problem on a machine where the real answer was "install ACTA".
+        stop(sprintf(paste0("actaOQRun: no ACTA_Script*.R in any of the 4 folders above '%s', ",
+                            "and none in the installed package either.\n  Pass code_dir -- the ",
+                            "folder holding ACTA_Script*.R:\n      actaOQRun(dir, code_dir = ",
+                            "\"inst/pipeline\")   # from a clone\n      actaOQRun(dir, code_dir = ",
+                            "system.file(\"pipeline\", package = \"ACTA\"))   # from an install"),
+                    oq_dir), call. = FALSE)
+      }
+    }
+  }
+  ## ANNOUNCED AND RECORDED, never silent -- the OQ exists to prove WHICH code ran, so the one
+  ## place a fallback must not be quiet is here. It reaches the verdict log as a record below.
+  if (!is.na(.oqResolved)) {
+    progress(sprintf("using the pipeline from the installed package %s", .oqResolved))
+    if (!quiet)
+      message("actaOQRun: no ACTA_Script*.R above the case; using the installed package ",
+              .oqResolved, "\n  ", code_dir)
   }
   code_dir <- normalizePath(code_dir, mustWork = TRUE)
   exp    <- actaOQExpected(oq_dir)
@@ -6369,7 +6525,10 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## dashboard: OQ_Test1 contributed 2 rows for its 1 run and the pooled total read 5 instead of 4.
   ## Regenerable by definition -- this is a diagnostic case whose whole output is rebuilt each run.
   stale <- c(list.files(oq_dir, pattern = "TitrationExport.*[.]xlsx$", full.names = TRUE),
-             list.files(oq_dir, pattern = "^ACTA_Report.*[.]pdf$", full.names = TRUE))
+             list.files(oq_dir, pattern = "^ACTA_Report.*[.]pdf$", full.names = TRUE),
+             ## Same rule for the provenance pair: a copy from an earlier run must not be able to
+             ## be collected as this one's.
+             Filter(file.exists, file.path(oq_dir, c("acta_version.tsv", "package_versions.tsv"))))
   if (length(stale)) {
     progress(sprintf("clearing %d stale artefact(s) from the case root ...", length(stale)))
     unlink(stale)
@@ -6420,7 +6579,36 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
     if (length(extra)) paste0(res$report_error, " -- ", paste(extra, collapse = "; "))
     else res$report_error
   }
-  add("report", "Report rendered", if (isTRUE(res$report_ok)) "pass" else "fail", rptDetail)
+  ## THE LABEL HAS TO MATCH WHAT HAPPENED. A report skipped up front for a missing pandoc was
+  ## recorded as "Report rendered: fail", which reads as a render that was attempted and broke --
+  ## so the reader looks at LaTeX, the .log, the .tex, none of which exist. Still a FAIL: an OQ is
+  ## qualifying this machine and a machine that cannot produce the PDF has not qualified. What
+  ## changes is that the record names the stage it stopped at.
+  ## DID THE RUN ACTUALLY WRITE ITS PROVENANCE. The gate in test_app_support.R executes the
+  ## marked write block and proves its CONTENT is right; it cannot prove run_acta REACHES it.
+  ## Wrapping that block in `if (FALSE)` passed the whole suite -- the blocking finding of the
+  ## 3.0.12 review surviving in a narrower form -- so reachability is asserted where reachability
+  ## is observable: a real run, by the runner whose job is to say what the run did.
+  ## LOOK AT THE DISK, NOT AT THE FIELD. Keying this on res$wrote_provenance reported `pass` for
+  ## a tree whose entire write block was wrapped in `if (FALSE)` with `.prov <- TRUE` after it --
+  ## the field is exactly what such a change forges, so trusting it reproduces the fault it was
+  ## added to catch. Runs BEFORE the collection step below, so the pair is still at the case root.
+  ## The field is compared too: file and field disagreeing is its own finding.
+  .provWant <- c("acta_version.tsv", "package_versions.tsv")
+  .provGot  <- .provWant[file.exists(file.path(oq_dir, .provWant))]
+  add("provenance", "Run wrote its own provenance record",
+      if (length(.provGot) == length(.provWant) && isTRUE(res$wrote_provenance)) "pass" else "fail",
+      if (length(.provGot) == length(.provWant) && isTRUE(res$wrote_provenance)) NA_character_
+      else sprintf(paste0("on disk: %s; run_acta reported wrote_provenance = %s. These two files ",
+                          "are what a later audit reads to learn which code and which package ",
+                          "versions produced this run."),
+                   if (length(.provGot)) paste(.provGot, collapse = ", ") else "neither file",
+                   if (is.null(res$wrote_provenance)) "NULL (field absent)"
+                   else as.character(res$wrote_provenance)))
+  add("report",
+      if (!is.na(res$report_skipped %||% NA_character_)) "Report rendered (skipped, not attempted)"
+      else "Report rendered",
+      if (isTRUE(res$report_ok)) "pass" else "fail", rptDetail)
 
   want("stats_rows", "Per-well statistics: row count", if (is.null(res$stats)) 0L else nrow(res$stats), "stats_rows")
   want("stats_cols", "Per-well statistics: column count", if (is.null(res$stats)) 0L else ncol(res$stats), "stats_cols")
@@ -6582,6 +6770,14 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## stray file cannot be measured in its place.
   exps <- list.files(oq_dir, pattern = "(Titration|Stats)Export.*[.]xlsx$", full.names = TRUE)
   for (f in exps) mv(f, file.path(outDir, basename(f)))
+  ## THE RUN'S OWN PROVENANCE FILES. Since 3.0.12 run_acta() writes acta_version.tsv and
+  ## package_versions.tsv beside its outputs, which for an OQ is the CASE ROOT -- and the runner's
+  ## contract is that it leaves nothing there. Collected like every other artefact. actaOQFinish()
+  ## then rewrites both in Outputs/ with the baseline comparison added, so the collected copies are
+  ## superseded rather than lost. Not counted as `lost` if absent: a run that failed before the
+  ## analysis finished never wrote them.
+  for (f in file.path(oq_dir, c("acta_version.tsv", "package_versions.tsv")))
+    if (file.exists(f)) mv(f, file.path(outDir, basename(f)))
   pl <- file.path(oq_dir, "Plots")
   nPlots <- 0L
   if (dir.exists(pl)) {
@@ -6840,15 +7036,38 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
                                   stdout = TRUE, stderr = FALSE))
     if (length(o) == 1L && nzchar(o)) o else NA_character_
   }, error = function(e) NA_character_)
+  ## THE FOLDER, NOT JUST THE VERSION. code_dir can now be RESOLVED rather than passed -- from
+  ## the case's ancestors or from the installed package -- and the two can hold different code at
+  ## the same patch version on a development machine. A record that proves which ACTA ran has to
+  ## name where it was read from, or it proves the version and not the code.
+  .cd <- tryCatch({
+    v <- res$code_dir
+    if (length(v) == 1L && !is.na(v) && nzchar(v)) as.character(v) else code_dir
+  }, error = function(e) code_dir)
+  ## THE SAME SHAPE AS run_acta's RECORD. This file OVERWRITES the copy collected out of the case
+  ## root, so whatever it omits is simply gone: it was missing the seed, which the README promises
+  ## every run records, and it wrote code_dir unabbreviated while run_acta had just abbreviated
+  ## it -- and an OQ Outputs/ folder is the artefact most likely to be sent outside, since it is
+  ## what a validation package is made of.
+  .oqAbbrev <- function(p) {
+    h <- tryCatch(normalizePath("~", mustWork = FALSE), error = function(e) "")
+    if (nzchar(h) && startsWith(p, h)) paste0("~", substring(p, nchar(h) + 1L)) else p
+  }
+  .seed <- tryCatch({
+    v <- res$seed
+    if (length(v) == 1L && !is.na(v)) as.character(v) else "NA"
+  }, error = function(e) "NA")
   add("acta_version", "Which ACTA produced this run", "pass",
-      sprintf("package %s; script %s%s",
+      sprintf("package %s; script %s%s; code from %s",
               if (is.na(.av)) "sourced, not installed" else .av,
               if (!is.null(.sv))                                 .sv          else "unknown",
-              if (is.na(.sha)) "" else sprintf("; git %s", .sha)))
+              if (is.na(.sha)) "" else sprintf("; git %s", .sha), .oqAbbrev(.cd)))
   tryCatch(writeLines(c(sprintf("acta_package_version\t%s", if (is.na(.av)) "NA" else .av),
                         sprintf("acta_script_version\t%s",
                                 if (!is.null(.sv))                                 .sv          else "NA"),
                         sprintf("git_sha\t%s", if (is.na(.sha)) "NA" else .sha),
+                        sprintf("seed\t%s", .seed),
+                        sprintf("code_dir\t%s", .oqAbbrev(.cd)),
                         sprintf("r_version\t%s", R.version.string)),
                       file.path(outDir, "acta_version.tsv")),
            error = function(e) invisible(NULL))

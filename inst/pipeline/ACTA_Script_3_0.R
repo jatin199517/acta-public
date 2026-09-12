@@ -2,12 +2,8 @@ options(repos = c(CRAN = "https://cloud.r-project.org"))
 if(!requireNamespace("BiocManager")){
   install.packages("BiocManager", quietly=TRUE)
 }
-if(!requireNamespace("purrr")){
-  install.packages("purrr", quietly=TRUE)
-}
 ##BiocManager::install("flowMeans")
 ##remotes::install_github("RGLab/ggcyto")
-library(purrr)
 ## Attached packages, and ONLY the ones actually called. Setup.R parses this vector out
 ## of the source, so it is also the install manifest -- every name here is something a new user
 ## is made to download. Audited 2026-08-19 against every exported function referenced anywhere in
@@ -16,18 +12,25 @@ library(purrr)
 ## dropping it was verified by running both OQ cases (which use singletGate, gate_flowclust_2d and
 ## flowMeans) rather than assumed from the dependency graph.
 listOfLibrary<-c("flowMeans","this.path","lubridate","dplyr","tidyr","readxl","openxlsx","rstudioapi","ggplot2","flowCore","ggcyto","openCyto","flowWorkspace","grDevices","BiocManager","stringr","knitr","kableExtra","diptest","mclust","ggplate")
-walk(listOfLibrary, ~{
-  if (!requireNamespace(.x, quietly = TRUE)) {
-    message("Trying CRAN for: ", .x)
-    tryCatch(install.packages(.x), error = function(e) NULL)
+## A BASE for LOOP, not purrr::walk. purrr was pulled in -- installed at run time if absent, and
+## attached -- for this one call and nothing else, which made it a dependency that appeared in no
+## manifest: absent from listOfLibrary, absent from DESCRIPTION, and so absent from the per-run
+## version record this loop's whole purpose is to make reproducible. walk() over a character
+## vector is a for loop; the honest version of the install manifest does not need a package to
+## read itself.
+for (.pkg in listOfLibrary) {
+  if (!requireNamespace(.pkg, quietly = TRUE)) {
+    message("Trying CRAN for: ", .pkg)
+    tryCatch(install.packages(.pkg), error = function(e) NULL)
   }
-  if (!requireNamespace(.x, quietly = TRUE)) {
-    message("CRAN failed for: ", .x, ". Trying Bioconductor...")
-    tryCatch(BiocManager::install(.x, ask = FALSE, update = FALSE),
+  if (!requireNamespace(.pkg, quietly = TRUE)) {
+    message("CRAN failed for: ", .pkg, ". Trying Bioconductor...")
+    tryCatch(BiocManager::install(.pkg, ask = FALSE, update = FALSE),
              error = function(e) NULL)
   }
-  library(.x, character.only = TRUE)
-})
+  library(.pkg, character.only = TRUE)
+}
+rm(.pkg)
 
 ## Robust working-directory set for RStudio *and* Positron / VS Code. IMPORTANT: in
 ## Positron you must SOURCE the file -- running code line-by-line in the console gives
@@ -360,7 +363,8 @@ if (isTRUE(attr(actaGroups, "combinatorial")))
 Target<-if (is.na(markerColName)) character(0) else unique(metadata_file[[markerColName]])
 Target<-Target[!is.na(Target)] ## Must match a markername ($PnS); see resolveMarkerChannel()
 ## Layout sanity check up front, before any FCS is read: duplicate StainQty in a titration
-## series and a missing Costain well are hard errors; >1 Costain / >1 Unstained only warn.
+## series and a missing Costain well are hard errors, and so is >1 Costain (it pools events, so the
+## gate floor belongs to no single well); >1 Unstained only warns, since all are dropped anyway.
 ## See validateLayoutGroups() for why each severity was chosen.
 actaPrevalidate(metadata_file, gating_template, infoSheet, actaGroups,
                 fcs_root = path,

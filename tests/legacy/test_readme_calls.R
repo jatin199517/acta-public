@@ -303,5 +303,192 @@ chk("the README documents run_acta()", any(grepl("run_acta", md, fixed = TRUE)))
 chk("the README never tells anyone to run R CMD INSTALL",
     !any(grepl("R CMD INSTALL", prose, fixed = TRUE)))
 
+## ---------------------------------------------------------------------------------------------
+## THE PAGE'S FACTS, NOT JUST ITS CODE. Everything above checks that the README's R examples
+## resolve. Nothing checked its TABLES -- and a table of numbers is exactly what goes stale in
+## silence: an audit of the page against the code found the package count off by three, with no
+## gate anywhere comparing the two. These check the claims a reader would act on.
+##
+## READ FROM WHICHEVER FILE CARRIES THE CLAIM. The in-tree README.md and the public page are
+## different documents: the public one makes these claims and the dev one does not. Keying on one
+## path would check nothing in one of the two trees.
+PAGES <- Filter(file.exists, c(rf, file.path(dirname(vd), "Publish", "README.public.md")))
+pageWith <- function(pattern) {
+  for (f in PAGES) {
+    ln <- readLines(f, warn = FALSE)
+    if (any(grepl(pattern, ln))) return(list(file = f, lines = ln))
+  }
+  NULL
+}
+
+cat("\n=== the page's tables against the tree ===\n")
+
+## THE DASHBOARD THEMES, by exact filename and exact folder. The page tells the reader to move a
+## named file between two folders, so a renamed theme makes those instructions unfollowable.
+local({
+  pg <- pageWith("^- \\*\\*Five themes\\*\\*")
+  if (is.null(pg)) { note("no page lists the dashboard themes"); return(invisible(NULL)) }
+  txt <- paste(pg$lines, collapse = " ")
+  named <- unique(unlist(regmatches(txt, gregexpr("`[a-z-]+-(blue|chrome|record)`", txt))))
+  named <- gsub("`", "", named)
+  chk(sprintf("the page names five dashboard themes (%d found)", length(named)),
+      length(named) == 5L)
+  tdir <- file.path(vd, "inst", "pipeline", "Template")
+  if (!dir.exists(tdir)) tdir <- file.path(vd, "Template")
+  have <- basename(c(list.files(tdir, pattern = "dashboard_template.*[.]html$", full.names = TRUE),
+                     list.files(file.path(tdir, "Other_Templates"),
+                                pattern = "dashboard_template.*[.]html$", full.names = TRUE)))
+  ## THE WHOLE NAME, ANCHORED. grepl(n, have, fixed = TRUE) is a substring test, so renaming
+  ## teal-chrome.html to teal-chromeX.html still matched "teal-chrome" and the gate stayed green
+  ## for a theme the page's instructions could no longer find.
+  miss <- named[!vapply(named, function(n)
+    any(have == sprintf("ACTA_dashboard_template_%s.html", n)), logical(1))]
+  chk("...and every one of them ships", !length(miss))
+  if (length(miss)) cat("         named on the page but not in Template/:",
+                        paste(miss, collapse = ", "), "\n")
+  ## The page is specific about WHICH folder each is in, because that is the instruction.
+  inMain <- basename(list.files(tdir, pattern = "dashboard_template.*[.]html$"))
+  chk("...with exactly one in Template/, which is what the generator requires",
+      length(inMain) == 1L)
+  chk("...and the page names that one as the default",
+      length(inMain) == 1L && any(vapply(named, function(n)
+        grepl(n, inMain[1], fixed = TRUE) &&
+          grepl(sprintf("`%s` in `Template/`", n), txt, fixed = TRUE), logical(1))))
+})
+
+## THE APP'S FIVE SECTIONS. The page's table is how someone decides the tool does what they need.
+local({
+  pg <- pageWith("^\\| \\*\\*Checks\\*\\*")
+  app <- file.path(vd, "inst", "pipeline", "ACTA_App.R")
+  if (is.null(pg) || !file.exists(app)) { note("no page section table, or no app"); return(invisible(NULL)) }
+  ## SCOPED TO THE APP'S OWN TABLE. A bare scan for bolded first cells also picked up the
+  ## per-platform requirements table further down -- "TeX engine", "Perl", "App launcher" -- and
+  ## then failed for six rows that were never app sections. The table is the one headed
+  ## "| Section |", and it ends at the first line that is not a table row.
+  .h <- grep("^\\| Section \\|", pg$lines)[1]
+  if (is.na(.h)) { note("no app section table on the page"); return(invisible(NULL)) }
+  .rest <- pg$lines[(.h + 1L):length(pg$lines)]
+  .end  <- which(!grepl("^\\|", .rest))[1]
+  rows  <- .rest[seq_len(if (is.na(.end)) length(.rest) else .end - 1L)]
+  rows  <- grep("^\\|[[:space:]]*\\*\\*", rows, value = TRUE)
+  named <- trimws(gsub("\\*", "", sub("^\\|([^|]*)\\|.*$", "\\1", rows)))
+  named <- named[nzchar(named)]
+  chk(sprintf("the page describes five app sections (%s)", paste(named, collapse = ", ")),
+      length(named) == 5L)
+  asrc <- readLines(app, warn = FALSE)
+  miss <- named[!vapply(named, function(n)
+    any(grepl(sprintf('"%s"', n), asrc, fixed = TRUE)), logical(1))]
+  chk("...and each one is a section the app actually builds", !length(miss))
+  if (length(miss)) cat("         on the page but not in the app:", paste(miss, collapse = ", "), "\n")
+})
+
+## THE DIAGNOSTIC CASE TABLE. Detector counts come from the FCS files themselves and events per
+## well from each case's expected.json, so both sides are measured rather than restated.
+## The "Titrations / wells" row is deliberately NOT checked here: its second number is physical
+## wells, which for the combinatorial case is fewer than the statistics rows, and there is no
+## single field that means it. Verified by hand at 3.0.12; left to prose.
+local({
+  pg <- pageWith("^\\| Detectors in the file")
+  if (is.null(pg)) { note("no page carries the diagnostic case table"); return(invisible(NULL)) }
+  cells <- function(pattern) {
+    r <- grep(pattern, pg$lines, value = TRUE)[1]
+    if (is.na(r)) return(character(0))
+    v <- trimws(strsplit(r, "|", fixed = TRUE)[[1]])
+    v <- v[nzchar(v)]
+    gsub("[*,]", "", v[-1])
+  }
+  det <- cells("^\\| Detectors in the file")
+  evt <- cells("^\\| Events per well")
+  tit <- cells("^\\| Titrations / wells")
+  croot <- if (dir.exists(file.path(vd, "inst", "extdata", "oq_small")))
+             file.path(vd, "inst", "extdata", "oq_small") else file.path(vd, "Diagnostics")
+  cases <- sprintf("OQ_Test%d", 1:3)
+  chk("the case table has a column per shipped case",
+      length(det) == 3L && length(evt) == 3L && length(tit) == 3L)
+  if (length(det) == 3L && requireNamespace("flowCore", quietly = TRUE)) {
+    for (i in seq_along(cases)) {
+      f <- list.files(file.path(croot, cases[i], "Titration_FCS"), pattern = "[.]fcs$",
+                      recursive = TRUE, full.names = TRUE)
+      if (!length(f)) { note(sprintf("%s ships no FCS to measure", cases[i])); next }
+      par <- tryCatch(as.integer(flowCore::read.FCSheader(f[1])[[1]][["$PAR"]]),
+                      error = function(e) NA_integer_)
+      chk(sprintf("%s: the page says %s detectors and the FCS has %s",
+                  cases[i], det[i], if (is.na(par)) "unreadable" else par),
+          !is.na(par) && identical(as.integer(det[i]), par))
+    }
+  }
+  if (length(evt) == 3L) for (i in seq_along(cases)) {
+    ej <- file.path(croot, cases[i], "expected.json")
+    if (!file.exists(ej) || !requireNamespace("jsonlite", quietly = TRUE)) next
+    e <- tryCatch(jsonlite::fromJSON(ej), error = function(x) NULL)
+    if (is.null(e$events_per_well)) { note(sprintf("%s has no events_per_well", cases[i])); next }
+    chk(sprintf("%s: the page says %s events per well and expected.json says %s",
+                cases[i], evt[i], e$events_per_well),
+        identical(as.integer(evt[i]), as.integer(e$events_per_well)))
+    if (!is.null(e$group))
+      chk(sprintf("%s: the page says %s titration(s) and the case has %d",
+                  cases[i], sub(" */.*$", "", tit[i]), length(e$group)),
+          identical(as.integer(sub(" */.*$", "", tit[i])), length(e$group)))
+  }
+})
+
+## THE FILES-WRITTEN TABLE. Every filename pattern the page promises must be one the pipeline
+## actually builds, or a reader goes looking for an artefact that was never named that.
+local({
+  pg <- pageWith("^\\| Stain Index curve")
+  scr <- list.files(file.path(vd, "inst", "pipeline"), pattern = "^ACTA_Script.*[.]R$",
+                    full.names = TRUE)
+  if (is.null(pg) || !length(scr)) { note("no files-written table, or no script"); return(invisible(NULL)) }
+  ## EVERY FILE THAT NAMES AN ARTEFACT, not only the script. `ACTA_Report` is the report's own
+  ## basename -- run_acta() derives report_file from the .Rmd rather than the script building the
+  ## string -- so checking the script alone reported the page as promising a file nothing writes.
+  src <- paste(unlist(lapply(c(scr,
+                               list.files(file.path(vd, "inst", "pipeline"),
+                                          pattern = "^ACTA_Report.*[.]Rmd$", full.names = TRUE),
+                               Filter(file.exists, file.path(vd, "R", "ACTA_Functions.R"))),
+                             readLines, warn = FALSE)), collapse = "\n")
+  ## THE PATTERNS COME OFF THE PAGE, not from a list retyped here. A hardcoded stem list cannot
+  ## see a page edit at all: renaming the page's `ConcatPlot_*.png` to `ConcatPlotX_*.png` left
+  ## this green, because the list still said ConcatPlot and the script still contained it. The
+  ## gate has to read the claim it is checking.
+  ##
+  ## Rows are taken to the end of the table, every backticked token in the second column is a
+  ## promised filename, and each is reduced to the LITERAL fragments the code must contain --
+  ## globs and `<placeholders>` are what sprintf/paste0 fill in, so they are dropped.
+  .h <- grep("^\\| Output \\|", pg$lines)[1]
+  if (is.na(.h)) { note("no files-written table header"); return(invisible(NULL)) }
+  .rest <- pg$lines[(.h + 1L):length(pg$lines)]
+  .end  <- which(!grepl("^\\|", .rest))[1]
+  rows  <- .rest[seq_len(if (is.na(.end)) length(.rest) else .end - 1L)]
+  rows  <- rows[!grepl("^\\|[-: ]+\\|", rows)]
+  toks  <- unlist(lapply(rows, function(r) {
+    cell <- sub("^\\|[^|]*\\|([^|]*)\\|.*$", "\\1", r)
+    gsub("`", "", unlist(regmatches(cell, gregexpr("`[^`]+`", cell))))
+  }))
+  stems <- unique(unlist(lapply(toks, function(t) {
+    t <- sub("^.*/", "", t)                       # drop the directory
+    t <- gsub("<[^>]*>", "*", t)                  # placeholders behave like globs
+    f <- unlist(strsplit(t, "[*.]"))
+    f[nzchar(f) & nchar(f) >= 4L & grepl("^[A-Za-z_][A-Za-z0-9_]*$", f)]
+  })))
+  ## `.html` alone carries no stem, and the extensions are not artefact names.
+  stems <- setdiff(stems, c("html", "xlsx", "png", "pdf"))
+  chk(sprintf("the files-written table names checkable artefacts (%d found: %s)",
+              length(stems), paste(utils::head(stems, 12), collapse = ", ")),
+      length(stems) >= 8L)
+  miss <- stems[!vapply(stems, function(x) grepl(x, src, fixed = TRUE), logical(1))]
+  chk("...and every filename the page promises is one the pipeline builds", !length(miss))
+  if (length(miss)) cat("         promised but never written:", paste(miss, collapse = ", "), "\n")
+  ## And the two provenance files, which 3.0.12 added -- the page claims every run writes them.
+  fn <- Filter(file.exists, file.path(vd, "R", "ACTA_Functions.R"))
+  if (length(fn)) {
+    h <- paste(readLines(fn[1], warn = FALSE), collapse = "\n")
+    for (f in c("acta_version.tsv", "package_versions.tsv"))
+      if (any(grepl(f, pg$lines, fixed = TRUE)))
+        chk(sprintf("...including %s, which run_acta() writes", f),
+            grepl(sprintf('"%s"', f), h, fixed = TRUE))
+  }
+})
+
 cat(if (ok) "\nREADME CALLS: all checks passed\n" else "\nREADME CALLS: FAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

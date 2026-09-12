@@ -77,7 +77,6 @@ jobs:
             any::flowClust
             any::dplyr
             any::tidyr
-            any::purrr
             any::ggplot2
             any::ggplate
             any::readxl
@@ -151,7 +150,6 @@ jobs:
             any::flowClust
             any::dplyr
             any::tidyr
-            any::purrr
             any::ggplot2
             any::ggplate
             any::readxl

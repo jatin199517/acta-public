@@ -358,7 +358,13 @@ if (.Platform$OS.type != "windows") {
 ## Read out of the .Rmd, so this cannot drift from what the report actually loads. Best-effort: a
 ## failure here leaves the analysis, export, plots and dashboard working -- only the PDF needs them.
 texPkgs <- character(0); texMiss <- character(0)
-if (latexOK() && have("tinytex")) {
+## GATED ON THE FLAG, not only on whether an engine happens to exist. This read
+## `if (latexOK() && have("tinytex"))`, so --no-tex skipped INSTALLING a TeX engine and then went
+## straight on to probe and tlmgr-install eleven LaTeX packages on any machine that already had
+## one. That is the opposite of what the flag says, and it is reachable from the test suite: the
+## --no-package gate runs Setup.R on this machine, which has an engine, so a gate could sit there
+## downloading from CTAN. --no-tex now means what it says -- nothing here touches TeX.
+if (want_tt && latexOK() && have("tinytex")) {
   rmd <- list.files(here, pattern = "^ACTA_Report.*[.]Rmd$", full.names = TRUE)
   if (length(rmd) == 1L) {
     txt  <- tryCatch(readLines(rmd[[1]], warn = FALSE), error = function(e) character(0))
@@ -572,7 +578,12 @@ line("LaTeX (PDF report)", if (latexOK()) character(0) else "engine",
      if (latexOK()) 1L else 0L)
 ## Its own line: an engine with the report's packages missing is precisely the state that produced
 ## every correct NUMBER and no PDF on a colleague's machine on 2026-08-19.
-if (latexOK()) line("LaTeX packages", texMiss, length(texPkgs))
+## Under --no-tex there is no count to report and nothing was checked, so the line would read
+## "LaTeX packages 0 of 0 ok" -- a green line for a check that did not run, which is the exact
+## shape of unfalsifiable reporting this suite keeps finding. Say it was skipped.
+if (latexOK() && want_tt) line("LaTeX packages", texMiss, length(texPkgs))
+if (latexOK() && !want_tt)
+  cat(sprintf("%-22s %s\n", "LaTeX packages", "skipped (--no-tex)"))
 if (!latexOK())
   cat("                       -> re-run as:  Rscript Setup.R\n",
       "                          (or install MacTeX / MiKTeX / TeX Live yourself)\n", sep = "")

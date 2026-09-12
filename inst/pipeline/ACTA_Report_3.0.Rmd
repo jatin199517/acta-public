@@ -145,23 +145,29 @@ colorlinks: true
 
 ```{r setup, include=FALSE, warning=FALSE}
 knitr::opts_chunk$set(dev = "ragg_png", dpi = 300)
-library(purrr)
 
 # Reading metadata file
 listOfLibrary<-c("flowMeans","this.path","lubridate","dplyr","tidyr","readxl","openxlsx","rstudioapi","ggplot2","flowCore","ggcyto","openCyto","flowWorkspace","grDevices","BiocManager","stringr","knitr","kableExtra","diptest","mclust","sessioninfo","ragg","ggplate")
 
-walk(listOfLibrary, ~{
-  if (!requireNamespace(.x, quietly = TRUE)) {
-    message("Trying CRAN for: ", .x)
-    tryCatch(install.packages(.x), error = function(e) NULL)
+## A BASE for LOOP, not purrr::walk. purrr was pulled in -- installed at run time if absent, and
+## attached -- for this one call and nothing else, which made it a dependency that appeared in no
+## manifest: absent from listOfLibrary, absent from DESCRIPTION, and so absent from the per-run
+## version record this loop's whole purpose is to make reproducible. walk() over a character
+## vector is a for loop; the honest version of the install manifest does not need a package to
+## read itself.
+for (.pkg in listOfLibrary) {
+  if (!requireNamespace(.pkg, quietly = TRUE)) {
+    message("Trying CRAN for: ", .pkg)
+    tryCatch(install.packages(.pkg), error = function(e) NULL)
   }
-  if (!requireNamespace(.x, quietly = TRUE)) {
-    message("CRAN failed for: ", .x, ". Trying Bioconductor...")
-    tryCatch(BiocManager::install(.x, ask = FALSE, update = FALSE),
+  if (!requireNamespace(.pkg, quietly = TRUE)) {
+    message("CRAN failed for: ", .pkg, ". Trying Bioconductor...")
+    tryCatch(BiocManager::install(.pkg, ask = FALSE, update = FALSE),
              error = function(e) NULL)
   }
-  library(.x, character.only = TRUE)
-})
+  library(.pkg, character.only = TRUE)
+}
+rm(.pkg)
 ## Resolve THIS report's own folder. The previous getActiveDocumentContext() call pointed
 ## at whatever file had FOCUS in the editor, so knitting with another version folder's file
 ## selected silently ran the report against THAT folder's scripts. knitr already sets the

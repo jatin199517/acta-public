@@ -151,6 +151,18 @@ ACTA_app_run_log.tsv
 # be publicly shareable these are a disclosure, not just clutter.
 **/OQ_Test*/Outputs/
 
+# THE RUN PROVENANCE PAIR, which sits at the RUN ROOT and not under Outputs/. Since 3.0.12
+# run_acta() writes these on every run, so they land beside the export -- and for a diagnostic
+# run that is the CASE root, which the **/OQ_Test*/Outputs/ rule above does not reach. Exactly
+# the gap that let a 2_87 LaTeX log carrying an operator's absolute home directory be committed,
+# noted a hundred lines up in this same file. code_dir abbreviates the home prefix, so the
+# content is no longer a disclosure on its own; these stay ignored because they are regenerated
+# output that nobody should be committing either way.
+**/acta_version.tsv
+**/package_versions.tsv
+# validated_packages.tsv is the OQ BASELINE -- an input, tracked on purpose -- and is a different
+# filename, so no negation is needed. Stated because the three look alike at a glance.
+
 # The OQ compensation matrix is an INPUT the diagnostic needs, exactly like the layout workbooks.
 # It is negated EXPLICITLY because it is not this file that excludes it: a user-global
 # core.excludesFile carrying `*.csv` does, silently. Without this line a fresh clone gets no

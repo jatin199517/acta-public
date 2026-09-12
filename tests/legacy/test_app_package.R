@@ -39,8 +39,15 @@ if (is.na(want)) {
 } else if (is.na(have) || !identical(have, want)) {
   skipped <- sprintf("ACTA %s is not installed (found: %s)", want,
                      if (is.na(have)) "none" else have)
+  ## POINT AT Setup.R. This said `R CMD INSTALL %s` -- the last instruction-shaped R CMD INSTALL
+  ## anywhere in the shipped tree after 3.0.11 removed the others, and it carried both of the
+  ## defects they were removed for: stale (Setup.R has installed the package since 3.0.10) and
+  ## broken on Windows, where the R installer leaves the binaries off PATH so the command returns
+  ## "'R' is not recognized". The README-prose gate added in 3.0.11 cannot see runtime strings,
+  ## which is how this one survived it.
   cat(sprintf(paste0("  [skip] %s.\n",
-                     "         Install this checkout first:  R CMD INSTALL %s\n"),
+                     "         Install this checkout first:  run Setup.R in %s\n",
+                     "         (Setup.bat on Windows)\n"),
               skipped, ACTA_REPO_ROOT))
 } else {
   suppressMessages(library(ACTA))
