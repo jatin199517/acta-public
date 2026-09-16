@@ -1919,16 +1919,116 @@ ACTA_PLATE_STROKE_COL <- c(Stain = "#000000", Costain = "#7F7F7F", Unstained = "
 ## attaching, so the default was never going to work here. The second reason is that the fills are
 ## then ours to choose.
 ##
-## Okabe-Ito, which is designed to stay distinguishable under every common colour-vision deficiency.
-## Black and yellow are left out on purpose: black is the Stain ring, and yellow disappears once the
-## alpha floor pales a low-dose well. Hues are assigned in this fixed order and NEVER cycled -- a
-## ninth reagent makes ggplate stop with "more categories than provided colours", which is the right
-## outcome: silently reusing a hue would say two different reagents were the same one.
+## Slots 1-7 are Okabe-Ito, which is designed to stay distinguishable under every common
+## colour-vision deficiency. Black and yellow are left out on purpose: black is the Stain ring, and
+## yellow disappears once the alpha floor pales a low-dose well. Hues are assigned in this fixed
+## order and NEVER cycled -- reusing a hue would say two different compositions were the same one.
+##
+## SIXTEEN, NOT EIGHT, because eight was not enough for a real plate. A panel whose reagents share
+## combined control wells has one well per DISTINCT COMPOSITION, not one per reagent -- a single
+## well holding six reagents is its own category -- and a 13-composition plate is ordinary. At the
+## ninth, ggplate stopped with "more categories in the value column than provided colours", the
+## caller turned that into a warning so a figure could not cost a completed analysis, and the
+## report simply had no plate map in it. The count is capped at 16 in actaPlateFillFor(): past
+## that, colour has stopped being a usable channel and saying so is better than drawing it.
+##
+## SLOT 8 CHANGED, and it is the one break with 3.0. #11A579 was ANOTHER teal-green, 2.2 ΔE from
+## slot 3's #009E73 -- indistinguishable even with full colour vision, so an 8-composition plate
+## already had two categories reading as one. The README tells the operator to check the plate map
+## against what they loaded, which that defeats. Slots 1-7 are byte-identical to 3.0, so any plate
+## with seven or fewer compositions renders exactly as it did.
+##
+## MEASURED with the project's palette validator (OKLab ΔE ×100, all pairs, not just adjacent --
+## a plate is a map, where any two wells can sit side by side):
+##   normal vision  15.4  -- above the 15 floor, so no two of the sixteen are hard to tell apart
+##   simulated CVD   4.3  -- BELOW the 6 floor, and not fixable at sixteen categories
+## The second number is the honest cost of the cap. Sixteen mutually CVD-safe hues do not exist in
+## the usable lightness band; the best any ordering of sixteen achieves here is about 4.3, and the
+## existing slots 1-7 are themselves only 6.4 apart. Colour is therefore a COARSE aid past eight,
+## and identity does not rest on it: plate_plot is called with show_legend = TRUE so every
+## composition is named in the legend, the dose is printed inside each well, and the StainType ring
+## encodes Stain/Costain/Unstained separately. That is the secondary encoding the floor band
+## requires, and it is why this is shipped rather than refused.
 ACTA_PLATE_FILL_COL <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7",
-                         "#E69F00", "#56B4E9", "#7F3C8D", "#11A579")
+                         "#E69F00", "#56B4E9", "#7F3C8D", "#CC00CC",
+                         "#0012EA", "#006633", "#991100", "#00C600",
+                         "#8877FF", "#8800FF", "#CF0063", "#87C690")
+
+## The most colours a plate map will be drawn with. Not a palette length -- a DESIGN LIMIT, stated
+## once so the error can name it.
+ACTA_PLATE_FILL_MAX <- 16L
+
+## The fills for n compositions, or a legible refusal.
+##
+## ggplate's own message ("Please add more colours to the colour argument") is addressed to a
+## programmer, arrives from inside a dependency, and reaches the operator as a warning on a
+## missing figure. Past the cap the answer is not more colours, so say what is actually wrong and
+## what to do about it -- and say it in terms of COMPOSITIONS, which is what the categories are.
+actaPlateFillFor <- function(n) {
+  n <- as.integer(n)
+  if (is.na(n) || n < 1L)
+    stop("Plate map: no well compositions to colour.", call. = FALSE)
+  if (n > ACTA_PLATE_FILL_MAX)
+    stop(sprintf(paste0("Plate map: %d distinct well compositions, and the map is limited to %d. ",
+                        "Past %d, fill colour can no longer tell them apart, so drawing it would ",
+                        "be misleading rather than merely crowded.\n",
+                        "  A composition is one DISTINCT set of reagents in a well, so combined ",
+                        "control wells each count once.\n",
+                        "  Split the plate across PlateIDs in Layout_Plate and the map is drawn ",
+                        "per plate."),
+                n, ACTA_PLATE_FILL_MAX, ACTA_PLATE_FILL_MAX), call. = FALSE)
+  ACTA_PLATE_FILL_COL[seq_len(n)]
+}
 
 actaPlateWellSize <- function(cols = 12L)
   ((ACTA_PLATE_PANEL_IN * 25.4) / cols * ACTA_PLATE_WELL_FRAC) / ACTA_PLATE_FILL_RATIO
+
+## ============ THE FIGURE IS AS TALL AS THE PLATE AND ITS LEGEND NEED ============
+## actaPlateWellSize() derives the well diameter from the panel WIDTH and the column count, and
+## nothing used to check that against the height a row actually gets. A 96-well plate is 12
+## columns wide and 8 rows tall, so a width-derived 16.73 mm well needs 6.20 in of panel to sit on
+## a SQUARE grid -- and the figure was a fixed 7.6 in, of which the legend, title, axes and
+## caption take whatever they take. A 13-composition run measured: legend 2.59 in, panel 5.01 in, row pitch
+## 15.89 mm for a 16.73 mm circle. The wells overlapped by 5%.
+##
+## It was always this close. The same plate with its two pooled Costain wells removed -- 11 short
+## one-line keys instead of 13 keys one of which wraps to five lines -- gets a 2.14 in legend and
+## clears at 0.96. So the margin was 4%, and ANY legend growth spends it. What made it visible was
+## 3.1 letting more than eight compositions draw at all: before that this plate produced no map.
+##
+## SQUARE PITCH IS THE TARGET, not merely "enough to not touch". Matching the row pitch to the
+## column pitch gives the wells the same 0.85 fill fraction on both axes, which is what a plate
+## looks like; sizing to exactly the diameter would leave them touching at fill/pitch 1.00.
+##   required panel height (in) = rows * panel_width (in) / cols
+##
+## MEASURED, NOT ESTIMATED. The non-panel height is read off the laid-out gtable at the real
+## width, because the legend's height depends on how its keys wrap -- which depends on the width
+## and on the label text. Guessing it is what produced a constant that was wrong for one panel.
+## Falls back to the old fixed height if the measurement cannot be taken, and never returns LESS
+## than it, so every plate that renders correctly today is untouched.
+actaPlateFigHeight <- function(p, width = ACTA_PLATE_FIG$width,
+                               rows = attr(p, "acta_plate_rows"),
+                               cols = attr(p, "acta_plate_cols"),
+                               floor_in = ACTA_PLATE_FIG$height) {
+  if (!inherits(p, "ggplot") || is.null(rows) || is.null(cols) ||
+      is.na(rows) || is.na(cols) || cols < 1L) return(floor_in)
+  needPanel <- rows * ACTA_PLATE_PANEL_IN / cols
+  fixed <- tryCatch({
+    ## A null device: this measures a layout, it must not draw anything anywhere.
+    grDevices::pdf(NULL, width = width, height = floor_in)
+    on.exit(grDevices::dev.off(), add = TRUE)
+    g  <- ggplot2::ggplotGrob(p)
+    hs <- g$heights
+    ## The PANEL row is the one in "null" units -- it absorbs whatever is left over, which is
+    ## exactly why it cannot be measured directly and everything else must be.
+    isNull <- vapply(seq_along(hs),
+                     function(i) any(grepl("null", as.character(grid::unitType(hs[i])))),
+                     logical(1))
+    sum(grid::convertHeight(hs[!isNull], "in", valueOnly = TRUE))
+  }, error = function(e) NA_real_)
+  if (!is.finite(fixed)) return(floor_in)
+  max(floor_in, fixed + needPanel)
+}
 
 actaWellTextRadius <- function(cols = 12L) {
   d    <- actaPlateWellSize(cols) * ACTA_PLATE_FILL_RATIO           # rendered fill diameter, mm
@@ -2107,7 +2207,17 @@ make_plate_layout_great_again <- function(metadata, plate = NULL, eln = NULL) {
   ps  <- actaPlateSize(metadata)
   ids <- unique(w$plate)
   if (!is.null(plate)) ids <- ids[ids %in% as.character(plate)]
-  out <- lapply(ids, function(pid) actaPlateMap(w[w$plate == pid, , drop = FALSE], ps, eln))
+  ## THE GEOMETRY TRAVELS WITH THE PLOT. actaPlateFigHeight() needs the row and column counts,
+  ## and a caller holding only the returned ggplot has no way to recover them -- the plot's data
+  ## carries the wells that are USED, not the shape of the plate they sit on.
+  out <- lapply(ids, function(pid) {
+    pm <- actaPlateMap(w[w$plate == pid, , drop = FALSE], ps, eln)
+    if (!is.null(pm)) {
+      attr(pm, "acta_plate_rows") <- ps$rows
+      attr(pm, "acta_plate_cols") <- ps$cols
+    }
+    pm
+  })
   names(out) <- ids
   out[!vapply(out, is.null, logical(1))]
 }
@@ -2154,7 +2264,12 @@ actaPlateMap <- function(w, ps, eln = NULL) {
 
   p <- ggplate::plate_plot(data = w, position = well, value = compo, label = dose,
                            plate_size = ps$size, plate_type = "round", show_legend = TRUE,
-                           colour = ACTA_PLATE_FILL_COL, scale = 1.8, silent = TRUE)
+                           ## EXACTLY as many as there are compositions. Handing ggplate the whole
+                           ## sixteen makes it build a sixteen-key legend for a three-category
+                           ## plate; it colours by position in the vector either way, so the first
+                           ## n are the same colours a shorter vector would have given.
+                           colour = actaPlateFillFor(length(unique(w$compo))),
+                           scale = 1.8, silent = TRUE)
   ## Overwrite every size ggplate derived from the device AND from max_label_length -- layer 1 is the
   ## empty plate frame, 2 the wells, 3 the dose labels. All three, or the frame circles and the
   ## filled wells stop being concentric.
@@ -2214,7 +2329,14 @@ actaPlateMap <- function(w, ps, eln = NULL) {
       plot.caption  = ggplot2::element_text(face = "italic",
                                             size = actaCaptionSize(ACTA_PLATE_FIG$width), hjust = 0),
       legend.position   = "bottom",
-      legend.box        = "horizontal",
+      ## STACKED, NOT SIDE BY SIDE. Horizontally the two guides wanted 9.88 in of a figure that
+      ## has 9.48 in to give once the row labels and margins are taken, so the rightmost key --
+      ## StainType's "Costain" -- was clipped mid-word. It is the guide that explains the rings,
+      ## which is not an optional decoration on a figure whose whole job is to be checked against
+      ## the bench. Stacking gives each guide the full width, and the composition guide is the one
+      ## that grows, so this scales with the number of compositions rather than fighting it.
+      ## The cost is height, which actaPlateFigHeight() now measures rather than assumes.
+      legend.box        = "vertical",
       legend.direction  = "horizontal",
       legend.key.height = ggplot2::unit(1.15, "lines"),
       legend.key.width  = ggplot2::unit(1.0,  "lines"),
@@ -2365,7 +2487,11 @@ writeTitrationExport <- function(df, path, sheet = "TitrationExport",
   idx_primary   <- which(names(df) %in% primary)
   idx_secondary <- setdiff(seq_len(p), idx_primary)
 
-  wb <- openxlsx::createWorkbook()
+  ## creator = "ACTA", EXPLICITLY. openxlsx defaults it to the login name, so every export
+  ## carried <dc:creator> and <cp:lastModifiedBy> holding the operator's account -- their email
+  ## address on a managed machine -- in docProps/core.xml, invisible in Excel's grid and present
+  ## in the file most likely to be emailed to a CRO.
+  wb <- openxlsx::createWorkbook(creator = "ACTA")
   ## Base font first, so anything not explicitly styled (e.g. cells the analyst types into
   ## later) still comes out in the same face and size.
   openxlsx::modifyBaseFont(wb, fontSize = font_size, fontName = font_name)
@@ -5190,23 +5316,29 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
   ## BEST EFFORT, and deliberately after the analysis: a read-only output folder or a sync client
   ## holding a file open must not turn a completed analysis into a failed run. Nothing downstream
   ## reads these, so a failure to write costs the record and not the result.
-  ## NO HOME DIRECTORY IN THE RECORD. code_dir is written into a file that ships beside the
-  ## export -- the README now advertises it as part of the run record, so it travels: attached to
-  ## a validation package, emailed to a CRO. On a managed machine the home directory names the
-  ## operator's ACCOUNT, which here is their email address, and the path below it can name the
-  ## employer and an internal document library. The field exists to prove WHICH CODE ran, and it
-  ## still does with the home prefix abbreviated: an installed package resolves under the R
-  ## library and is unaffected, and two clones under one home are still told apart.
+  ## RECORD WHAT IDENTIFIES THE CODE, NOT WHERE IT SITS. This file ships beside the export and
+  ## the README advertises it as part of the run record, so it travels: attached to a validation
+  ## package, emailed to a CRO. An absolute path discloses the operator's account (on a managed
+  ## machine that IS their email address), the employer, and the internal document library the
+  ## clone sits in. Abbreviating the home prefix to "~" removed only the first of those three,
+  ## which is why it was not enough.
+  ##
+  ## The field's job is to prove WHICH CODE ran, and a STRUCTURAL second component does that -- it
+  ## tells
+  ## `inst/pipeline` (a clone) from `ACTA/pipeline` (an installed package), which is the
+  ## distinction anyone reading this record cares about. WHICH BUILD is answered precisely, and
+  ## better, by the three fields beside it: acta_package_version, acta_script_version and git_sha.
+  ## A directory is the weak identifier of the set anyway -- it is something a person can rename.
   ## <<ACTA_PROVENANCE>>  -- lifted verbatim and EXECUTED by test_app_support.R, which asserts
   ## what it writes. The gate that first covered this greped the file for "acta_version.tsv" and
   ## was satisfied by the OQ's own three copies of that string, so it passed with this whole block
   ## deleted. Thirteenth assertion of that shape found in this codebase. The marker opens ABOVE
-  ## .abbrev deliberately: with the helper outside the block the gate had to stub it, and then
-  ## dropping the .abbrev() call from the code_dir line below still passed.
-  .abbrev <- function(p) {
-    h <- tryCatch(normalizePath("~", mustWork = FALSE), error = function(e) "")
-    if (nzchar(h) && startsWith(p, h)) paste0("~", substring(p, nchar(h) + 1L)) else p
-  }
+  ## .codeLabel deliberately: with the helper outside the block the gate had to stub it, and then
+  ## dropping the call from the code_dir line below still passed.
+  ## ONE HELPER, not a local copy. actaPathLabel() is shared with the OQ stamp, the run log and
+  ## the artefact scan; five of the six former copies of this logic were subtly different and all
+  ## six were inert on Windows.
+  .codeLabel <- function(p) actaPathLabel(p, keep = 2L)
   .prov <- tryCatch({
     .fromPkg <- isNamespace(parent.env(environment()))
     .pkgv <- if (.fromPkg) as.character(utils::packageVersion("ACTA")) else NA_character_
@@ -5220,7 +5352,7 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
                  sprintf("seed\t%s",
                          { v <- pick("ACTA_SEED")
                            if (length(v) == 1L && !is.na(v)) as.character(v) else "NA" }),
-                 sprintf("code_dir\t%s", .abbrev(code_dir)),
+                 sprintf("code_dir\t%s", .codeLabel(code_dir)),
                  sprintf("analysis_complete\t%s", analysis_ok),
                  sprintf("r_version\t%s", R.version.string)),
                file.path(version_dir, "acta_version.tsv"))
@@ -5886,11 +6018,212 @@ actaFirstError <- function(lines) {
 ## failed would defeat the purpose -- and anything matching the leak patterns the sanitisation gate
 ## already uses (`Users/<name>`, email) is masked. The header says the bundle was scrubbed so a
 ## recipient knows what to expect.
+## ============ SAYING WHERE SOMETHING IS WITHOUT SAYING WHOSE MACHINE ============
+## ONE implementation, because there were SIX. `.codeLabel`, `actaDiagScrub`, the run-log's
+## version_dir, `.oqCodeLabel` (a verbatim copy of `.codeLabel`), the OQ artefact scan and the
+## report's session block each resolved "where is the home directory" by hand, each slightly
+## differently. Four security reviews in a row fixed some of them and found the others, which is
+## what a root cause with six faces looks like from the inside.
+##
+## AND ALL SIX WERE WRONG ON WINDOWS, in the same two ways:
+##   * path.expand("~") on Windows resolves to the DOCUMENTS folder, not the profile root, so a
+##     package library under C:/Users/<account>/AppData never matched the prefix being replaced;
+##   * R hands back backslashed paths from some calls and forward-slashed from others, and every
+##     one of the six compared with fixed = TRUE against one form.
+## The platform with a shipped .bat launcher is the platform none of this worked on, and CI runs
+## ubuntu and macOS, so nothing said so.
+actaHomePrefixes <- function() {
+  cand <- c(Sys.getenv("USERPROFILE"), Sys.getenv("HOME"),
+            tryCatch(path.expand("~"), error = function(e) ""),
+            tryCatch(normalizePath("~", mustWork = FALSE), error = function(e) ""))
+  cand <- cand[nzchar(cand)]
+  ## WINDOWS ONLY, and this is the whole Windows fix: ~ is <profile>/Documents there, so the
+  ## profile root -- the parent -- is what a library path actually sits under. Never on POSIX,
+  ## where the parent of the home is /Users or /home and replacing THAT with ~ would be wrong
+  ## for every other user on the machine.
+  if (.Platform$OS.type == "windows") cand <- c(cand, dirname(cand))
+  ## ...but NOT the container itself. dirname() is applied to every candidate, including ones
+  ## already at the profile root, so "C:/Users" and "C:\Users" entered the list -- 8 characters,
+  ## past the length floor. Replacing THAT with ~ turns any colleague's path into
+  ## "~\<their account>", which both hides that it is foreign and defeats the Users/ fallback
+  ## that would otherwise have caught it. The comment above forbids exactly this for POSIX; the
+  ## Windows profile root's parent is the same hazard and was not excluded.
+  cand <- cand[!tolower(basename(gsub("\\", "/", cand, fixed = TRUE))) %in% c("users", "home")]
+  ## Both slash forms, since R is inconsistent about which it returns.
+  cand <- unique(c(cand, gsub("\\", "/", cand, fixed = TRUE),
+                         gsub("/", "\\", cand, fixed = TRUE)))
+  ## A root, a drive letter or a bare separator would match half the filesystem.
+  cand <- cand[nchar(cand) > 4L & !cand %in% c("/", "\\", ".", "..")]
+  ## LONGEST FIRST so the most specific prefix wins: on Windows <profile>/Documents and <profile>
+  ## are both candidates and replacing the shorter one first would leave "~/Documents".
+  unique(cand[order(nchar(cand), decreasing = TRUE)])
+}
+
+## A PATH, REDUCED TO WHAT IDENTIFIES THE CODE OR THE RUN rather than where it lives.
+## `keep = 2` by default: ACTA/pipeline tells an installed package from a clone's inst/pipeline,
+## and MyLab/Run_1 tells two runs apart, which is what these fields are read for. The component
+## before those is the one that named an employer and an internal document library.
+## A component that IS the account is dropped even within the kept tail -- a clone at ~/ACTA has
+## the home basename as its parent, which is how the first version of this leaked.
+## Names that are safe to keep as the SECOND-TO-LAST component of a label.
+##
+## THIS LIST IS THE WHOLE REASON keep = 2 IS SAFE. The penultimate component of a real path is
+## very often an account name -- a home directory one level above a file, in a container that is
+## not literally called Users or home: /data/<acct>/run.log, /nfs/<acct>/plate.xlsx,
+## /export/<acct>/out.tsv. v3.0.12 reduced any path ending in a filename to its BASENAME and so
+## destroyed those; keeping two components published them, which was a regression against what is
+## already public. The structural redaction cannot help, because it recognises only Users/ and
+## home/ -- and no allowlist of container names can be complete.
+##
+## So the question is inverted: instead of asking "is the penultimate an account?", which is
+## undecidable, ask "is it one of the handful of names that make the label MEAN something?". Those
+## exist only because ACTA's own layouts put them there -- ACTA/pipeline from an install,
+## inst/pipeline from a clone -- and that distinction is the only reason the second component was
+## ever wanted. Anything else is dropped.
+ACTA_LABEL_PENULT <- c("ACTA", "inst", "pipeline", "R", "extdata", "Template", "Diagnostics",
+                       "oq_small", "Outputs", "Plots")
+
+## keep = 1 by DEFAULT, which is v3.0.12's behaviour and the safe one. A caller that wants two
+## components has to say so, and gets the second only if it is structural.
+actaPathLabel <- function(p, keep = 1L, penult = ACTA_LABEL_PENULT) {
+  if (!length(p) || is.na(p[1]) || !nzchar(p[1])) return("")
+  q <- gsub("\\", "/", p[1], fixed = TRUE)
+  parts <- Filter(nzchar, strsplit(q, "/", fixed = TRUE)[[1]])
+  if (!length(parts)) return("")
+  ## AN ACCOUNT NAME IS WHATEVER SITS DIRECTLY UNDER Users/ OR home/ -- decided structurally,
+  ## not by listing this machine's own names. The first version compared against the local login
+  ## and the local home basename, so a FOREIGN account in a quoted path came through untouched:
+  ## "C:\Users\jdoe\ACTA" kept jdoe. Diagnostics quote other people's paths all the time.
+  ## Marked BEFORE the tail is taken, because tailing throws away the Users/ that identifies it.
+  .isAcct <- rep(FALSE, length(parts))
+  if (length(parts) > 1L)
+    .isAcct[-1L] <- tolower(parts[-length(parts)]) %in% c("users", "home")
+  .local <- unique(c(basename(gsub("\\", "/", actaHomePrefixes(), fixed = TRUE)),
+                     Sys.info()[["user"]]))
+  .isAcct <- .isAcct | parts %in% .local | tolower(parts) %in% c("users", "home", "documents")
+  n <- length(parts)
+  sel <- seq(max(1L, n - max(1L, keep) + 1L), n)
+  ## Never drop the LAST component -- it is the thing being named. Anything else marked as an
+  ## account or a container goes, which can leave fewer than `keep` components. That is correct:
+  ## a short honest label beats a longer one that names somebody.
+  ##
+  ## UNLESS THE LAST COMPONENT IS ITSELF THE ACCOUNT, which is the case "never drop the last" got
+  ## wrong: a path that TERMINATES at a home directory -- "/Users/<acct>", "C:\Users\<acct>",
+  ## "/home/<acct>" -- has nothing else to name, so the rule emitted the bare account name. In
+  ## actaDiagScrub that was a REGRESSION against 3.0.13, which rendered those as
+  ## "/Users/<redacted>": a diagnostic bundle quoting colleagues' paths published three of their
+  ## account names under a header promising it carried none. Found by a review feeding FOREIGN
+  ## identities, which no fixture here had ever done -- every one ended in a real component.
+  sel <- sel[!.isAcct[sel] | sel == n]
+  if (length(sel) == 1L && .isAcct[sel]) return("<redacted>")
+  ## AND THE PENULTIMATE ONLY IF IT IS STRUCTURAL -- see ACTA_LABEL_PENULT. Applied after the
+  ## account/container marking above, so a component that survived that but is still just
+  ## somebody's directory name does not reach the label.
+  if (length(sel) > 1L) {
+    .drop <- head(sel, -1L)
+    sel <- c(.drop[parts[.drop] %in% penult], tail(sel, 1L))
+  }
+  paste(parts[sel], collapse = "/")
+}
+
+## FREE TEXT -- a log line, a session-info block, a diagnostic bundle. Home prefixes become ~,
+## this machine's name and any e-mail address are masked. Deliberately NOT collapsing paths here:
+## that is actaDiagScrub's job and it has its own rules about what a reader still needs to see.
+actaDeIdentifyText <- function(x) {
+  x <- as.character(x)
+  if (!length(x)) return(x)
+  ## ANCHORED ON A PATH BOUNDARY. fixed = TRUE matched the home prefix as a BARE SUBSTRING, so a
+  ## login that is a PREFIX of another account -- jo/john, chris/christine, dan/daniel, all
+  ## ordinary conventions -- half-rewrote a colleague's path AND destroyed the Users/ marker the
+  ## redaction below matches on: with HOME=/Users/<short>, "/Users/<short>hn/Lab/run.log" came out
+  ## "~hn/Lab/run.log" with the separator eaten. The account fragment survived, the separator was swallowed, and v3.0.12
+  ## rendered the same line correctly -- so it was a regression against what is already public.
+  ## \Q..\E quotes the prefix so a home containing regex metacharacters cannot misbehave.
+  for (h in actaHomePrefixes())
+    x <- gsub(paste0("\\Q", h, "\\E(?=[/\\\\]|$)"), "~", x, perl = TRUE)
+  .node <- tryCatch(Sys.info()[["nodename"]], error = function(e) "")
+  if (nzchar(.node) && nchar(.node) > 3L) x <- gsub(.node, "<redacted-host>", x, fixed = TRUE)
+  gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<redacted-email>", x, perl = TRUE)
+}
+
 actaDiagScrub <- function(lines) {
   x <- as.character(lines)
-  x <- gsub("(/[A-Za-z0-9._ +&-]+)+/([A-Za-z0-9._+-]+\\.[A-Za-z0-9]+)", "\\2", x, perl = TRUE)
-  x <- gsub("Users/[A-Za-z0-9._-]+", "Users/<redacted>", x, perl = TRUE)
-  x <- gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<redacted-email>", x, perl = TRUE)
+  ## THE HOME PREFIX AND THE MACHINE FIRST, via the shared helper, so every form of "home" this
+  ## platform uses is covered -- including the Windows profile root, which is NOT what
+  ## path.expand("~") returns there, and both slash directions. Ordering was the original defect:
+  ## the patterns below reshape the text, and two of them could not see what was in front of them.
+  ##   * `Users/[A-Za-z0-9._-]+` has no `@` in its class, so a login that IS an e-mail address
+  ##     kept its DOMAIN -- the employer survived a pass named for removing it.
+  ##   * the basename pass only rewrites paths ending in a FILENAME, so a bare DIRECTORY came
+  ##     through whole, which is how an internal document library travelled.
+  ##   * and masking the local part first mangled the rest into "<redacted>@<employer>.combook.xlsx".
+  ##
+  ## This matters more than a tidy log: the app tells the operator what this file does and does
+  ## not carry, and they send it on that.
+  x <- actaDeIdentifyText(x)
+  ## ============ REDACT BEFORE ANYTHING LOSSY. THIS ORDER IS THE WHOLE FIX. ============
+  ## These two passes used to run LAST, after the collapse below -- and the collapse destroys the
+  ## `Users/` and `/home/` markers they match on, so by the time they ran there was nothing left
+  ## to recognise. That single ordering mistake produced a finding in three consecutive security
+  ## reviews, each time in a different disguise: a bare account name where a path terminated at a
+  ## home directory, a foreign account surviving a prefix collision, a Windows profile root
+  ## rewritten to look local. Two of those were regressions against the published release.
+  ##
+  ## Reviews five and six fixed the INSTANCE. This fixes the mechanism: structural redaction is
+  ## the safety net, so it runs on text that still has its structure. The local home has already
+  ## become `~` above, which is why this does not undo that -- and everything still under a
+  ## `Users/` or `home/` container after that step belongs to somebody else.
+  ##
+  ## MEASURED, so the claim is the right size: with the ordering correct, disabling
+  ## actaPathLabel's own account redaction still leaves the property grid clean -- this pass is
+  ## sufficient by itself. Disabling BOTH leaks 160 of 960 combinations. They are two independent
+  ## defences and either holds alone; this is the one that survives a change to the collapse.
+  ##
+  ## The Windows form is here too. It was absent, so `C:\Users\<account>` had no fallback at all.
+  ## THE CONTAINER IS NOT AN ACCOUNT. Without the lookahead, a doubled container matched at
+  ## the FIRST container, consumed the SECOND as if it were the account name, and left the real one
+  ## downstream untouched -- gsub does not reconsider text it has already replaced. The property
+  ## grid found this immediately, which is the argument for a grid: nobody writes that fixture.
+  ## UNICODE-AWARE. The class was [A-Za-z0-9._@%+-], so an account containing anything else --
+  ## an apostrophe (O'Brien), parentheses, or any accented or non-Latin letter (elise with an
+  ## acute, Muller, Renee, Soren, Lukasz) -- defeated this redaction AND the collapse below,
+  ## which then matched only the trailing segment and glued it onto the surviving prefix:
+  ## "/Users/<accented>/Library/TinyTeX/texmf" came out "/Users/<accented>TinyTeX/texmf".
+  ## A global company has those names. Whitespace stays OUT: the collapse handles "John Smith",
+  ## and admitting space here would let the replacement eat the prose after the path.
+  ## PROSE DELIMITERS ARE NOT PART OF A NAME. Widening this to "anything but a separator or
+  ## space" made it swallow the punctuation that ENDS a path inside a sentence, and the collapse
+  ## (space is in its class) then ate the rest of the line: "/Users/<acct>: Permission denied"
+  ## became bare "<redacted>", and setwd("/Users/<acct>") lost the quote, the paren and the
+  ## message after it. That is the FIRST ERROR section of the bundle -- the one field it exists
+  ## for -- so over-redaction here costs the diagnostic, which is a different failure from a leak
+  ## but still a failure, and it was strictly worse than the release before it.
+  ##
+  ## THE COMMA STAYS IN, deliberately. An account written "Surname,Given" would otherwise match
+  ## only as far as the comma and leave the given name standing -- an over-redaction traded for a
+  ## leak.
+  ## A colon cannot appear in a POSIX filename and on Windows only follows a drive letter, so
+  ## excluding it is free; quotes and closing brackets are punctuation no account name carries.
+  .acct <- "(?!Users[/\\\\]|home[/\\\\])[^/\\\\[:space:]:;\"\\]}]+"
+  x <- gsub(sprintf("(?i)(Users[/\\\\])%s", .acct), "\\1<redacted>", x, perl = TRUE)
+  x <- gsub(sprintf("(?i)(home[/\\\\])%s", .acct), "\\1<redacted>", x, perl = TRUE)
+
+  ## A DIRECTORY IS COLLAPSED TOO, to its basename. Reducing only paths that end in a
+  ## filename left "~/Library/CloudStorage/OneDrive-SharedLibraries-<Employer>/<Library>/Flow"
+  ## intact -- the account gone and everything that named the organisation still there. Two
+  ## The basename, not two components: the penultimate is very often somebody's home directory.
+  x <- vapply(x, function(one) {
+    ## SAME UNICODE WIDENING as .acct, for the same reason -- and space is kept IN here, which is
+    ## what makes a two-word account name collapse cleanly rather than leaving its second word.
+    m <- gregexpr("(?:~|(?:[A-Za-z]:)?)(?:[/\\\\][\\p{L}\\p{N}._ +&@<>'()-]+){2,}", one, perl = TRUE)
+    ## keep = 1: the BASENAME, which is what v3.0.12 did and what the bundle header promises.
+    ## Keeping two components here is what published /data/<acct>/run.log as "<acct>/run.log".
+    regmatches(one, m) <- list(vapply(regmatches(one, m)[[1]], actaPathLabel, character(1),
+                                      keep = 1L, USE.NAMES = FALSE))
+    one
+  }, character(1), USE.NAMES = FALSE)
+  ## The account redaction is ABOVE, deliberately -- see the block comment there. Running it here,
+  ## after the collapse, is exactly the bug that three reviews kept finding.
   x
 }
 
@@ -5936,8 +6269,13 @@ actaDiagnosticBundle <- function(work_dir, version_dir, run_log = NA_character_,
            sprintf("layout         : %s", if (!is.na(layout)) basename(layout) else "unknown"),
            sprintf("layout_md5     : %s", if (!is.na(layout) && file.exists(layout))
                                             unname(tools::md5sum(layout)) else "unknown"),
-           "paths reduced to basenames; usernames and emails masked. NOT a substitute for the",
-           "workbook, which is never included -- it is proprietary.", "")
+           ## SAY WHAT THE SCRUB ACTUALLY DOES. This read "paths reduced to basenames; usernames
+           ## and emails masked", which was false in the case that matters: a login that is an
+           ## e-mail address had only its local part masked, so the employer's domain travelled
+           ## inside a file the app tells you to send. The claim is now the behaviour.
+           "Scrubbed: your home directory appears as ~, other absolute paths are reduced to",
+           "their filename, and e-mail addresses and this machine's name are masked.",
+           "NOT a substitute for the workbook, which is never included -- it is proprietary.", "")
   out <- c(out, sec("FIRST ERROR", if (inherits(first, "try-error")) first
                     else if (nzchar(first)) strsplit(first, "\n")[[1]] else character(0)))
   out <- c(out, sec("RUN LEDGER rows for this run",
@@ -5978,7 +6316,10 @@ actaDiagnosticBundle <- function(work_dir, version_dir, run_log = NA_character_,
 }
 
 actaRunLogAppend <- function(log_path, entry) {
-  cols <- c("timestamp","user","host","action","outcome","elapsed_s","version_dir","script",
+  ## `operator`/`platform` replaced `user`/`host` in 3.0.14. THIS LIST IS WHY THAT MATTERED: the
+  ## row is selected from the entry BY NAME, so leaving the old names here would have silently
+  ## written two empty columns and dropped the new values -- a rename that looks done and is not.
+  cols <- c("timestamp","operator","platform","action","outcome","elapsed_s","version_dir","script",
             "script_version","seed","layout","layout_md5","report","plots","titer_edited",
             "outputs","detail")
   row <- as.list(entry)[cols]
@@ -5986,6 +6327,21 @@ actaRunLogAppend <- function(log_path, entry) {
   row <- lapply(row, function(v) if (is.null(v) || !length(v)) "" else
                   gsub("[\t\r\n]", " ", paste(as.character(v), collapse = "; ")))
   new <- !file.exists(log_path)
+  ## AN EXISTING LOG FROM BEFORE THE RENAME IS A DIFFERENT TABLE. Appending to it would put
+  ## operator under a column headed `user` and platform under `host` -- positionally fine, labelled
+  ## wrongly, and wrong in the direction that matters: a reader would believe the OS account is in
+  ## there. The old file is moved aside intact rather than rewritten or appended to, so nothing is
+  ## lost and nothing is mislabelled. Best effort: if the move fails the append still proceeds,
+  ## because losing a ledger row is worse than a stale header.
+  if (!new) {
+    .hdr <- tryCatch(readLines(log_path, n = 1L, warn = FALSE), error = function(e) character(0))
+    if (length(.hdr) == 1L && !identical(trimws(.hdr), paste(cols, collapse = "\t"))) {
+      .aside <- sub("[.]tsv$", "", log_path)
+      .aside <- sprintf("%s.pre-%s.tsv", .aside, format(Sys.Date(), "%Y%m%d"))
+      if (isTRUE(tryCatch(file.rename(log_path, .aside), error = function(e) FALSE, warning = function(w) FALSE)))
+        new <- TRUE
+    }
+  }
   if (new) dir.create(dirname(log_path), recursive = TRUE, showWarnings = FALSE)
   con <- file(log_path, open = "at", encoding = "UTF-8")
   on.exit(close(con))
@@ -5996,11 +6352,30 @@ actaRunLogAppend <- function(log_path, entry) {
 actaRunLogEntry <- function(action, outcome, version_dir, res = NULL, layout = NA_character_,
                             report = NA, plots = NA, titer_edited = FALSE,
                             outputs = character(0), detail = "") {
+  ## NEITHER THE OS ACCOUNT NOR THE MACHINE'S NAME. This recorded
+  ## user = Sys.info()[["user"]] and host = Sys.info()[["nodename"]] -- on a managed machine the
+  ## operator's e-mail address and a hostname derived from it -- once per row, on every app
+  ## action, in a file that sits in the WORKING FOLDER beside Outputs/. So zipping a run folder
+  ## as a validation package carried it, and the Outputs/ identity scan structurally could not
+  ## see it because it scans Outputs/.
+  ##
+  ## `operator` comes from the workbook the same way the report's attribution does: curated,
+  ## already required by the pre-flight, and the answer to the question this column was asking.
+  ## `platform` replaces the hostname, which was never the useful half of that pair.
+  .op <- tryCatch({
+    v <- unique(res$stats$Operator)
+    v <- v[!is.na(v) & nzchar(v)]
+    if (length(v)) paste(v, collapse = ", ") else ""
+  }, error = function(e) "")
   list(timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-       user = unname(Sys.info()[["user"]]), host = unname(Sys.info()[["nodename"]]),
+       operator = .op, platform = unname(Sys.info()[["sysname"]]),
        action = action, outcome = outcome,
        elapsed_s = if (!is.null(res)) round(res$elapsed_s, 1) else "",
-       version_dir = version_dir,
+       ## The run folder, named the way the provenance record names the code folder -- enough to
+       ## tell two runs apart, not enough to locate anyone.
+       ## The run folder, labelled by the shared helper -- enough to tell two runs apart, not
+       ## enough to locate anyone, and correct on Windows, which the hand-rolled copy was not.
+       version_dir = actaPathLabel(version_dir, keep = 2L),
        script = if (!is.null(res)) res$script else "",
        script_version = if (!is.null(res)) res$script_version else "",
        seed = if (!is.null(res)) res$seed else "",
@@ -6433,7 +6808,8 @@ actaOQStageOutOfLibrary <- function(oq_dir, dest_parent = file.path(tempdir(), "
   list(dir = normalizePath(dest, mustWork = TRUE), staged = TRUE, baseline = okBase)
 }
 
-actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible(), code_dir = NULL) {
+actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible(), code_dir = NULL,
+                      work_dir = NULL) {
   oq_dir <- normalizePath(oq_dir, mustWork = TRUE)
   .st <- actaOQStageOutOfLibrary(oq_dir)
   if (!identical(.st$dir, oq_dir)) {
@@ -7049,10 +7425,9 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## every run records, and it wrote code_dir unabbreviated while run_acta had just abbreviated
   ## it -- and an OQ Outputs/ folder is the artefact most likely to be sent outside, since it is
   ## what a validation package is made of.
-  .oqAbbrev <- function(p) {
-    h <- tryCatch(normalizePath("~", mustWork = FALSE), error = function(e) "")
-    if (nzchar(h) && startsWith(p, h)) paste0("~", substring(p, nchar(h) + 1L)) else p
-  }
+  ## The same helper the provenance record uses. This was a verbatim copy of .codeLabel, which
+  ## is how the two drifted apart at every fix.
+
   .seed <- tryCatch({
     v <- res$seed
     if (length(v) == 1L && !is.na(v)) as.character(v) else "NA"
@@ -7061,13 +7436,13 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
       sprintf("package %s; script %s%s; code from %s",
               if (is.na(.av)) "sourced, not installed" else .av,
               if (!is.null(.sv))                                 .sv          else "unknown",
-              if (is.na(.sha)) "" else sprintf("; git %s", .sha), .oqAbbrev(.cd)))
+              if (is.na(.sha)) "" else sprintf("; git %s", .sha), actaPathLabel(.cd, keep = 2L)))
   tryCatch(writeLines(c(sprintf("acta_package_version\t%s", if (is.na(.av)) "NA" else .av),
                         sprintf("acta_script_version\t%s",
                                 if (!is.null(.sv))                                 .sv          else "NA"),
                         sprintf("git_sha\t%s", if (is.na(.sha)) "NA" else .sha),
                         sprintf("seed\t%s", .seed),
-                        sprintf("code_dir\t%s", .oqAbbrev(.cd)),
+                        sprintf("code_dir\t%s", actaPathLabel(.cd, keep = 2L)),
                         sprintf("r_version\t%s", R.version.string)),
                       file.path(outDir, "acta_version.tsv")),
            error = function(e) invisible(NULL))
@@ -7194,6 +7569,161 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   } else add("dashboard", "Dashboard written", "skip", "no dashboard generator in the folder")
   want("dashboard_rows", "Dashboard: row count for this case", dashRows, "dashboard_rows")
 
+  ## RUN LAST, which is the whole point. Placed before collection, outDir was still almost empty
+  ## and the scan reported `pass` with all four leaks restored -- every mutation passed, which is
+  ## how it was caught. Moved after collection it still missed two, because the DASHBOARD is
+  ## generated further down and log.txt is written inside actaOQFinish below. So it sits here, at
+  ## the last point where a record can still be added. A check has to run at the moment its
+  ## subject exists, and "after the thing I was thinking about" is not that moment.
+  ## ============ DOES THIS RUN'S OUTPUT NAME THE PERSON WHO RAN IT ============
+  ## Added 3.0.14 after a review found that fixing code_dir had fixed one leak out of five. The
+  ## SAME Outputs/ folder was writing "Rendered by: <account> on <account>-Mac" onto the report's
+  ## provenance page, <dc:creator> holding the account in the export's docProps, the absolute scan
+  ## root inside a dashboard the README says you can email, and an account-derived hostname into
+  ## log.txt. Four separate writers, none of them gated, three travelling further than the file
+  ## that had just been cleaned.
+  ##
+  ## So the check is on the ARTEFACTS, not on any one writer: whatever a future change adds to
+  ## Outputs/ is scanned too. The OQ is where it belongs -- it is the run that produces a full set
+  ## of artefacts and its whole job is to report what the run did.
+  ##
+  ## TWO SEVERITIES, deliberately. An absolute HOME PATH or the machine's NODENAME is never
+  ## legitimate output -- fail. The bare login NAME is a warn, because a lab may quite reasonably
+  ## have typed it into Layout_Plate's Operator column, which is curated content this must not
+  ## second-guess: attribution belongs in a validation report, the OS login just is not the source.
+  ## <<ACTA_IDENTITY_SCAN>>  -- lifted verbatim and EXECUTED by test_app_support.R, which
+  ## plants a leak in each of the three roots and asserts the scan finds it. A full OQ run
+  ## costs a minute of FCS gating to exercise a file sweep; the block needs only outDir and
+  ## work_dir, so it is driven directly -- the same marked-block technique the provenance write
+  ## uses. NOTE: do not spell that other marker here. Writing it in prose made the provenance
+  ## test's own marker grep find TWO matches and fail its "exactly one" check, on a correct tree.
+  ## A comment naming a sentinel becomes a sentinel.
+  .idScan <- tryCatch({
+    ## EVERY form of home this platform uses, not one guess at it -- the Windows profile root is
+    ## not what path.expand("~") returns, and both slash directions occur.
+    .hp   <- actaHomePrefixes()
+    .node <- Sys.info()[["nodename"]]
+    .user <- Sys.info()[["user"]]
+    .texts <- function(f) {
+      if (grepl("[.]xlsx$", f)) {
+        ## docProps/core.xml is where openxlsx puts the creator, and nobody looks in a zip.
+        unlist(lapply(c("docProps/core.xml", "docProps/app.xml"), function(part)
+          tryCatch(readLines(unz(f, part), warn = FALSE), error = function(e) character(0))))
+      } else if (grepl("[.](tsv|txt|html|json|csv|md|log|tex|aux|out|toc|xml|yml|yaml|Rmd|R)$", f)) {
+        ## .log AND .tex ARE THE POINT OF THIS LIST. run_acta() deliberately copies both beside
+        ## the run's artefacts when a render fails, and a LaTeX .log is the exact artefact this
+        ## repository's .gitignore commemorates for having carried an operator's absolute home
+        ## directory on every line in 2_87. The original allowlist covered six extensions and
+        ## missed those two, so the file type most likely to hold a path was the one not read.
+        tryCatch(readLines(f, warn = FALSE), error = function(e) character(0))
+      } else if (grepl("[.]pdf$", f)) {
+        ## REAL TEXT WHEN pdftools IS THERE. A byte scan of a PDF sees nothing useful -- the text
+        ## sits inside FlateDecode streams -- so restoring the report's "Rendered by" line passed
+        ## this scan while the address was plainly on page 1. pdftools inflates it properly.
+        ## It is NOT a dependency and is not being made one: absent, this falls back to the raw
+        ## bytes and the report's own writer is held by an exact source assertion in
+        ## test_app_support.R instead. Guarded, so a machine without it still gets a clean run.
+        if (requireNamespace("pdftools", quietly = TRUE))
+          tryCatch(pdftools::pdf_text(f), error = function(e) character(0))
+        else
+          tryCatch(suppressWarnings(rawToChar(readBin(f, "raw", file.size(f)), multiple = FALSE)),
+                   error = function(e) character(0))
+      } else character(0)
+    }
+    ## EVERYTHING ACTA WROTE, NOT JUST Outputs/. ACTA_app_run_log.tsv sits in the WORKING folder
+    ## beside Outputs/, so a scan rooted at outDir structurally could not see it -- and zipping a
+    ## run folder as a validation package carries it. Named patterns rather than the whole folder:
+    ## the run folder also holds the operator's own inputs, and the workbook's Operator column is
+    ## curated content this must not second-guess.
+    ## WHERE ACTA WRITES, WHICH IS THREE PLACES AND NOT ONE.
+    ##   * Outputs/, the collected artefacts;
+    ##   * the RUN folder above it, where a loose export or a failed render's .log lands;
+    ##   * and the APP's working folder, which is a DIFFERENT directory again -- the app writes
+    ##     ACTA_app_run_log.tsv to WORK_DIR, while a diagnostic case is always a SUBdirectory of
+    ##     some root, so dirname(outDir) is the case folder and never WORK_DIR. The sweep added
+    ##     last release was rooted there and matched ZERO files in a real run, which is why
+    ##     `work_dir` is now an argument the app passes rather than something inferred.
+    .roots <- unique(c(dirname(outDir),
+                       if (!is.null(work_dir) && length(work_dir) == 1L && !is.na(work_dir) &&
+                           nzchar(work_dir) && dir.exists(work_dir))
+                         normalizePath(work_dir, mustWork = FALSE)))
+    fs <- c(list.files(outDir, recursive = TRUE, full.names = TRUE),
+            list.files(.roots, full.names = TRUE, pattern = paste(
+              c("^ACTA_app_run_log.*[.]tsv$", "^acta_version[.]tsv$", "^package_versions[.]tsv$",
+                "TitrationExport.*[.]xlsx$", "^ACTA_Report.*[.](pdf|log|tex)$",
+                "[Dd]ashboard.*[.]html$"), collapse = "|")))
+    fs <- unique(fs[!is.na(fs) & file.exists(fs) & !dir.exists(fs)])
+    ## WHAT IT COULD NOT READ, said out loud. The reader is an extension allowlist and anything
+    ## unlisted returned character(0) -- indistinguishable from "read it, found nothing". A future
+    ## artefact in a new format would have been silently exempt from the whole check.
+    .unread <- unique(sub("^.*[.]", "", basename(fs)[
+      !grepl("[.](tsv|txt|html|json|csv|md|log|tex|aux|out|toc|xml|yml|yaml|Rmd|R|xlsx|pdf)$", fs)]))
+    hits <- list(path = character(0), node = character(0), user = character(0),
+                 meta = character(0))
+    for (f in fs) {
+      tx <- .texts(f); if (!length(tx)) next
+      if (length(.hp) && any(vapply(.hp, function(p) any(grepl(p, tx, fixed = TRUE)),
+                                    logical(1)))) hits$path <- c(hits$path, basename(f))
+      if (nzchar(.node) && any(grepl(.node, tx, fixed = TRUE))) hits$node <- c(hits$node, basename(f))
+      if (nzchar(.user) && any(grepl(.user, tx, fixed = TRUE))) {
+        ## WHERE the login name appears decides whether it can be innocent. In a workbook's
+        ## docProps it is never curated -- openxlsx wrote it from the OS, which is the defect
+        ## itself -- so that is fatal. In a text artefact it may be the Operator the lab typed
+        ## into Layout_Plate, which is exactly the attribution a validation report should carry.
+        if (grepl("[.]xlsx$", f)) hits$meta <- c(hits$meta, basename(f))
+        else                      hits$user <- c(hits$user, basename(f))
+      }
+    }
+    hits$unread <- .unread
+    hits
+  }, error = function(e) NULL)
+  ## <</ACTA_IDENTITY_SCAN>>
+  ## PNG and FCS are binary and carry no text this could read; naming them every run would be
+  ## noise. Anything ELSE unread is worth a line, because it means the scan met a format nobody
+  ## taught it and stayed quiet.
+  .unreadNote <- function(h) {
+    u <- setdiff(h$unread, c("png", "fcs", "PNG", "FCS"))
+    if (!length(u)) "" else sprintf("; NOT read (no reader for this type): %s",
+                                    paste(u, collapse = ", "))
+  }
+  if (is.null(.idScan)) {
+    add("no_identity", "No output names the operator or the machine", "skip",
+        "the artefact scan could not run")
+  } else {
+    .fatal <- c(if (length(.idScan$path)) sprintf("absolute home path in %s",
+                                                  paste(unique(.idScan$path), collapse = ", ")),
+                if (length(.idScan$node)) sprintf("machine name in %s",
+                                                  paste(unique(.idScan$node), collapse = ", ")),
+                if (length(.idScan$meta)) sprintf("login name in the file metadata of %s",
+                                                  paste(unique(.idScan$meta), collapse = ", ")))
+    ## THE WARN BRANCH THE COMMENT ABOVE PROMISED. It said "two severities, deliberately" and the
+    ## code read `if (length(.fatal)) "fail" else "pass"` -- so an artefact carrying the login and
+    ## nothing else recorded PASS with the finding buried in a detail string on a green line. A
+    ## comment describing a severity the code does not implement is the same defect as a gate that
+    ## cannot fail, one layer up.
+    add("no_identity", "No output names the operator or the machine",
+        if (length(.fatal)) "fail"
+        else if (length(.idScan$user) ||
+                 length(setdiff(.idScan$unread, c("png", "fcs", "PNG", "FCS")))) "warn"
+        else "pass",
+        if (length(.fatal))
+          paste0(paste(.fatal, collapse = "; "),
+                 " -- these files travel (validation packages, e-mail), so they must not locate anyone")
+        ## THE LIMITS, STATED. log.txt is written by actaOQFinish after this runs, and PDF text
+        ## lives in compressed streams that this does not inflate -- so a plain byte scan cannot
+        ## see a provenance line typeset into the report. Those two writers are held by exact
+        ## source assertions in test_app_support.R instead. Saying so here keeps the record from
+        ## claiming more than it checked.
+        else if (length(.idScan$user))
+          sprintf(paste0("clean of paths and machine names; the login name also appears in %s, ",
+                         "which is fine if it is the declared Operator%s"),
+                  paste(unique(.idScan$user), collapse = ", "), .unreadNote(.idScan))
+        else if (length(.idScan$unread))
+          sprintf("clean%s", .unreadNote(.idScan))
+        else NA_character_)
+  }
+
+
   actaOQFinish(oq_dir, outDir, recs, proc.time()[["elapsed"]] - t0, exp)
 }
 
@@ -7210,7 +7740,10 @@ actaOQFinish <- function(oq_dir, outDir, recs, elapsed, exp) {
           sprintf("run at      : %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
           sprintf("elapsed     : %.0f s", elapsed),
           sprintf("R           : %s", R.version.string),
-          sprintf("machine     : %s / %s", Sys.info()[["sysname"]], Sys.info()[["nodename"]]),
+          ## PLATFORM, NOT THE MACHINE'S NAME. nodename is derived from the account on a
+          ## managed Mac -- "<account>-Mac" -- so this line put the operator's email address in
+          ## the OQ log, which IS the validation package. The platform is what the log is for.
+          sprintf("machine     : %s / %s", Sys.info()[["sysname"]], Sys.info()[["machine"]]),
           if (!is.null(exp$description)) sprintf("case        : %s", exp$description),
           "",
           sprintf("%-6s %-40s %s", "RESULT", "CHECK", "DETAIL"),

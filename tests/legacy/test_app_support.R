@@ -725,14 +725,15 @@ local({
   dest <- file.path(tempdir(), "acta_prov_gate"); unlink(dest, recursive = TRUE)
   dir.create(dest, recursive = TRUE, showWarnings = FALSE)
   e <- new.env(parent = environment(h$run_acta))   # so actaPackageVersions resolves as it does live
-  ## code_dir is deliberately UNDER THE HOME, so the abbreviation has something to do and the
-  ## written value proves it ran. Stubbing .abbrev here, as the first version did, let the
-  ## .abbrev() call be dropped from the code_dir line with this gate still green.
+  ## code_dir is deliberately a DEEP ABSOLUTE PATH under the home, so that recording it verbatim
+  ## would be visibly wrong and the label has something to strip. Stubbing the helper here, as an
+  ## earlier version did, let the call be dropped from the code_dir line with this gate green.
   .home <- normalizePath("~", mustWork = FALSE)
-  assign("code_dir",    file.path(.home, "clone", "inst", "pipeline"), envir = e)
+  assign("code_dir",    file.path(.home, "SomeInternalLibrary", "clone", "inst", "pipeline"),
+         envir = e)
   assign("version_dir", dest,             envir = e)
   assign("analysis_ok", TRUE,             envir = e)
-  assign("pick", function(nm) switch(nm, ScriptVersion = "3_0", ACTA_SEED = 123L, NULL), envir = e)
+  assign("pick", function(nm) switch(nm, ScriptVersion = "3_1", ACTA_SEED = 123L, NULL), envir = e)
   eval(parse(text = paste(src[(i0 + 1L):(i1 - 1L)], collapse = "\n")), envir = e)
 
   chk("...and it reports having written them", isTRUE(get(".prov", envir = e)))
@@ -750,12 +751,19 @@ local({
       chk(sprintf("...recording %s", k), k %in% keys)
     chk("...and the seed is the value the script actually set, not a placeholder",
         identical(kv[match("seed", keys), 2], "123"))
-    chk("...and the script version it ran", identical(kv[match("acta_script_version", keys), 2], "3_0"))
+    chk("...and the script version it ran", identical(kv[match("acta_script_version", keys), 2], "3_1"))
     ## THE VALUE AS WRITTEN. This file travels -- attached to a validation package, emailed to a
-    ## CRO -- and on a managed machine the home directory names the operator's account, which is
-    ## their email address. Asserted on the recorded line, not on the helper in isolation.
-    chk("...with the operator's home abbreviated out of the recorded path",
-        identical(kv[match("code_dir", keys), 2], file.path("~", "clone", "inst", "pipeline")))
+    ## CRO -- and an absolute path discloses the operator's account (their email address on a
+    ## managed machine), the employer, and the internal library the clone sits in. Only the last
+    ## two components are recorded; WHICH BUILD is answered by the version and git_sha fields.
+    ## Asserted on the recorded line, not on the helper in isolation.
+    .cdRec <- kv[match("code_dir", keys), 2]
+    chk("...recording the code by its last two path components",
+        identical(.cdRec, file.path("inst", "pipeline")))
+    ## The point of the change, stated as its own claim: nothing locating the operator survives.
+    chk("...so no absolute path, home directory or internal folder name reaches the record",
+        !grepl("^[/~]", .cdRec) && !grepl(.home, .cdRec, fixed = TRUE) &&
+          !grepl("SomeInternalLibrary", .cdRec, fixed = TRUE))
   }
   if (file.exists(pvf)) {
     t <- utils::read.delim(pvf, stringsAsFactors = FALSE)
@@ -765,11 +773,14 @@ local({
   }
   unlink(dest, recursive = TRUE)
 
-  ## And the converse: a path OUTSIDE the home -- an installed package under the R library, which
-  ## is the common case -- must be recorded whole, or the field stops identifying the code.
-  chk("...while a path outside it, such as an R library, is left alone",
-      identical(get(".abbrev", envir = e)("/Library/Frameworks/R.framework/Resources/library/ACTA/pipeline"),
-                "/Library/Frameworks/R.framework/Resources/library/ACTA/pipeline"))
+  ## And the label must still SAY SOMETHING: an install and a clone have to be distinguishable,
+  ## because that is the one thing a reader of this field actually asks.
+  .lab <- get(".codeLabel", envir = e)
+  chk("an installed package is recorded as ACTA/pipeline",
+      identical(.lab("/Library/Frameworks/R.framework/Resources/library/ACTA/pipeline"),
+                file.path("ACTA", "pipeline")))
+  chk("...and a clone as inst/pipeline, so the two are told apart",
+      identical(.lab("/anywhere/at/all/inst/pipeline"), file.path("inst", "pipeline")))
 })
 
 ## ---------------------------------------------------------------------------------------------
@@ -815,8 +826,178 @@ local({
   ## package is actually made of.
   chk("the OQ stamp records the seed, like run_acta's does",
       any(grepl('sprintf("seed\\t%s", .seed)', oq, fixed = TRUE)))
-  chk("...and abbreviates the home out of its code_dir too",
-      any(grepl('sprintf("code_dir\\t%s", .oqAbbrev(.cd))', oq, fixed = TRUE)))
+  ## THE SHARED HELPER, not a local copy. .oqCodeLabel was a verbatim duplicate of run_acta's
+  ## .codeLabel and the two drifted at every fix; both are actaPathLabel() now.
+  chk("...and records its code_dir through the shared path label, not an absolute path",
+      any(grepl('sprintf("code_dir\\t%s", actaPathLabel(.cd, keep = 2L))', oq, fixed = TRUE)))
+})
+
+
+## ---------------------------------------------------------------------------------------------
+## NO WRITER PUTS THE OPERATOR'S IDENTITY INTO AN ARTEFACT.
+## 3.0.13 cleaned code_dir out of the provenance record and a review found that was one leak of
+## five: the SAME Outputs/ folder was writing "Rendered by: <account> on <account>-Mac" onto the
+## report's provenance page, the login into the export's docProps via openxlsx's default creator,
+## the absolute scan root into a dashboard the README says you can email, and an account-derived
+## hostname into log.txt. On a managed machine the account IS an email address, so three artefacts
+## that travel further than the one being fixed named the operator outright.
+##
+## The OQ now scans its own Outputs/ for those strings, which is the general check. It cannot see
+## two of the four: log.txt is written after the last point a record can be added, and PDF text
+## lives in compressed streams a byte scan does not inflate. Those are held HERE, by exact match
+## on the writer. This is the weaker kind of assertion -- it proves the code says the right thing,
+## not that the output is clean -- and it will false-positive on a reflow. It is the only thing
+## that reaches those two writers without adding a poppler dependency.
+cat("\n=== no writer names the operator or the machine ===\n")
+local({
+  rmd <- list.files(ACTA_VERSION_DIR, pattern = "^ACTA_Report.*[.]Rmd$", full.names = TRUE)
+  dsh <- list.files(ACTA_VERSION_DIR, pattern = "^ACTA_Dashboard.*[.]R$", full.names = TRUE)
+  src <- unlist(lapply(actaTestFunctionsFiles(vd), readLines, warn = FALSE))
+  code <- src[!grepl("^\\s*##", src)]
+
+  if (length(rmd)) {
+    rl <- readLines(rmd[1], warn = FALSE); rl <- rl[!grepl("^\\s*##", rl)]
+    ## The PDF is the artefact that travels furthest and the one a tutorial viewer sees on screen.
+    chk("the report does not typeset the OS login or the machine name",
+        !any(grepl('Sys.info()[["user"]]', rl, fixed = TRUE)) &&
+          !any(grepl('Sys.info()[["nodename"]]', rl, fixed = TRUE)))
+    ## Attribution is NOT removed -- a validation report should say who ran the work. What changed
+    ## is the source: Layout_Plate's Operator column, which the lab curates and the pre-flight
+    ## already requires.
+    chk("...and names the DECLARED operator from the workbook instead",
+        any(grepl("stats$Operator", rl, fixed = TRUE)))
+  }
+  if (length(rmd)) {
+    rl2 <- readLines(rmd[1], warn = FALSE); rl2 <- rl2[!grepl("^\\s*##", rl2)]
+    ## THE SESSION BLOCK, which had no gate at all. Deleting the de-identification here left the
+    ## whole suite 16/16 green -- the reviewer proved it -- and the only backstop, the OQ artefact
+    ## scan, is INERT on a system-wide R library. That is this machine and both CI runners, which
+    ## is precisely why the leak survived to 3.0.13: session_info() prints .libPaths(), and on a
+    ## normal user-level install those sit under the home.
+    chk("the report de-identifies its session-info block rather than printing it raw",
+        any(grepl("actaDeIdentifyText(utils::capture.output(print(sessioninfo::session_info())))",
+                  rl2, fixed = TRUE)))
+    ## THE PAGE HEADER, likewise ungated. It read "Developed Inc." from 2_96 to 3.0.13 -- a
+    ## word-level scrub deleted the company name and left the fragment -- in the top-right of
+    ## every page of every PDF, through six public releases. Reverting it also left the suite
+    ## green. Asserted on the string because that is the whole of the defect.
+    ## THE HEADER LINE ITSELF. Matching the phrase anywhere in the file was satisfied by the
+    ## YAML title near the top, so deleting it from the \ps@acta header left the suite green --
+    ## and only the literal return of the old fragment was detected. A re-mangling by another
+    ## word-level scrub, which is exactly how this defect arose in 2_96, would have passed.
+    .hdr <- grep("ps@acta", rl2, fixed = TRUE, value = TRUE)
+    chk("...and its page header reads as something intentional",
+        length(.hdr) > 0L && any(grepl("Anybody Can Titrate Antibody", .hdr, fixed = TRUE)) &&
+          !any(grepl("Developed Inc.", rl2, fixed = TRUE)))
+  }
+  if (length(dsh)) {
+    dl <- readLines(dsh[1], warn = FALSE); dl <- dl[!grepl("^\\s*##", dl)]
+    chk("the dashboard records the scan folder's name, not its absolute path",
+        any(grepl("root      = basename(scanDir)", dl, fixed = TRUE)) &&
+          !any(grepl("root      = scanDir", dl, fixed = TRUE)))
+  }
+  ## openxlsx defaults creator to the login name, so this has to be explicit. docProps is
+  ## invisible in Excel's grid, which is why it went unnoticed.
+  chk("the titration export sets its own creator rather than taking the login name",
+      any(grepl('openxlsx::createWorkbook(creator = "ACTA")', code, fixed = TRUE)))
+  ## nodename is "<account>-Mac" on a managed machine; the platform is what the log is for.
+  chk("the OQ log records the platform, not the machine's name",
+      any(grepl('Sys.info()[["sysname"]], Sys.info()[["machine"]]', code, fixed = TRUE)) &&
+        !any(grepl('sprintf("machine     : %s / %s", Sys.info()[["sysname"]], Sys.info()[["nodename"]])',
+                   code, fixed = TRUE)))
+  ## And the scan itself must still be wired into the run, at the last point a record can be added.
+  chk("the OQ scans its own outputs for the operator's identity",
+      any(grepl('add("no_identity"', code, fixed = TRUE)))
+  ## THE SCAN'S OWN REACH, in the three ways it was too narrow.
+  ## (1) BEHAVIOURAL, at last. The three roots are planted with a leak each and the scan is run.
+  ##     The previous version of this was a source grep whose comment claimed it was "proven
+  ##     behaviourally"; it was not, and the sweep it described reached nothing -- for an OQ run
+  ##     dirname(outDir) is the CASE folder, while the app writes its run log to WORK_DIR, which
+  ##     is a different directory again. work_dir is an argument now and this test is the proof.
+  local({
+    .sc <- file.path(tempdir(), "acta_scan_reach"); unlink(.sc, recursive = TRUE)
+    .out <- file.path(.sc, "case", "Outputs"); .wd <- file.path(.sc, "work")
+    dir.create(.out, recursive = TRUE, showWarnings = FALSE)
+    dir.create(.wd,  recursive = TRUE, showWarnings = FALSE)
+    .home <- normalizePath(path.expand("~"), mustWork = FALSE)
+    ## One leak per root, each of a DIFFERENT kind, so a scan that reaches only one place or
+    ## reads only one file type cannot pass.
+    writeLines(sprintf("code_dir\t%s", .home), file.path(.out, "acta_version.tsv"))
+    writeLines(sprintf("! LaTeX Error: nothing in %s/texmf", .home),
+               file.path(.sc, "case", "ACTA_Report_3.1.log"))
+    writeLines(sprintf("timestamp\toperator\n2026\t%s", .home),
+               file.path(.wd, "ACTA_app_run_log.tsv"))
+    .src <- unlist(lapply(actaTestFunctionsFiles(vd), readLines, warn = FALSE))
+    .i0 <- grep("<<ACTA_IDENTITY_SCAN>>", .src, fixed = TRUE)
+    .i1 <- grep("<</ACTA_IDENTITY_SCAN>>", .src, fixed = TRUE)
+    chk("the OQ marks the block that scans its artefacts",
+        length(.i0) == 1L && length(.i1) == 1L && .i1 > .i0)
+    if (length(.i0) == 1L && length(.i1) == 1L && .i1 > .i0) {
+      .e <- new.env(parent = environment(h$actaOQRun))
+      assign("outDir",   .out, envir = .e)
+      assign("work_dir", .wd,  envir = .e)
+      .r <- try(eval(parse(text = paste(.src[(.i0 + 1L):(.i1 - 1L)], collapse = "\n")), envir = .e),
+                silent = TRUE)
+      .hit <- if (inherits(.r, "try-error")) NULL else get(".idScan", envir = .e)
+      if (inherits(.r, "try-error"))
+        cat("         the block did not run:", conditionMessage(attr(.r, "condition")), "\n")
+      .found <- if (is.null(.hit)) character(0) else unique(.hit$path)
+      chk("...and it reaches Outputs/", "acta_version.tsv" %in% .found)
+      chk("...the run folder above it", "ACTA_Report_3.1.log" %in% .found)
+      chk("...and the app's working folder, which is neither",
+          "ACTA_app_run_log.tsv" %in% .found)
+      if (!setequal(.found, c("acta_version.tsv", "ACTA_Report_3.1.log", "ACTA_app_run_log.tsv")))
+        cat("         found:", paste(.found, collapse = ", "), "\n")
+    }
+    unlink(.sc, recursive = TRUE)
+  })
+  ## (1b) It rooted at outDir, so ACTA_app_run_log.tsv -- which sits in the WORKING folder beside
+  ##     Outputs/ -- was structurally invisible. NOTE: this is a SOURCE assertion, not a
+  ##     behavioural one. An earlier draft claimed otherwise, and the sweep does not in fact
+  ##     reach the app's WORK_DIR: for an OQ run dirname(outDir) is the CASE folder, while the
+  ##     run log is written beside the app's working folder. Recorded rather than dropped --
+  ##     a comment claiming a proof that does not exist is worse than no comment.
+  ## The sweep takes a LIST of roots now, and work_dir is one of them. Matched on the roots
+  ## expression rather than on the old single-root call, which the behavioural test above proves
+  ## actually reaches all three places.
+  chk("...including what ACTA writes outside Outputs/, such as the app run log",
+      any(grepl("list.files(.roots, full.names = TRUE, pattern = paste(", code, fixed = TRUE)) &&
+        any(grepl("ACTA_app_run_log", code, fixed = TRUE)))
+  ## BOTH HALVES. The argument exists in ACTA_Functions.R AND the app actually passes it -- and
+  ## the app side is the load-bearing one. Asserting only the signature left the suite 16/16 with
+  ## `work_dir=%s` deleted from the app's OQ child command, which restores the exact defect item 4
+  ## exists to fix: the scan sweeping zero files in the app's working folder.
+  chk("...via a work_dir argument, declared where the OQ runs",
+      any(grepl("work_dir = NULL) {", code, fixed = TRUE)))
+  local({
+    .app <- file.path(ACTA_VERSION_DIR, "ACTA_App.R")
+    if (!file.exists(.app)) { note("no app beside the pipeline"); return(invisible(NULL)) }
+    .al <- readLines(.app, warn = FALSE); .al <- .al[!grepl("^\\s*##", .al)]
+    chk("...and the app passes its own WORK_DIR into the OQ child process",
+        any(grepl("work_dir=%s", .al, fixed = TRUE)) &&
+          any(grepl(".rq(WORK_DIR)", .al, fixed = TRUE)))
+  })
+  ## (2) The reader was an allowlist of six extensions and missed .log and .tex -- which run_acta
+  ##     deliberately copies beside a run when a render FAILS, and a LaTeX .log is the artefact
+  ##     this repo's .gitignore commemorates for carrying a home directory on every line in 2_87.
+  ##     ASSERTED ON THE SOURCE, deliberately: a successful render cleans those files up, so a
+  ##     passing run cannot produce one to scan. This is the weaker kind of assertion and it is
+  ##     here because the behaviour it guards only occurs on a failure path.
+  ## THE READER LINE WHOLE. `|log|tex|` occurs THREE times in ACTA_Functions.R -- the reader
+  ## allowlist, the run-folder filename pattern, and the .unread exclusion list -- so matching the
+  ## fragment proved only that one of the three existed. Removing .log and .tex from the READER
+  ## alone left this green, which is the one mutation it was written to catch. Nineteenth
+  ## assertion of that shape in this project, and mine.
+  chk("...reading the file types a failed render leaves behind (.log, .tex)",
+      any(grepl('} else if (grepl("[.](tsv|txt|html|json|csv|md|log|tex|aux|out|toc|xml|yml|yaml|Rmd|R)$", f)) {',
+                code, fixed = TRUE)))
+  ## (3) An unlisted extension returned character(0), indistinguishable from "read it, clean".
+  chk("...and saying so when it meets a file type it has no reader for",
+      any(grepl(".unread", code, fixed = TRUE)) &&
+        any(grepl("NOT read (no reader for this type)", code, fixed = TRUE)))
+  ## The severity the comment promised, which for two releases the code did not implement.
+  chk("...with a login-only hit recorded as warn rather than pass",
+      any(grepl('else if (length(.idScan$user) ||', code, fixed = TRUE)))
 })
 
 cat(if (ok) "\nALL APP-SUPPORT TESTS PASS\n" else "\nFAILURES ABOVE\n")

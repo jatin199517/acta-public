@@ -34,7 +34,14 @@ jobs:
       matrix:
         # ubuntu is the fast default; macOS is included because it is what most flow cytometry
         # analysts actually run, and it is where the XQuartz/tcltk dependency of flowMeans bites.
-        os: [ubuntu-latest, macos-latest]
+        #
+        # WINDOWS ADDED 3.0.14, and it was overdue. This project ships Setup.bat and ACTA App.bat,
+        # the README documents a Windows route, and NOTHING here ever ran there -- so six separate
+        # path-handling code paths were inert on Windows for releases at a time and a security
+        # review had to find it by reading. Windows is where path.expand("~") is the DOCUMENTS
+        # folder rather than the profile root and where R hands back backslashes, which is exactly
+        # the class of bug no amount of ubuntu and macOS green can see.
+        os: [ubuntu-latest, macos-latest, windows-latest]
         r: ["release"]
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +53,14 @@ jobs:
       # test_arg_safety.R SKIPS its LaTeX-injection canary when pandoc is missing -- a security
       # assertion that quietly stops running is worse than one that fails, so pin it here.
       - uses: r-lib/actions/setup-pandoc@v2
+      # AND A TeX ENGINE, because pandoc alone does not make the canary run. test_arg_safety.R's
+      # LaTeX-injection assertion -- the one guarding the past finding where a workbook cell could
+      # \input an arbitrary file into the report -- needs BOTH. With only pandoc it printed
+      # "[skip] pandoc/LaTeX not available here", still printed ALL ARG-SAFETY CHECKS PASSED, ran
+      # 62 assertions instead of 64, emitted no TESTS SKIPPED banner, and run_all.R therefore
+      # classified it PASS. The comment above says a security assertion that quietly stops running
+      # is worse than one that fails; the missing ingredient was the engine, not pandoc.
+      - uses: r-lib/actions/setup-tinytex@v2
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           # The authoritative list is `listOfLibrary` in ACTA_Script_*.R; these are the names needed
@@ -109,12 +124,16 @@ jobs:
       # SKIPS if the package is absent. Without this step that gate would be inert on every runner,
       # which is the same trap the CI-declares check fell into. No-op for the flat release.
       - name: install the package (package layout only)
+        # shell: bash EVERYWHERE, because windows-latest defaults to pwsh and `[ -f ... ]` is not
+        # PowerShell. Git Bash ships on the Windows runner, so one script serves all three.
+        shell: bash
         run: |
           if [ -f DESCRIPTION ]; then R CMD INSTALL . ; else echo "flat layout, nothing to install"; fi
       - name: run the gates
         # LAYOUT-AGNOSTIC. The flat release keeps the gates at tests/; the package release keeps
         # them at tests/legacy/, because R CMD check runs tests/*.R and these need FCS and minutes.
         # One workflow serves both lines rather than forking it per release.
+        shell: bash
         run: |
           f=tests/run_all.R; [ -f "$f" ] || f=tests/legacy/run_all.R
           echo "running $f"

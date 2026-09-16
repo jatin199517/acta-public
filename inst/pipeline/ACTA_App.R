@@ -856,7 +856,13 @@ server <- function(input, output, session) {
     ## file the user cannot find is a file they cannot send.
     if (isTRUE(b$ok)) {
       say("Diagnostics written (", b$lines, " lines): ", b$path)
-      say("Send that file. It carries no absolute paths, no username and not the workbook.")
+      ## SAY WHAT IS TRUE. "no absolute paths, no username" was the promise the operator sends
+      ## the file on, and it was false: a login that is an e-mail address kept its domain, and a
+      ## bare directory path kept everything. Both fixed in actaDiagScrub, but the promise is
+      ## worded to what the code does rather than to what we hope it does.
+      say(paste("Send that file. Your home directory appears as ~, other paths as filenames,",
+                "and e-mail addresses and this machine's name are masked. The workbook is",
+                "never included."))
     } else say("Could not write the diagnostics bundle. The log above is still copyable by hand.")
   })
 
@@ -1206,8 +1212,11 @@ server <- function(input, output, session) {
       ## session, so the button state and the log cannot update until it returns.
       rv$oqProc <- processx::process$new(file.path(R.home("bin"), "Rscript"),
         c("--vanilla", "-e",
-          sprintf(paste0(.childLoad, "r<-h$actaOQRun(%s,quiet=TRUE,code_dir=%s,progress=function(...) message('  ',...));saveRDS(r,%s)"),
-                  .rq(dir), .rq(CODE_DIR), .rq(OQ_RES))),
+          ## work_dir SO THE IDENTITY SCAN CAN SEE THE APP'S OWN RUN LOG. ACTA_app_run_log.tsv is
+          ## written to WORK_DIR, which is never the case folder, so the scan inside actaOQRun had
+          ## no way to reach it and silently swept nothing there.
+          sprintf(paste0(.childLoad, "r<-h$actaOQRun(%s,quiet=TRUE,code_dir=%s,work_dir=%s,progress=function(...) message('  ',...));saveRDS(r,%s)"),
+                  .rq(dir), .rq(CODE_DIR), .rq(WORK_DIR), .rq(OQ_RES))),
         stdout = "|", stderr = "2>&1", cleanup = TRUE)
     }, ignoreInit = TRUE))
   })

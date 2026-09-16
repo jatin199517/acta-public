@@ -1694,9 +1694,16 @@ PlateMapList <- tryCatch(make_plate_layout_great_again(metadata_file, eln = BIDf
                          error = function(e) {
                            warning(sprintf("Plate map skipped: %s", conditionMessage(e)),
                                    call. = FALSE); list() })
+## HEIGHT PER PLATE, not one constant. The well diameter comes from the panel WIDTH and the
+## column count, so the panel needs a matching amount of HEIGHT -- and how much is left after the
+## legend depends on how many compositions the plate has and how their names wrap. At a fixed 7.6
+## in, a 13-key legend left 5.01 in for a panel that needed 6.20 and the wells
+## overlapped. actaPlateFigHeight() measures the legend and adds what the rows require; it never
+## returns less than the old constant, so plates that render correctly today are unchanged.
 for (.pid in names(PlateMapList))
   ggsaveIf(paste0("Plots/PlateMap_", BIDfile, "_", gsub("[^A-Za-z0-9._-]", "_", .pid), ".png"),
-           PlateMapList[[.pid]], width = ACTA_PLATE_FIG$width, height = ACTA_PLATE_FIG$height,
+           PlateMapList[[.pid]], width = ACTA_PLATE_FIG$width,
+           height = actaPlateFigHeight(PlateMapList[[.pid]], width = ACTA_PLATE_FIG$width),
            dpi = ACTA_PLATE_FIG$dpi, limitsize = FALSE)
 
 SIPlot<-stats |> 

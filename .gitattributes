@@ -1,4 +1,25 @@
-# Windows batch files must keep CRLF. cmd.exe is unreliable on LF-only .bat -- a parenthesised
-# for /f block with set inside it (which both launchers use to locate Rscript.exe) is the known
-# failure case. -text stops git rewriting them on any platform, including GitHub ZIP downloads.
-*.bat -text
+# ACTA -- line-ending and binary policy for the PUBLIC repository.
+#
+# WHY THIS EXISTS. CI gained a windows-latest runner in 3.0.14, and Git for Windows checks out
+# CRLF by default. R's readLines() does NOT strip the trailing \r, and this suite reads its own
+# source and compares it: a dozen gates use $-anchored patterns or whole-line matches, so every
+# one of them would fail on Windows for a reason that has nothing to do with the code under test.
+# A gate failing for the wrong reason is worse than no gate, because the next person switches it
+# off. `eol=lf` makes the working tree LF on every platform and removes the whole class.
+* text=auto eol=lf
+
+# BINARY, EXPLICITLY. This repository has a documented history of workbook corruption -- see the
+# comments in Publish/strip_sharepoint_metadata.py -- so nothing is left to git's content guess.
+# A .xlsx is a zip: a single byte "normalised" inside one makes it unreadable, and openxlsx and
+# Excel disagree about how loudly to say so.
+*.xlsx binary
+*.fcs  binary
+*.png  binary
+*.pdf  binary
+*.rds  binary
+*.bin  binary
+
+# Windows batch files are the one thing that genuinely wants CRLF: cmd.exe tolerates LF, but a
+# label or a line continuation at the end of a LF-only file has bitten people for decades, and
+# Setup.bat is the documented Windows entry point.
+*.bat text eol=crlf

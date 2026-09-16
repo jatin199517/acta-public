@@ -524,7 +524,12 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## ------------------------------------------------------------------- write it --
   meta <- list(
     generated = format(Sys.time(), "%Y-%m-%d %H:%M"),
-    root      = scanDir,
+    ## THE FOLDER NAME, NOT THE PATH. This embedded the absolute scanDir in a file the README
+    ## tells you can be emailed or archived -- so a dashboard sent to a CRO carried the home
+    ## prefix, the employer and the internal document library inside `const META`. Nothing in the
+    ## page renders this field; it is there so a reader can tell which collection they have.
+    ## basename answers that and locates nobody.
+    root      = basename(scanDir),
     n_entries = length(unique(vapply(records, function(x) one(x[["eln_id"]]), ""))),
     n_runs    = length(runInfo),
     sort_key  = markerKey,

@@ -323,6 +323,47 @@ pageWith <- function(pattern) {
 
 cat("\n=== the page's tables against the tree ===\n")
 
+## THE PINNED VERSION THE PAGE TELLS PEOPLE TO INSTALL MUST BE THIS RELEASE.
+## The page shows how to install an exact version, which turns that version into a CLAIM of the
+## kind that rots silently: bump DESCRIPTION, forget the page, and the install line 404s on a tag
+## that was never pushed. This is about the page being ACCURATE, not about accommodating anything
+## -- an earlier draft framed it around a tutorial series and grew a second pinned value to serve
+## it, which was machinery for a requirement that did not exist.
+## Matched against DESCRIPTION because that is what the tag is cut from; the remote's tag list is
+## not reachable from an offline gate, and a release that pushes the tag is the same act that
+## bumps this file.
+local({
+  ## ABSENCE IS A FAILURE, not a note. `if (is.null(pg)) note(...)` is self-disarming: deleting
+  ## the pinned line from the page would make the gate stand down and report nothing, which is
+  ## the exact shape a review flagged one release ago and which I then rebuilt here. The page is
+  ## REQUIRED to carry a pin now, because a tutorial viewer has no other way to install what the
+  ## video shows.
+  pg <- pageWith("install_github\\(\"jatin199517/acta-public@")
+  chk("a README shows how to install an exact version", !is.null(pg))
+  if (is.null(pg)) return(invisible(NULL))
+  txt  <- paste(pg$lines, collapse = "\n")
+  pins <- unique(gsub(".*@|\"", "", unlist(regmatches(txt,
+            gregexpr('install_github\\("jatin199517/acta-public@[^"]+"', txt)))))
+  ## BOTH ROUTES, ASSERTED SEPARATELY. Folding them into one vector meant deleting
+  ## `--branch v3.0.13` left the suite green while the page still read "The clone route pins the
+  ## same way" -- a false statement to a viewer who believes they pinned. The gate's own comment
+  ## said pinning one but not the other splits your audience, and the gate did not check it.
+  clonePins <- unique(sub("^--branch ", "",
+                          unlist(regmatches(txt, gregexpr("--branch v[0-9.]+", txt)))))
+  chk("...and the clone route pins a version too, not just install_github",
+      length(clonePins) > 0L)
+  pins <- unique(c(pins, clonePins))
+  d <- read.dcf(file.path(vd, "DESCRIPTION"))
+  want <- paste0("v", unname(d[1, "Version"]))
+  chk(sprintf("the page pins an install version (%s)", paste(pins, collapse = ", ")),
+      length(pins) > 0L)
+  bad <- pins[pins != want]
+  chk(sprintf("...and every pin is this release, %s", want), !length(bad))
+  if (length(bad))
+    cat("         the page pins", paste(bad, collapse = ", "), "but DESCRIPTION says", want,
+        "-- update the page, or it sends people to the wrong release\n")
+})
+
 ## THE DASHBOARD THEMES, by exact filename and exact folder. The page tells the reader to move a
 ## named file between two folders, so a renamed theme makes those instructions unfollowable.
 local({

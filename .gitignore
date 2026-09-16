@@ -143,7 +143,12 @@ Archive/
 # regression snapshots are run artefacts
 *.rds
 .acta_run_result.rds
-ACTA_app_run_log.tsv
+## `*` because actaRunLogAppend ROTATES a pre-3.0.14 log aside as
+## ACTA_app_run_log.pre-<date>.tsv when its header no longer matches -- the old schema recorded the
+## OS login and the hostname, one pair per row, and the bare-name rule did not match the rotated
+## file. An upgrading user's oldest and most identifying log was the one git would happily stage.
+## Also catches a per-machine or per-project variant if one is ever introduced.
+ACTA_app_run_log*.tsv
 # OQ run artefacts. `**/` because the cases live at 2_87_WIP/Diagnostics/OQ_TestN/Outputs/ --
 # a bare `*/` matches exactly ONE directory level, so the old pattern never fired at that depth
 # and two artefacts were committed. They matter: the report and dashboard embed the ABSOLUTE
@@ -155,9 +160,9 @@ ACTA_app_run_log.tsv
 # run_acta() writes these on every run, so they land beside the export -- and for a diagnostic
 # run that is the CASE root, which the **/OQ_Test*/Outputs/ rule above does not reach. Exactly
 # the gap that let a 2_87 LaTeX log carrying an operator's absolute home directory be committed,
-# noted a hundred lines up in this same file. code_dir abbreviates the home prefix, so the
-# content is no longer a disclosure on its own; these stay ignored because they are regenerated
-# output that nobody should be committing either way.
+# noted a hundred lines up in this same file. code_dir records only the last
+# two components of the pipeline folder, so the content no longer locates anyone; these stay
+# ignored because they are regenerated output that nobody should be committing either way.
 **/acta_version.tsv
 **/package_versions.tsv
 # validated_packages.tsv is the OQ BASELINE -- an input, tracked on purpose -- and is a different

@@ -217,6 +217,15 @@ library(ACTA)
 This provides `run_acta()` and `actaOQRun()`, and the three diagnostic cases. You can validate the
 install straight away — see *Validate your installation* below.
 
+That command installs the current release. To install one exact version, name its tag:
+
+```r
+remotes::install_github("jatin199517/acta-public@v3.1.0")
+```
+
+`packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
+`git clone --branch v3.1.0 https://github.com/jatin199517/acta-public.git`.
+
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
 packages sit behind those. `remotes` finds them because the `DESCRIPTION` declares `biocViews`,
@@ -334,7 +343,7 @@ for (nm in c("OQ_Test1", "OQ_Test2", "OQ_Test3"))
 ```
 
 `packageVersion("ACTA")` is the version you have. A run also reports `script_version`, which is
-the pipeline's own coarser stamp — `3_0` for every 3.0.x — so the two do not match and are not
+the pipeline's own coarser stamp — `3_1` for every 3.1.x — so the two do not match and are not
 meant to.
 
 A case that lives inside your R library is copied to a temporary folder and run there, and the
@@ -378,7 +387,7 @@ You may replace the text `TEMPLATE` from this file but keep the rest of the file
 run looks for one `*Titration_Instructions*.xlsx` in the folder and stops if it finds none or
 several.
 
-The trailing `_3_0` is a version stamp, and it is **not** checked: renaming a workbook does not
+The trailing `_3_1` is a version stamp, and it is **not** checked: renaming a workbook does not
 make it compatible, and does not make it incompatible either. What has to match is the workbook's
 layout — the sheets and the column names this version reads. There are no compatibility shims for
 an older layout, so start from this version's template rather than carrying a workbook forward and

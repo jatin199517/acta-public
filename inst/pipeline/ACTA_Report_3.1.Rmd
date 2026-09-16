@@ -50,7 +50,7 @@ header-includes:
   ## repointed AT BEGIN DOCUMENT because \maketitle uses `plain` for the title page -- which is how
   ## that page keeps its footer and loses its header, as before. \headheight allows for the rule.
   - \makeatletter\newcommand{\ACTAfoot}{\hfil\small Page \thepage\ of \pageref{ACTAendpage}\hfil}\makeatother
-  - \makeatletter\def\ps@acta{\def\@oddhead{\vbox to \headheight{\hbox to \textwidth{\small ACTA Antibody Titration Report\hfil\small\itshape Developed Inc.}\vskip 2pt \hrule height 0.4pt \vfil}}\let\@evenhead\@oddhead\def\@oddfoot{\ACTAfoot}\let\@evenfoot\@oddfoot}\makeatother
+  - \makeatletter\def\ps@acta{\def\@oddhead{\vbox to \headheight{\hbox to \textwidth{\small ACTA Antibody Titration Report\hfil\small\itshape Anybody Can Titrate Antibody}\vskip 2pt \hrule height 0.4pt \vfil}}\let\@evenhead\@oddhead\def\@oddfoot{\ACTAfoot}\let\@evenfoot\@oddfoot}\makeatother
   - \makeatletter\def\ps@actaplain{\let\@oddhead\@empty\let\@evenhead\@empty\def\@oddfoot{\ACTAfoot}\let\@evenfoot\@oddfoot}\makeatother
   - \setlength{\headheight}{22pt}
   - \setlength{\headsep}{14pt}
@@ -508,7 +508,28 @@ cat("\n\nThis pipeline can be driven from R without the app: see **Automating AC
 
 # 1 Plate map
 
-```{r PlateMap, fig.width=10, fig.height=7.6, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center", results='asis'}
+```{r PlateMapSize, echo=FALSE, warning=FALSE, message=FALSE}
+## THE HEIGHT THE PLATE MAPS NEED, resolved before the chunk that draws them, because a chunk
+## option is evaluated when the chunk starts and cannot be changed from inside it.
+##
+## The well diameter comes from the panel WIDTH and the column count, so the panel needs a
+## matching amount of HEIGHT. At the old hardcoded 7.6 in, a 13-key legend left 5.01
+## in for a panel that needed 6.20 and the wells overlapped by 5% -- in the PDF as well as in the
+## PNG, since both print the same object.
+##
+## THE MAX ACROSS PLATES: one chunk emits every plate, so one height serves all of them, and the
+## tallest requirement is the only safe choice. Same floor as the constant, so a single-plate run
+## with a short legend is unchanged.
+## BRACED. At chunk top level R parses `if (c)\n expr` as a complete statement, so a bare `else`
+## on the next line is a syntax error -- it took the whole render down with
+## "<text>:14:15: unexpected 'else'" and the OQ reported a failed report for all three cases.
+.plateFigH <- ACTA_PLATE_FIG$height
+if (exists("PlateMapList") && length(PlateMapList)) {
+  .plateFigH <- max(vapply(PlateMapList, actaPlateFigHeight, numeric(1)))
+}
+```
+
+```{r PlateMap, fig.width=10, fig.height=.plateFigH, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center", results='asis'}
 ## Layout_Plate drawn as the plate it describes -- one figure per PlateID, built by the script (see
 ## make_plate_layout_great_again) and printed here, so the PDF and the Plots/ export are the same
 ## object. Guarded the same way ConcatPlot is: an empty list says so rather than taking the render
@@ -699,14 +720,38 @@ for (q in seq_along(antibody)) {
 ```{r provenance, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
 cat("**Script version:** ACTA v", ScriptVersion, "\n\n", sep = "")
 cat("**Render timestamp:** ", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"), "\n\n", sep = "")
-cat("**Rendered by:** ", Sys.info()[["user"]], " on ", Sys.info()[["nodename"]], "\n\n", sep = "")
+## THE DECLARED OPERATOR, NOT THE OS LOGIN. This printed Sys.info()[["user"]] and
+## [["nodename"]], which on a managed machine are the operator's EMAIL ADDRESS and a hostname
+## derived from it -- so a validation PDF, the artefact that travels furthest, named the account
+## twice on its own provenance page. Attribution is not the problem and is not being removed: a
+## validation report SHOULD say who ran the work. The problem was the SOURCE. Layout_Plate's
+## `Operator` column is the curated one the lab controls, it is already required by the
+## pre-flight, and it is per well, so a run carrying more than one operator reports all of them.
+## Escaped like every other workbook-supplied string -- it is someone's free text.
+cat("**Operator:** \\texttt{", .actaTexEsc(paste(unique(stats$Operator[!is.na(stats$Operator) &
+      nzchar(stats$Operator)]), collapse = ", ")), "}\n\n", sep = "")
 ## The workbook's filename is chosen by whoever supplies it, so it is untrusted text too.
 cat("**Layout workbook:** \\texttt{", .actaTexEsc(basename(metadata_file_name)), "}\n\n", sep = "")
 ```
 
-```{r sessionInfo, echo=FALSE}
+```{r sessionInfo, echo=FALSE, comment=NA}
 ## sessioninfo::session_info() (URSULA variant) rather than base sessionInfo(): it also
 ## reports the package SOURCE (CRAN/Bioconductor/GitHub + version) and the R environment
 ## block, which is what makes a run reproducible after the fact.
-sessioninfo::session_info()
+##
+## CAPTURED AND REWRITTEN, not printed straight. It prints the LIBRARY PATHS, and on a normal
+## user-level R install those live under the home directory -- ~/Library/R/... on macOS,
+## C:/Users/<account>/AppData/Local/R/win-library/... on Windows -- so every reader of this PDF
+## learned the account of whoever produced it, two lines below the provenance block that was
+## cleaned for exactly that reason. A system-wide install happens to hide it, which is why it
+## went unnoticed here. The `pandoc @ <path>` line leaks the same way under a per-user RStudio.
+## The home prefix becomes ~, which is the conventional and unambiguous way to say "my home"
+## without saying whose. Nothing else about the block changes: the versions, the sources and
+## the R environment are all still there, which is what makes the run reproducible.
+local({
+  ## actaDeIdentifyText(), the shared helper, rather than a local guess at the home directory.
+  ## The local version matched one form of one prefix with fixed = TRUE, which on Windows is the
+  ## Documents folder and the wrong slash -- so on the platform this comment names, it did nothing.
+  cat(actaDeIdentifyText(utils::capture.output(print(sessioninfo::session_info()))), sep = "\n")
+})
 ```

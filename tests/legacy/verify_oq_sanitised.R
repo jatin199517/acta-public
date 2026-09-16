@@ -249,7 +249,23 @@ if (!length(tracked)) {
   FIXTURE_FILE <- "tests/[legacy/]test_diagnostics.R"
   FIXTURE_RE   <- "^tests/(legacy/)?test_diagnostics[.]R$"
   FIXTURE_ID   <- "someone(\\.name)?"
-  nFix <- 0L; nDesc <- 0L
+  ## The four files allowed to name the copyright holder, and the name itself. Anchored, so a
+  ## same-named file elsewhere cannot claim the allowance.
+  ## BOTH halves come from the private list: the pattern AND the files allowed to carry it. The
+  ## build script's own scrub reads the same two, so one declaration governs both consumers --
+  ## hardcoding the path list here left the build with no allowance at all and it hard-stopped on
+  ## the copyright line it is meant to ship. Matched on basename, since this gate runs at
+  ## 3_0/DESCRIPTION in the dev tree and DESCRIPTION at the root of a built one.
+  COPYRIGHT_RE <- if (exists("SCRUB_COPYRIGHT_FILES", inherits = TRUE))
+                    get("SCRUB_COPYRIGHT_FILES") else NA_character_
+  ## THE PATTERN COMES FROM THE PRIVATE TOKEN LIST, never spelled here. This file SHIPS, so
+  ## hardcoding the holder's name would put it in the public tree -- and it did: the first version
+  ## of this allowance wrote the name into the line above and the sweep promptly flagged its own
+  ## gate. A shipped gate should describe the SHAPE of what it looks for, not the secret.
+  ## Absent from the token list, there is simply no allowance and the declared files are swept
+  ## like everything else, which fails safe.
+  COPYRIGHT_ID <- if (exists("SCRUB_COPYRIGHT", inherits = TRUE)) get("SCRUB_COPYRIGHT") else NA_character_
+  nFix <- 0L; nDesc <- 0L; nCopy <- 0L
   for (rel in txt) {
     f <- file.path(vd, rel)
     if (!file.exists(f)) next
@@ -271,11 +287,32 @@ if (!length(tracked)) {
       nDesc <- sum(masked != ln)
       ln <- masked
     }
+    ## A THIRD DECLARED ALLOWANCE: the copyright holder's name, in the four places it is MEANT to
+    ## appear -- DESCRIPTION's `cph` role, the README's licence and permission paragraphs, and the
+    ## comment in strip_sharepoint_metadata.py describing what that script removes.
+    ##
+    ## WHY THIS EXISTS NOW. The token list used to leave the bare company name unmatched
+    ## ALTOGETHER, and its stated reason was that the report's page header intentionally carried
+    ## the holder's name. That header was repaired this release -- a word-level scrub had reduced
+    ## it to a fragment years ago -- so the justification was gone while the exemption remained. An exemption outliving its reason is how a token
+    ## list quietly stops being a token list: it is exactly what let two comments of mine ship
+    ## carrying a real mail domain.
+    ##
+    ## Declared BY PATH and masked, not excluded, so every other line in these four files is still
+    ## swept -- and the company name is now a leak anywhere else in the tree.
+    ## THE RELATIVE PATH, not the basename: `Titration_FCS/README.md` and `tests/legacy/README.md`
+    ## both ship and both claimed the allowance when it was matched on the name alone.
+    if (!is.na(COPYRIGHT_ID) && !is.na(COPYRIGHT_RE) && grepl(COPYRIGHT_RE, rel)) {
+      masked <- gsub(COPYRIGHT_ID, "<declared-copyright-holder>", ln, ignore.case = TRUE, perl = TRUE)
+      nCopy <- nCopy + sum(masked != ln)
+      ln <- masked
+    }
     i <- grep(BAD, ln, ignore.case = TRUE, perl = TRUE)
     for (k in i) { nV <- nV + 1L
       cat(sprintf("  LEAK %s:%d %s\n", rel, k, substr(trimws(ln[k]), 1, 70))) }
   }
   if (nDesc) cat(sprintf("  note: DESCRIPTION swept with the declared maintainer address masked on %d line(s)\n", nDesc))
+  if (nCopy) cat(sprintf("  note: the copyright holder's name masked on %d line(s) in the files declared to carry it\n", nCopy))
   if (!nV) cat("  clean\n")
   ## Said out loud, every run: an allowance that is silent is an allowance nobody audits.
   if (nFix)
