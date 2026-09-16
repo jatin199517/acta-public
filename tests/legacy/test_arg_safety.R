@@ -281,6 +281,16 @@ if (length(i) == 1L) {
   file.create(hostile); owd <- setwd(td); on.exit(setwd(owd), add = TRUE)
   seen <- NULL
   say <- function(...) invisible(NULL)
+  ## STUB BOTH OPENERS. openPath() branches on the platform: processx::run() everywhere except
+  ## Windows, and shell.exec() there. Only processx was stubbed, so on windows-latest this ran the
+  ## REAL shell.exec over a .pdf, which launched the default handler -- the runner reported killing
+  ## an orphan msedge -- and the job sat in "run the gates" for 40 minutes until it was cancelled.
+  ## A test that opens a browser on CI is not a test, and this one had never run on Windows before.
+  ##
+  ## shell.exec exists on Windows ONLY, so assignInNamespace cannot reach it from here. A local
+  ## binding is better anyway: openPath is eval'd into THIS environment, so it resolves shell.exec
+  ## lexically and finds this one first on every platform.
+  shell.exec <- function(p) { seen <<- c("shell.exec", p); invisible(TRUE) }
   eval(parse(text = paste(sub("^  ", "", appl[i:j]), collapse = "\n")))
   orig <- processx::run
   assignInNamespace("run", function(command, args, ...) {
