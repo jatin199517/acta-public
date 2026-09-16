@@ -215,7 +215,28 @@ chk("and they are read from kableExtra, not restated here",
 if (nzchar(Sys.which("kpsewhich"))) {
   chk("a package that cannot exist is reported missing",
       identical(h$actaLatexMissing(c("array", "acta_no_such_pkg")), "acta_no_such_pkg"))
-  chk("no false positives on the real list", length(h$actaLatexMissing(.tp)) == 0L)
+  ## SELF-CALIBRATING CONTROL. "No false positives on the REPORT's list" needs a COMPLETE TeX
+  ## tree, and a freshly installed TinyTeX is minimal: it genuinely lacks most of them, so the
+  ## checker correctly reported them missing and the assertion failed on its own premise -- which
+  ## is what turned all three runners red when a TeX engine was added to this job. Even a full
+  ## MacTeX here is missing one.
+  ##
+  ## Naming a fixed "every tree has these" set trades one guess for another (article is a .cls,
+  ## not a .sty, and a minimal tree may not carry array or multicol either). So ASK the machine
+  ## first: whatever subset of the report's packages it reports as PRESENT must come back clean on
+  ## a second call. That is the real question -- does the checker invent absences? -- and it holds
+  ## on any tree at all. Guarded against vacuity: if nothing is present there is nothing to judge.
+  .rm      <- h$actaLatexMissing(.tp)
+  .present <- setdiff(.tp, .rm)
+  cat(sprintf("          note: %d of %d report LaTeX package(s) absent on this machine%s\n",
+              length(.rm), length(.tp),
+              if (length(.rm)) paste0(" (", paste(.rm, collapse = ", "), ")") else ""))
+  if (!length(.present))
+    cat("  [skip] no report LaTeX package is present here, so false positives cannot be judged\n")
+  else
+    chk(sprintf("no false positives among the %d report package(s) this machine HAS",
+                length(.present)),
+        length(h$actaLatexMissing(.present)) == 0L)
 } else {
   cat("  [skip] no kpsewhich here, so actaLatexMissing() cannot be exercised against a TeX tree\n")
 }
@@ -234,7 +255,14 @@ withPath <- function(pth, expr) {
   old <- Sys.getenv("PATH"); on.exit(Sys.setenv(PATH = old), add = TRUE)
   Sys.setenv(PATH = pth); force(expr)
 }
-if (nzchar(Sys.which("tlmgr"))) {
+## THE BROKEN-PATH SCENARIO IS POSIX-ONLY, and not because it is awkward on Windows -- because the
+## state does not exist there. The fault was a PATH that hid /usr/bin, so tlmgr (a Perl script)
+## could not find perl; on Windows TeX Live and TinyTeX ship their own perl, which Setup.R's own
+## comment already says. Feeding a colon-joined POSIX PATH to a Windows R session simply empties
+## PATH, so actaTlmgrStatus() answers "not on PATH" -- true, but a different branch than the three
+## assertions below describe, and they failed for the platform rather than the code. That is what
+## turned all three runners red when a TeX engine was added to this job.
+if (nzchar(Sys.which("tlmgr")) && .Platform$OS.type != "windows") {
   chk("a working PATH reports tlmgr as usable", isTRUE(h$actaTlmgrStatus()$ok))
   broken <- withPath("/usr/local/bin:/user/bin:/bin", h$actaTlmgrStatus())
   chk("that PATH (the /user/bin typo) is reported as NOT usable", isFALSE(broken$ok))
@@ -244,6 +272,9 @@ if (nzchar(Sys.which("tlmgr"))) {
       grepl("/user/bin", broken$why, fixed = TRUE))
   chk("the fix names the directory to add, not a doomed tlmgr command",
       grepl("/usr/bin", broken$fix, fixed = TRUE) && !grepl("tlmgr_install", broken$fix))
+} else if (nzchar(Sys.which("tlmgr"))) {
+  cat("  [skip] the perl-hidden-by-PATH fault cannot occur on Windows -- TeX Live and TinyTeX",
+      "ship their own perl there\n")
 } else {
   cat("  [skip] tlmgr not on PATH here, so its status cannot be exercised\n")
 }

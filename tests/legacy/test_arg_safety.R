@@ -175,6 +175,7 @@ cat("=== end to end: a hostile cell cannot read a file into the PDF ===\n")
 ## The real thing: R -> pandoc -> LaTeX, in the sink shapes the report actually uses. Skipped where
 ## the toolchain is absent (the fast CI job installs no LaTeX), because a skip is honest and a
 ## silent pass is not.
+.argSkip <- NA_character_
 have <- nzchar(Sys.which("pandoc")) && requireNamespace("rmarkdown", quietly = TRUE) &&
         (nzchar(Sys.which("xelatex")) || nzchar(Sys.which("pdflatex")))
 if (!have) cat("  [skip] pandoc/LaTeX not available here, so the render cannot be exercised\n") else {
@@ -199,16 +200,36 @@ if (!have) cat("  [skip] pandoc/LaTeX not available here, so the render cannot b
   setwd(owd)
   pdf <- file.path(d, "t.pdf")
   if (inherits(r, "try-error") || !file.exists(pdf)) {
-    cat("  [skip] the probe report did not render here:",
-        trimws(sub("\n.*", "", as.character(r))), "\n")
+    ## A FAILURE, NOT A SKIP. `have` just established that the toolchain is present, so a render
+    ## that does not happen is something wrong -- and printing "[skip]" here let the file go on to
+    ## report ALL ARG-SAFETY CHECKS PASSED with the LaTeX-injection canary never having run. This
+    ## is the assertion guarding the finding where a workbook cell could \\input an arbitrary file
+    ## into the report. It does not get to opt out quietly.
+    chk("the probe report rendered, so the canary actually ran", FALSE)
+    cat("          render said:", trimws(sub("\n.*", "", as.character(r))), "\n")
   } else {
-    txt <- if (nzchar(Sys.which("pdftotext")))
+    ## pdftools FIRST: it returns UTF-8 and needs no external binary. The old fallback,
+    ## readBin(pdf, "character", 1L), reads raw PDF bytes as a string -- it stops at the first NUL
+    ## and is invalid in a runner's C locale, so grepl() warned "input string 1 is invalid in this
+    ## locale" and the second assertion failed on Windows for the encoding, not the content.
+    txt <- if (requireNamespace("pdftools", quietly = TRUE))
+      tryCatch(paste(pdftools::pdf_text(pdf), collapse = " "), error = function(e) NA_character_)
+    else if (nzchar(Sys.which("pdftotext")))
       paste(suppressWarnings(system2("pdftotext", c("-q", shQuote(pdf), "-"), stdout = TRUE)),
             collapse = " ")
-    else paste(readBin(pdf, "character", 1L), collapse = " ")
-    chk("the canary file's contents are NOT in the rendered PDF",
-        !grepl("CANARY-b7f3", txt, fixed = TRUE))
-    chk("the payload is still SHOWN, as inert text", grepl("input", txt, fixed = TRUE))
+    else NA_character_
+    if (is.na(txt) || !nzchar(txt)) {
+      ## NO EXTRACTOR MEANS THE CANARY CANNOT BE JUDGED, and searching the raw bytes would be
+      ## worse than nothing: a PDF stream is compressed, so the canary would be absent whatever
+      ## had happened and the assertion would pass vacuously. Banner instead, so run_all.R
+      ## reports SKIP rather than PASS -- the file really did not assert this.
+      .argSkip <<- "no PDF text extractor (pdftools or pdftotext), so the LaTeX-injection canary could not be judged"
+      cat("  [skip]", .argSkip, "\n")
+    } else {
+      chk("the canary file's contents are NOT in the rendered PDF",
+          !grepl("CANARY-b7f3", txt, fixed = TRUE))
+      chk("the payload is still SHOWN, as inert text", grepl("input", txt, fixed = TRUE))
+    }
   }
   unlink(d, recursive = TRUE)
 }
@@ -310,5 +331,8 @@ if (length(i) == 1L) {
   unlink(td, recursive = TRUE)
 }
 
+## A SKIP IS NOT A PASS. run_all.R keys on the whole-file "TESTS SKIPPED" banner; without it a
+## file whose security canary could not be judged is reported green.
+if (!is.na(.argSkip)) cat(sprintf("\nARG-SAFETY TESTS SKIPPED -- %s\n", .argSkip))
 cat(if (ok) "\nALL ARG-SAFETY CHECKS PASSED\n" else "\nSOME ARG-SAFETY CHECKS FAILED\n")
 quit(status = if (ok) 0L else 1L)
