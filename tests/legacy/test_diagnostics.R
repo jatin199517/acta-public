@@ -98,6 +98,24 @@ local({
   ## Only meaningful when the login is long enough not to match by accident.
   if (nchar(.user) > 3L)
     chk("...nor the login name", !any(grepl(.user, out, fixed = TRUE)))
+  ## AND WITH AN INJECTED LOGIN, because the line above passes on this machine for the wrong
+  ## reason: the login here IS an e-mail address, so the e-mail pass caught it and the login rule
+  ## was never exercised. On a CI runner the login is "runner", nothing masked it, and the
+  ## fixture published it -- found by CI on a release that was already tagged.
+  local({
+    chk("a bare login in prose is masked",
+        identical(h$actaDeIdentifyText("running on box as runner", user = "runner"),
+                  "running on box as <redacted-user>"))
+    ## ...and the prose around it is NOT, which is the other half: an unbounded mask would eat
+    ## "running" and leave a diagnostic nobody can read.
+    chk("...without eating a word that merely starts the same way",
+        identical(h$actaDeIdentifyText("the job is running fine", user = "runner"),
+                  "the job is running fine"))
+    ## A login too short to tell from English is left alone deliberately.
+    chk("...and a login under four characters is left alone",
+        identical(h$actaDeIdentifyText("run the thing as run", user = "run"),
+                  "run the thing as run"))
+  })
   ## THE DOMAIN SPECIFICALLY. This is the half that leaked: masking a login's local part and
   ## leaving "@employer.com" is worse than useless, because the promise says it is gone.
   chk("...and no e-mail domain is left behind",
@@ -204,7 +222,18 @@ local({
     for (tl in (if (tolower(cont) %in% c("users", "home")) tails else tails[-1L]))
       for (pre in prefixes) {
       path <- paste(c(pre, cont, acct, tl), collapse = sp)
-      line <- sprintf("child log quoted %s while running", path)
+      ## NO PROSE IN THE PROBE. The sentence used to read "child log quoted %s while running", and
+      ## on a machine whose login is "runner" the grid derives the short account "run" -- which
+      ## appears inside the word "running". The scrub itself was correct -- it reduced the path
+      ## to its basename -- and the CHECK was wrong, and it only showed up on CI. A carrier with
+      ## no letters cannot
+      ## collide with any account name.
+      ## A LETTERLESS CARRIER. "child log quoted %s while running" put the account "run"
+      ## (derived from a CI runner's login) inside the word "running"; "path=[%s]|end" then put
+      ## the one-character account "a" inside "path". The redaction markers are stripped before
+      ## the check, but "<redacted>" has letters of its own, so the only carrier that cannot
+      ## collide with any account is one with no letters at all.
+      line <- sprintf("[[%s]]", path)
       out  <- h$actaDiagScrub(line)
       n <- n + 1L
       ## The account must be gone. Checked as a SUBSTRING, because a FRAGMENT surviving is how the

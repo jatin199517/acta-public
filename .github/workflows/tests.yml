@@ -53,14 +53,21 @@ jobs:
       # test_arg_safety.R SKIPS its LaTeX-injection canary when pandoc is missing -- a security
       # assertion that quietly stops running is worse than one that fails, so pin it here.
       - uses: r-lib/actions/setup-pandoc@v2
-      # AND A TeX ENGINE, because pandoc alone does not make the canary run. test_arg_safety.R's
-      # LaTeX-injection assertion -- the one guarding the past finding where a workbook cell could
-      # \input an arbitrary file into the report -- needs BOTH. With only pandoc it printed
-      # "[skip] pandoc/LaTeX not available here", still printed ALL ARG-SAFETY CHECKS PASSED, ran
-      # 62 assertions instead of 64, emitted no TESTS SKIPPED banner, and run_all.R therefore
-      # classified it PASS. The comment above says a security assertion that quietly stops running
-      # is worse than one that fails; the missing ingredient was the engine, not pandoc.
-      - uses: r-lib/actions/setup-tinytex@v2
+      # NO TeX ENGINE HERE, deliberately, and it costs a real assertion -- see below.
+      #
+      # test_arg_safety.R's LaTeX-injection canary needs pandoc AND an engine, so without one it
+      # stands down while the file still reports PASS. That is a genuine gap (the canary guards the
+      # finding where a workbook cell could \input an arbitrary file into the report). Adding
+      # setup-tinytex to close it made CI RED on all three runners in v3.1.0, because three tests
+      # depend on this job NOT having TeX:
+      #   * test_app_support.R asserts the DIAGNOSTIC TEXT actaTlmgrStatus() produces for a broken
+      #     tlmgr -- with a working one installed, the branch under test is unreachable;
+      #   * its LaTeX-package check asserts "no false positives on the real list", which a MINIMAL
+      #     TinyTeX violates honestly, because the report's packages really are absent there;
+      #   * the canary itself then failed on "input string 1 is invalid in this locale" reading the
+      #     rendered PDF back under the runner's C locale -- an encoding fault, not a security one.
+      # So the engine goes back out until those three are guarded to skip rather than assert. The
+      # weekly `oq` job installs TinyTeX and does exercise the render path.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           # The authoritative list is `listOfLibrary` in ACTA_Script_*.R; these are the names needed

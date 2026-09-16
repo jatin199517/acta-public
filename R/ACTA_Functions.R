@@ -6129,7 +6129,10 @@ actaPathLabel <- function(p, keep = 1L, penult = ACTA_LABEL_PENULT) {
 ## FREE TEXT -- a log line, a session-info block, a diagnostic bundle. Home prefixes become ~,
 ## this machine's name and any e-mail address are masked. Deliberately NOT collapsing paths here:
 ## that is actaDiagScrub's job and it has its own rules about what a reader still needs to see.
-actaDeIdentifyText <- function(x) {
+## `user` is a PARAMETER so the login rule can be tested. It cannot be exercised against
+## Sys.info() in-process, and the whole reason this rule exists is that a local run passed on one
+## machine's particulars -- a default that only the real login can reach would repeat that.
+actaDeIdentifyText <- function(x, user = tryCatch(Sys.info()[["user"]], error = function(e) "")) {
   x <- as.character(x)
   if (!length(x)) return(x)
   ## ANCHORED ON A PATH BOUNDARY. fixed = TRUE matched the home prefix as a BARE SUBSTRING, so a
@@ -6143,6 +6146,20 @@ actaDeIdentifyText <- function(x) {
     x <- gsub(paste0("\\Q", h, "\\E(?=[/\\\\]|$)"), "~", x, perl = TRUE)
   .node <- tryCatch(Sys.info()[["nodename"]], error = function(e) "")
   if (nzchar(.node) && nchar(.node) > 3L) x <- gsub(.node, "<redacted-host>", x, fixed = TRUE)
+  ## AND THE LOGIN NAME, which nothing masked outside of a path. It survived only where the login
+  ## happens to BE an e-mail address, because the pass below then caught it -- true of the machine
+  ## this was written on and false of a CI runner, where the login is "runner" and the fixture
+  ## "running on <host> as <login>" published it. Found by CI, not by review: every local run
+  ## passed because of one machine's particulars, which is the recurring fault in this file.
+  ##
+  ## WORD-BOUNDED AND LENGTH-GUARDED. A short login is a real word -- "run", "lab", "abc" -- and
+  ## masking it unbounded would redact prose and leave a diagnostic nobody can read, which is its
+  ## own kind of failure. Four characters with a boundary each side is where the name is more
+  ## likely to be the account than the English.
+  .u <- if (length(user) == 1L && !is.na(user)) as.character(user) else ""
+  if (nzchar(.u) && nchar(.u) >= 4L)
+    x <- gsub(sprintf("(?<![A-Za-z0-9])\\Q%s\\E(?![A-Za-z0-9])", .u),
+              "<redacted-user>", x, perl = TRUE)
   gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<redacted-email>", x, perl = TRUE)
 }
 
