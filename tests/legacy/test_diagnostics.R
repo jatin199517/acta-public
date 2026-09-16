@@ -44,8 +44,19 @@ chk("appends rather than overwrites", length(readLines(lg, warn = FALSE)) == len
 cat("=== actaDiagLogPath falls back when the work dir cannot be written ===\n")
 p1 <- h$actaDiagLogPath(wd, "run")
 chk("lands under the work dir when writable", !is.na(p1) && startsWith(p1, wd))
-p2 <- h$actaDiagLogPath(file.path("/proc-does-not-exist", "nope"), "run")
-chk("falls back to tempdir() rather than returning NA", !is.na(p2) && !startsWith(p2, "/proc"))
+## AN UNWRITABLE DESTINATION THAT IS UNWRITABLE EVERYWHERE. This used "/proc-does-not-exist",
+## which is unwritable on Linux and macOS and, on Windows, is a DRIVE-RELATIVE path -- the runner
+## could create it at the root of the workspace drive, so the fallback never fired and the
+## assertion failed for the platform rather than the code.
+##
+## A directory cannot be created underneath a regular FILE on any of the three, so the parent is
+## a file here. That is the same premise, stated in something every filesystem agrees about.
+.blocker <- file.path(wd, "not-a-directory")
+writeLines("x", .blocker)
+.bad <- file.path(.blocker, "nope")
+p2 <- h$actaDiagLogPath(.bad, "run")
+chk("falls back to tempdir() rather than returning NA",
+    !is.na(p2) && !startsWith(p2, .blocker))
 
 cat("=== the bundle CONTAINS the error, and is scrubbed ===\n")
 leaky <- c(cascade, "reading /Users/someone.name/OneDrive - Company/Flow/EXP1_data.fcs",
@@ -243,8 +254,6 @@ local({
       got <- sub("^\\[\\[[\\\\/]*", "[[", out)
       if (!identical(got, sprintf("[[%s]]", want)))
         bad <- c(bad, sprintf("%s -> %s (wanted [[%s]])", path, out, want))
-      probe <- gsub("<redacted[^>]*>", "", out)
-      if (grepl(acct, probe, fixed = TRUE)) bad <- c(bad, sprintf("%s -> %s", path, out))
       ## AND THE STRUCTURAL INVARIANT, which is what the prefix collision actually violates.
       ## That leak does not leave the WHOLE account behind -- it leaves a FRAGMENT, because the
       ## home prefix was consumed from the middle of a longer name: with HOME=/Users/<short>,

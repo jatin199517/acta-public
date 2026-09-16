@@ -79,7 +79,12 @@ cat("=== MUTATION SELF-CHECK: openCyto really does evaluate these ===\n")
 ap <- tryCatch(get(".argParser", envir = asNamespace("openCyto")), error = function(e) NULL)
 if (is.null(ap)) cat("  [skip] openCyto .argParser not available\n") else {
   pr <- tempfile()
-  args <- ap(sprintf('K=2, quantile=(function(){ writeLines("ran","%s"); 0.99 })()', pr))
+  ## deparse(), NOT sprintf("%s") INTO A QUOTED LITERAL. A Windows tempfile path is
+  ## "D:\\a\\_temp\\Rtmp...\\file" and pasting it between quotes makes "\\U" and friends invalid
+  ## escapes, so the PARSER threw -- "'\\U' used without hex digits" -- and this whole file died on
+  ## windows-latest before reaching its own assertion. deparse() emits a correctly escaped R
+  ## string literal on every platform, which is what building code out of a path requires.
+  args <- ap(sprintf('K=2, quantile=(function(){ writeLines("ran",%s); 0.99 })()', deparse(pr)))
   chk("parsing alone executes nothing", !file.exists(pr))
   stub <- function(fr, K, quantile) { z <- quantile + 0; invisible(z) }
   do.call(stub, c(list(fr = NULL), args))

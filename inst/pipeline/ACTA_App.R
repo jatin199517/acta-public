@@ -45,7 +45,18 @@ WORK_DIR <- local({
   if (nzchar(e)) return(normalizePath(e, mustWork = TRUE))
   lib <- tryCatch(normalizePath(system.file(package = "ACTA"), mustWork = FALSE),
                   error = function(e) "")
-  inLib <- function(p) nzchar(lib) && startsWith(normalizePath(p, mustWork = FALSE), lib)
+  ## actaPathWithin() is not reachable here: this runs BEFORE the helpers are loaded. Same rule,
+  ## stated once more -- forward slashes on both sides, a trailing separator so a sibling is not a
+  ## child, and case-folded on Windows where the filesystem is.
+  inLib <- function(p) {
+    if (!nzchar(lib)) return(FALSE)
+    .n <- function(q) tryCatch(normalizePath(q, winslash = "/", mustWork = FALSE),
+                               error = function(e) "")
+    a <- .n(p); b <- .n(lib)
+    if (!nzchar(a) || !nzchar(b)) return(FALSE)
+    if (.Platform$OS.type == "windows") { a <- tolower(a); b <- tolower(b) }
+    identical(a, b) || startsWith(a, paste0(sub("/+$", "", b), "/"))
+  }
   if (!inLib(APP_DIR)) {
     ## A PACKAGE-LAYOUT CLONE's work folder is the CLONE ROOT, not inst/pipeline. Case 3 returned
     ## APP_DIR, which was right while the code and the run folder were one directory -- in a 3.0

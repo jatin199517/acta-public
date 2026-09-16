@@ -149,10 +149,17 @@ if (!file.exists(sf)) note("no Setup.R in this layout") else local({
     src <- file.path(vd, d)
     if (dir.exists(src)) file.copy(list.files(src, full.names = TRUE), file.path(st, d))
   }
+  ## SET IN THE PARENT, NOT VIA system2(env=). R's own documentation: on Windows `env` is only
+  ## supported for commands that take environment variables on their command line, and Rscript is
+  ## not one -- so the flag was silently dropped, Setup.R never printed its marker, and
+  ## windows-latest failed this. The child inherits the parent's environment on every platform.
+  .old <- Sys.getenv("ACTA_SETUP_RESOLVE_ONLY", unset = NA_character_)
+  Sys.setenv(ACTA_SETUP_RESOLVE_ONLY = "1")
+  on.exit(if (is.na(.old)) Sys.unsetenv("ACTA_SETUP_RESOLVE_ONLY")
+          else Sys.setenv(ACTA_SETUP_RESOLVE_ONLY = .old), add = TRUE)
   out <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
                                   c("--vanilla", shQuote(file.path(st, "Setup.R"))),
-                                  stdout = TRUE, stderr = TRUE,
-                                  env = "ACTA_SETUP_RESOLVE_ONLY=1"))
+                                  stdout = TRUE, stderr = TRUE))
   mk  <- grep("^ACTA_SETUP_RESOLVED:", out, value = TRUE)
   chk("Setup.R resolves a pipeline folder when run from the repo root", length(mk) == 1L)
   if (length(mk) == 1L) {
@@ -212,11 +219,15 @@ if (file.exists(sf)) local({
     ## on Linux, and true of this project's own CI runners -- the child sees all 31 dependencies as
     ## missing and installs them from CRAN and Bioconductor inside the gate. The workflow's own
     ## estimate for that is 20-40 minutes. The redirect only needs to catch what Setup.R WRITES.
+    ## SET IN THE PARENT, for the same reason as the resolve-only probe above: system2(env=) does
+    ## nothing for Rscript on Windows, so the throwaway library was never in play there.
+    .oldL <- Sys.getenv("R_LIBS_USER", unset = NA_character_)
+    Sys.setenv(R_LIBS_USER = paste(c(lib, .libPaths()), collapse = .Platform$path.sep))
+    on.exit(if (is.na(.oldL)) Sys.unsetenv("R_LIBS_USER")
+            else Sys.setenv(R_LIBS_USER = .oldL), add = TRUE)
     out <- suppressWarnings(system2(file.path(R.home("bin"), "Rscript"),
       c("--vanilla", shQuote(file.path(st, "Setup.R")), "--no-package", "--no-tex"),
-      stdout = TRUE, stderr = TRUE,
-      env = paste0("R_LIBS_USER=",
-                   paste(c(lib, .libPaths()), collapse = .Platform$path.sep))))
+      stdout = TRUE, stderr = TRUE))
     chk("--no-package says it is skipping the install",
         any(grepl("skipping the ACTA package install", out, fixed = TRUE)))
     chk("...and really does not install ACTA",

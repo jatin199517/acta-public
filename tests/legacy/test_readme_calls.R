@@ -100,9 +100,15 @@ resolve <- function(rel) {
     cand <- c(cand, file.path(dirname(vd), rel))
   hit <- cand[file.exists(cand)]
   if (!length(hit)) return(NA_character_)
-  root <- normalizePath(vd, mustWork = TRUE)
-  inside <- vapply(hit, function(h) startsWith(normalizePath(h, mustWork = FALSE),
-                                               paste0(root, .Platform$file.sep)), logical(1))
+  ## FORWARD SLASHES ON BOTH SIDES. `.Platform$file.sep` is "/" on every platform including
+  ## Windows, while normalizePath() there returns backslashes -- so this compared
+  ## "D:\\a\\repo\\Template" against "D:\\a\\repo/" and found nothing inside the tree. Every
+  ## "prose path X exists" assertion failed on windows-latest for that one reason.
+  .nw <- function(p) tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE),
+                              error = function(e) "")
+  .fold <- if (.Platform$OS.type == "windows") tolower else identity
+  root <- .fold(.nw(vd))
+  inside <- vapply(hit, function(h) startsWith(.fold(.nw(h)), paste0(root, "/")), logical(1))
   if (any(inside)) hit[inside][[1]] else NA_character_
 }
 .lit <- function(x) if (is.character(x) && length(x) == 1L) x else NA_character_

@@ -6799,14 +6799,36 @@ actaOQExpected <- function(oq_dir) {
 ##
 ## Returns the folder to run, unchanged when no staging was needed, plus whether the baseline came
 ## along. Shared by actaOQRun() and the app so there is one implementation and one thing to gate.
+## Is `child` inside `parent`? One implementation, because there were three and two of them were
+## wrong on Windows in the same way.
+##
+## `.Platform$file.sep` IS ALWAYS "/" -- on every platform, including Windows. normalizePath() on
+## Windows returns BACKSLASHES. So `startsWith(normalizePath(x), paste0(root, .Platform$file.sep))`
+## compares "D:\\a\\repo\\Template" against "D:\\a\\repo/" and is false for everything, which is
+## why windows-latest failed every path assertion it had -- and, in actaOQStageOutOfLibrary(),
+## why a diagnostic case sitting INSIDE the R library would not have been detected there: the run
+## would have deleted from and written into the library, which is the one thing that check exists
+## to prevent.
+##
+## Both sides are normalised to forward slashes with winslash, and the trailing separator is
+## required so a sibling directory whose name merely starts the same way ("...\ACTA-old" beside
+## "...\ACTA") is not called a child.
+actaPathWithin <- function(child, parent) {
+  n <- function(p) tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE),
+                            error = function(e) "")
+  c1 <- n(child); p1 <- n(parent)
+  if (!nzchar(c1) || !nzchar(p1)) return(FALSE)
+  ## Windows paths are case-insensitive; a comparison that is not would report a child as outside
+  ## its own parent for a difference in capitalisation that the filesystem does not make.
+  if (.Platform$OS.type == "windows") { c1 <- tolower(c1); p1 <- tolower(p1) }
+  identical(c1, p1) || startsWith(c1, paste0(sub("/+$", "", p1), "/"))
+}
+
 actaOQStageOutOfLibrary <- function(oq_dir, dest_parent = file.path(tempdir(), "acta_oq")) {
   oq_dir <- normalizePath(oq_dir, mustWork = TRUE)
   libs <- unique(c(.libPaths(), dirname(system.file(package = "ACTA"))))
   libs <- libs[nzchar(libs)]
-  inLib <- any(vapply(libs, function(l) {
-    n <- tryCatch(normalizePath(l, mustWork = FALSE), error = function(e) "")
-    nzchar(n) && startsWith(oq_dir, paste0(n, .Platform$file.sep))
-  }, logical(1)))
+  inLib <- any(vapply(libs, function(l) actaPathWithin(oq_dir, l), logical(1)))
   ## baseline is REPORTED, not assumed, even when no staging happens -- a caller trusting the
   ## field should get the truth about the folder it is actually going to run.
   if (!inLib)
