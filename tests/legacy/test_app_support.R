@@ -264,7 +264,15 @@ withPath <- function(pth, expr) {
 ## turned all three runners red when a TeX engine was added to this job.
 if (nzchar(Sys.which("tlmgr")) && .Platform$OS.type != "windows") {
   chk("a working PATH reports tlmgr as usable", isTRUE(h$actaTlmgrStatus()$ok))
-  broken <- withPath("/usr/local/bin:/user/bin:/bin", h$actaTlmgrStatus())
+  ## THE PATH IS BUILT FROM WHERE tlmgr ACTUALLY IS, not from the machine the fault was reported
+  ## on. The literal "/usr/local/bin:/user/bin:/bin" is a MacTeX layout; on a runner TinyTeX lives
+  ## under the home directory, so that PATH removed tlmgr altogether and actaTlmgrStatus() answered
+  ## "not on PATH" -- true, and a different branch than the three assertions below describe. The
+  ## state they need is "tlmgr reachable, perl NOT", so: tlmgr's own directory, plus the typo'd
+  ## /user/bin that keeps the reported fault visible for the message assertions. perl lives in
+  ## /usr/bin on every POSIX system and no TeX distribution puts it beside tlmgr on Linux or macOS.
+  .tldir <- dirname(Sys.which("tlmgr"))
+  broken <- withPath(paste(c(.tldir, "/user/bin"), collapse = ":"), h$actaTlmgrStatus())
   chk("that PATH (the /user/bin typo) is reported as NOT usable", isFALSE(broken$ok))
   chk("and it says WHY -- a Perl script with no perl on PATH",
       grepl("Perl script", broken$why, fixed = TRUE) && grepl("perl is not on", broken$why))
