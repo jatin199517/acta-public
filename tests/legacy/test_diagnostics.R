@@ -222,26 +222,27 @@ local({
     for (tl in (if (tolower(cont) %in% c("users", "home")) tails else tails[-1L]))
       for (pre in prefixes) {
       path <- paste(c(pre, cont, acct, tl), collapse = sp)
-      ## NO PROSE IN THE PROBE. The sentence used to read "child log quoted %s while running", and
-      ## on a machine whose login is "runner" the grid derives the short account "run" -- which
-      ## appears inside the word "running". The scrub itself was correct -- it reduced the path
-      ## to its basename -- and the CHECK was wrong, and it only showed up on CI. A carrier with
-      ## no letters cannot
-      ## collide with any account name.
-      ## A LETTERLESS CARRIER. "child log quoted %s while running" put the account "run"
-      ## (derived from a CI runner's login) inside the word "running"; "path=[%s]|end" then put
-      ## the one-character account "a" inside "path". The redaction markers are stripped before
-      ## the check, but "<redacted>" has letters of its own, so the only carrier that cannot
-      ## collide with any account is one with no letters at all.
+      ## AN EXACT-MATCH ASSERTION, not a substring search. Two CI failures came from the CHECK
+      ## rather than the code, both of them collisions with the grid's OWN text: the carrier used
+      ## to read "child log quoted %s while running" and a login of "runner" makes the grid derive
+      ## the account "run", which is inside "running"; a letterless carrier "[[%s]]" then still
+      ## collided, because the grid's own tail filename is "run.log" and that contains "run" too.
+      ## The scrub was right every time.
+      ##
+      ## So assert what the label must BE. The contract is exact: the basename of the path, or
+      ## <redacted> where the path terminates at a container that declares its child an account.
+      ## An exact match cannot collide with a fixture, and it is a stronger claim than "the
+      ## account does not appear" -- it also catches a label that keeps a component it should not.
       line <- sprintf("[[%s]]", path)
       out  <- h$actaDiagScrub(line)
       n <- n + 1L
-      ## The account must be gone. Checked as a SUBSTRING, because a FRAGMENT surviving is how the
-      ## prefix-collision leak read: "~hn/Lab/run.log" with the separator eaten still names john.
-      ##
-      ## The redaction markers are stripped first. Without that a one-character account matches
-      ## inside the word "<redacted>" itself and the property reports 32 leaks that are the
-      ## scrubber working correctly -- a false alarm in the gate is how a gate gets switched off.
+      want <- if (length(tl)) tl[length(tl)] else "<redacted>"
+      ## A UNC path keeps its leading backslash: a share path with an account under it collapses to
+      ## "\\f", because the separator run before the first component is not part of any
+      ## component. Cosmetic, and not identity, so it is normalised away here rather than asserted.
+      got <- sub("^\\[\\[[\\\\/]*", "[[", out)
+      if (!identical(got, sprintf("[[%s]]", want)))
+        bad <- c(bad, sprintf("%s -> %s (wanted [[%s]])", path, out, want))
       probe <- gsub("<redacted[^>]*>", "", out)
       if (grepl(acct, probe, fixed = TRUE)) bad <- c(bad, sprintf("%s -> %s", path, out))
       ## AND THE STRUCTURAL INVARIANT, which is what the prefix collision actually violates.
