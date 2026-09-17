@@ -452,6 +452,30 @@ local({
   }
   chk("...and a home-relative config file keeps its name",
       identical(h$actaDiagScrub("read ~/.R/Makevars.local"), "read Makevars.local"))
+  ## TWO HOME-RELATIVE PATHS ON ONE LINE, and this one is not a corner case: it is the in_dir()
+  ## warning R emits on EVERY run where the code folder differs from the run folder -- every
+  ## package install, every OQ case, every app run. actaDeIdentifyText() rewrites each home prefix
+  ## to "~" immediately before the collapse, so "~" is a character the scrubber MANUFACTURES, and
+  ## admitting it to the component class unconditionally removed the only terminator between the
+  ## two paths: the first was eaten and the sentence then said the opposite of what happened. It
+  ## also took every second filename in the retained LaTeX log's two-per-line file-open trace.
+  ## Shipped in v3.2.0 and caught by the review that passed it.
+  .h2 <- normalizePath(path.expand("~"), mustWork = FALSE)
+  chk("two home-relative paths on one line keep both basenames",
+      identical(h$actaDiagScrub(sprintf("restored to %s/runs/OQ_Test1 from %s/lib/ACTA/pipeline",
+                                        .h2, .h2)),
+                "restored to OQ_Test1 from pipeline"))
+  chk("...and a two-per-line file trace keeps both names",
+      identical(h$actaDiagScrub(")) (unicode-math.sty (expl3.sty"),
+                ")) (unicode-math.sty (expl3.sty"))
+  ## BOTH SLASH DIRECTIONS. The lookahead is ~(?![/\\]) and only the forward half was asserted --
+  ## dropping the backslash alternative passed the whole suite while reverting the fix entirely on
+  ## Windows, which is the platform that hands back backslashed paths and the platform whose red CI
+  ## caused this release. The `~` is fed directly: a Windows home cannot be manufactured on a POSIX
+  ## runner, and it does not need to be, because the collapse is what is under test.
+  chk("...and the same with backslashes, which is what Windows hands back",
+      identical(h$actaDiagScrub("restored to ~\\runs\\OQ_Test1 from ~\\lib\\ACTA\\pipeline"),
+                "restored to OQ_Test1 from pipeline"))
 })
 
 cat("\n=== where the report is rendered, and what rmarkdown does to it ===\n")
@@ -491,10 +515,50 @@ local({
   ## A DIRECTORY THAT EXISTS AND CANNOT BE WRITTEN. My first draft passed "/nonexistent-root/x",
   ## which dir.exists() alone refuses -- so the write check never decided anything and could be
   ## deleted with the suite green. chmod 0555 is the case that separates the two.
+  ##
+  ## AND THE PROBE ITSELF IS CHECKED, or an inverted one silently turns the assertion below into
+  ## nothing -- which is the shape of the failure it exists to prevent.
+  .canWrite <- function(d) {
+    f <- file.path(d, "acta_write_probe")
+    ok <- isTRUE(suppressWarnings(tryCatch(file.create(f), error = function(e) FALSE)))
+    unlink(f)
+    ok
+  }
+  .wr <- file.path(tempdir(), "acta_stage_gate_wr"); unlink(.wr, recursive = TRUE)
+  dir.create(.wr, recursive = TRUE)
+  chk("the write probe calls a writable directory writable", .canWrite(.wr))
+  unlink(.wr, recursive = TRUE)
+  ## THE FIXTURE IS VERIFIED BEFORE IT IS TRUSTED, because Sys.chmod CANNOT make a DIRECTORY
+  ## unwritable on Windows: it sets the read-only attribute, and a read-only directory still
+  ## accepts new files. So on windows-latest the "unwritable" candidate was writable,
+  ## actaRenderStage() correctly returned it, and this assertion failed on a CORRECT tree -- the
+  ## fixture was wrong, not the code. Found by CI after the v3.2.0 tag, which is the third time in
+  ## this file a gate has been built out of one platform's particulars; the difference here is
+  ## that it failed CLOSED, on a fixture it could not build, rather than passing for a bad reason.
+  ## Probed by writing, not by file.access(), whose Windows answer for a directory is its own
+  ## question.
   .ro <- file.path(tempdir(), "acta_stage_gate_ro"); unlink(.ro, recursive = TRUE)
   dir.create(.ro, recursive = TRUE); Sys.chmod(.ro, "0555")
-  chk("...and one that exists but cannot be written is refused too",
-      identical(h$actaRenderStage(.sp, windows = TRUE, candidates = .ro), .sp))
+  .unwritable <- !.canWrite(.ro)
+  ## THE OTHER DIRECTION, against a fixture NO PRIVILEGE CAN DEFEAT. A probe that answered
+  ## "writable" to everything would pass the check above and turn the assertion below into a
+  ## permanent silent skip -- but keying that on the platform was wrong, and wrong in the same way
+  ## the bug this release fixes was wrong. The property is not "POSIX", it is "mode bits are the
+  ## effective authority on this filesystem", and where they are not -- an inherited ACL, or
+  ## running as root, which several common R images do -- chmod 0555 leaves the directory writable,
+  ## .canWrite() CORRECTLY says so, and a platform-keyed assertion then fails on a correct tree.
+  ## A path whose parent is a regular FILE cannot be written by anyone: the failure is ENOTDIR, not
+  ## a permission check. That holds for root, for any ACL, and on Windows -- where the platform
+  ## test had removed this check altogether.
+  .nf <- file.path(tempdir(), "acta_stage_gate_notdir"); unlink(.nf, recursive = TRUE)
+  writeLines("x", .nf)
+  chk("...and calls one it cannot write to unwritable", !.canWrite(file.path(.nf, "sub")))
+  unlink(.nf)
+  if (.unwritable)
+    chk("...and one that exists but cannot be written is refused too",
+        identical(h$actaRenderStage(.sp, windows = TRUE, candidates = .ro), .sp))
+  else
+    cat("  [skip] this platform cannot make a directory unwritable with Sys.chmod\n")
   ## A CANDIDATE THAT DOES NOT EXIST IS REFUSED, not created. tempfile() plus a recursive
   ## dir.create() would otherwise build a tree in a location nobody chose.
   .gone <- file.path(tempdir(), "acta_stage_gate_absent"); unlink(.gone, recursive = TRUE)

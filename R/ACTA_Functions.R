@@ -6076,9 +6076,10 @@ actaScanExports <- function(dir, dashboard_html = NA_character_) {
   runs <- list.dirs(dir, recursive = FALSE, full.names = TRUE)
   runs <- runs[!grepl("archive", runs, ignore.case = TRUE)]
   f <- unlist(lapply(runs, function(r)
-    ## Conflict copies excluded -- see actaIsSyncConflict(). Counting them here would also make
-    ## this pre-flight disagree with the generator, which is the divergence the note above warns
-    ## about, so both apply the same rule.
+    ## NO CONFLICT-COPY FILTERING, deliberately -- see the SYNC-CONFLICT FILTER note above. This
+    ## pre-flight and the generator both count whatever is there, which is what v3.1.6 does and
+    ## keeps the two in agreement. The comment that stood here named actaIsSyncConflict(), deleted
+    ## in the same commit, and shipped with v3.2.0 claiming an exclusion that no longer happened.
     list.files(c(r, file.path(r, ACTA_OUTPUT_SUBDIR)), pattern = "TitrationExport.*\\.xlsx$",
                full.names = TRUE)),
     use.names = FALSE)
@@ -6593,7 +6594,21 @@ actaDiagScrub <- function(lines) {
     ## The space already lets this pass reach across two paths in one sentence and keep only the
     ## last basename. That predates all of this, and is the reason the account redactions run
     ## BEFORE the collapse instead of relying on it.
-    m <- gregexpr("(?:~|(?:[A-Za-z]:)?)(?:[/\\\\][\\p{L}\\p{N}._ +&@<>'()#%!~-]+){2,}", one, perl = TRUE)
+    ## `~` IS ADMITTED ONLY WHERE IT DOES NOT BEGIN A NEW PATH. It was in the class unconditionally,
+    ## and that removed the one terminator separating two home-relative paths on one line -- which
+    ## matters here more than anywhere, because actaDeIdentifyText() rewrites every home prefix to
+    ## `~` IMMEDIATELY BEFORE this pass, so `~` is a character the scrubber MANUFACTURES and a
+    ## second home-relative path on the same line is the ordinary case. It cost the `in_dir()`
+    ## warning R emits on every run where code_dir differs from version_dir -- "restored to
+    ## <code dir>" lost its first path and the sentence then said the opposite of what happened --
+    ## and every second filename in the retained LaTeX log's two-per-line file-open trace, which is
+    ## what you read to find a missing package. Measured: with this lookahead, 0 of 964 lines of a
+    ## real failed render's log differ from v3.1.6, and every shape `~` was admitted for still
+    ## collapses -- an 8.3 short name in a folder, in a drive-letter path, and in a truncated
+    ## account under the container directory. `#%!` are fine as they are: they begin nothing.
+    m <- gregexpr(paste0("(?:~|(?:[A-Za-z]:)?)(?:[/\\\\]",
+                         "(?:[\\p{L}\\p{N}._ +&@<>'()#%!-]|~(?![/\\\\]))+){2,}"),
+                  one, perl = TRUE)
     ## keep = 1: the BASENAME, which is what v3.0.12 did and what the bundle header promises.
     ## Keeping two components here is what published /data/<acct>/run.log as "<acct>/run.log".
     regmatches(one, m) <- list(vapply(regmatches(one, m)[[1]], actaPathLabel, character(1),

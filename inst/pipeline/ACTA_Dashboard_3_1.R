@@ -279,18 +279,12 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## constant for the app's pre-flight; the two MUST stay in sync, because when they disagree the
   ## pre-flight passes and the dashboard comes out empty.
   OUTPUT_SUBDIR <- "Outputs"
-  ## THE MACHINE-SUFFIX HALF OF THE RULE IS FOR EXPORTS ONLY. Its justification is the export
-  ## FILENAME:
-  ## ACTA builds that name itself, the ELN goes through a rewrite that leaves only [A-Za-z0-9._+-],
-  ## and it ends in _TitrationExport_<version> -- so an "@", a " (2)" or a machine suffix in one
-  ## can only have come from the sync client. A FIGURE name is not built that way. Its gate alias
-  ## comes from the workbook, so hyphens reach the position the machine-suffix shape anchors on
-  ## and a panel aliased "CD3-PC" or "CD11b-Mac" would have had its layout PNG silently dropped
-  ## from the dashboard -- the exact failure this rule exists to prevent, one artefact type over.
-  ## Only THAT test is scoped. The "@" and " (n)" tests apply to every glob: a conflict copy of a
-  ## report or a figure is named after an account just the same, and both get their paths embedded
-  ## in an HTML file the README says can be e-mailed. Turning all three off for two of the three
-  ## artefact kinds -- which the first version of this fix did -- reopened the leak it was for.
+  ## NO CONFLICT-COPY FILTERING HERE, deliberately -- see the SYNC-CONFLICT FILTER note near the
+  ## top of this file and the long one in ACTA_Functions.R. These globs filter on isArchived()
+  ## only, which is what v3.1.6 does. Twelve lines describing which half of a sync-conflict rule
+  ## applied to which glob survived the removal of that rule and shipped with v3.2.0, asserting a
+  ## control that is not there -- which is worse than no comment, because the whole argument for
+  ## the removal is that the absence is deliberate and documented.
   pick <- function(root, pattern, recursive) {
     roots <- if (recursive) root else c(root, file.path(root, OUTPUT_SUBDIR))
     f <- list.files(roots, pattern = pattern, recursive = recursive, full.names = TRUE,
