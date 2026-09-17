@@ -759,7 +759,7 @@ resolveInstrumentMaxValue <- function(fcs_files) {
 ## maxValue is deliberately NOT accepted here: it comes from $PnR, and letting the sheet override
 ## the instrument's own range is a way to silently mis-scale every statistic.
 ## ============ WHICH VERSIONS DID THIS RUN USE ============
-## Security review of 2_94, finding M-1: every package is installed with a bare install.packages()
+## REPRODUCIBILITY IS A SUPPLY-CHAIN PROPERTY. Every package is installed with a bare install.packages()
 ## / BiocManager::install() and there is no lockfile, so two analysts running Setup on different
 ## days can end up on different versions of the code that computes a Stain Index. That is a
 ## reproducibility problem before it is a security one, and for a GxP-adjacent tool the
@@ -832,7 +832,8 @@ actaVersionDrift <- function(current, baseline) {
 }
 
 ## ============ WORKBOOK ARGUMENT CELLS ARE DATA, NEVER CODE ============
-## Security review of 2_94, finding H-1: `Layout_Plate!flowjo_transformation_arg` was read straight
+## NO WORKBOOK CELL IS EVER EVALUATED, and this is where that rule was bought.
+## `Layout_Plate!flowjo_transformation_arg` was once read straight
 ## out of the workbook and handed to `eval(parse(text = ...))`. The argument NAMES were validated
 ## afterwards, which is too late -- by then any R expression in that cell has already run, with the
 ## analyst's privileges. These workbooks travel: emailed, OneDrive/SharePoint-synced, handed between
@@ -5013,6 +5014,187 @@ isTRUE_vec <- function(x) !is.na(x) & x
 ## just the LaTeX log; the default covers every intermediate including the figures DIRECTORY, which an
 ## extension-only sweep missed -- that left a stray ACTA_Report_<ver>_files/ tree inside an OQ case
 ## folder and broke the "OQ folder carries no code copies" self-containment check.
+## THE TWO DECISIONS ABOUT A STAGE, AS FUNCTIONS, because as inline conditions they were
+## untestable. The guards for them were assertions over run_acta()'s parse tree, which bind the
+## SYMBOLS in a condition and not the predicate: eight semantic mutations passed the whole suite,
+## including inverting the handler's own polarity -- which is the defect those guards were written
+## for, destroying exactly the stage that must be kept -- and changing `length(lost)` to `> 1`, so
+## that the ordinary case of one lost report never raised the flag. Both are now callable, and a
+## test can simply try them.
+actaStageKeep <- function(state, lost) {
+  if (!length(lost)) return(invisible(FALSE))
+  state$keep <- TRUE
+  TRUE
+}
+
+## The exit handler's body. Removes the stage UNLESS it is the run folder itself or something was
+## left in it that the caller could not move.
+actaStageSweep <- function(stage, version_dir, keep) {
+  if (identical(stage, version_dir) || isTRUE(keep)) return(invisible(FALSE))
+  unlink(stage, recursive = TRUE)
+  invisible(!dir.exists(stage))
+}
+
+## WHERE THE REPORT IS RENDERED, which on Windows cannot always be where it belongs.
+##
+## rmarkdown::pandoc_path_arg() does this, and only on Windows:
+##     if (is_windows()) {
+##       i <- grep(" ", path); if (length(i)) path[i] <- utils::shortPathName(path[i])
+##       if (backslash) path <- gsub("/", "\\", path)
+##     }
+## shortPathName() returns BACKSLASHES and is called OUTSIDE the `backslash` switch, so the caller
+## asking for forward slashes gets them anyway. render() derives the figure directory from
+## output_dir and puts it through that function, so the figure path reaches the .tex as
+## C:\Users\NAME~1\...\ACTA_R~1_files\figure-latex/GatingPlot-1 -- and inside \includegraphics{}
+## every backslash-word is an undefined control sequence:
+##     ! Undefined control sequence.
+##     <argument> C:Users
+##                        x AppData Local Temp ...
+##     l.312 ...Report_3.1_files/figure-latex/GatingPlot-1}
+## Reproduced against xelatex, and byte-for-byte the shape a colleague's Windows run reported on
+## 2026-09-16. One space anywhere above the run folder is enough -- "Flow Cytometry", "TIER 1", an
+## account with a given name in it -- and macOS never sees it because the whole block is inside
+## is_windows(). The same path is why the surviving .tex then failed the OQ's "no output names the
+## operator" check: one fault, two failures.
+##
+## HANDING render() A SHORT PATH DOES NOT WORK, and that was the first attempt at this. render()
+## calls normalize_path() on output_dir and on intermediates_dir BEFORE deriving the figure
+## directory, and ?normalizePath says of Windows: "it converts relative paths to absolute paths,
+## resolves symbolic links, CONVERTS SHORT NAMES FOR PATH ELEMENTS TO LONG NAMES". So the 8.3 name
+## is expanded straight back, pandoc_path_arg() shortens it again with backslashes, and nothing
+## changed. Caught by review, not by a test -- every gate tested the helper in isolation and none
+## composed it with the normalisation that undoes it.
+##
+## The only lever left is a directory that has NO SPACE TO BEGIN WITH. The report is rendered
+## there and MOVED to where it belongs, which is what actaRenderStage() picks and
+## actaRenderCollect() completes. On any platform or path where the fault cannot occur this
+## returns version_dir and every step downstream is a no-op -- deliberately, because a staged
+## render is the untested path on the machine this is written on.
+ACTA_REPORT_STAGE <- "acta_report_stage"
+
+actaRenderStage <- function(version_dir, windows = identical(.Platform$OS.type, "windows"),
+                            candidates = NULL, tag = "run") {
+  version_dir <- as.character(version_dir)
+  if (!isTRUE(windows) || !length(version_dir) || is.na(version_dir) ||
+      !grepl(" ", version_dir, fixed = TRUE))
+    return(version_dir)
+  ## The tag keeps two runs in one session out of each other's stage. Sanitised by the caller;
+  ## sanitised again here, because a space in it would defeat the whole point.
+  .sub <- paste0(ACTA_REPORT_STAGE, "_", gsub("[^A-Za-z0-9._-]", "_", as.character(tag)[1]))
+  ## TWO PLACES, in order of preference, and each one CHECKED rather than assumed: R's own temp
+  ## area -- per-session and per-user, so it is the only one with no sharing to reason about --
+  ## and then the public profile, which is space-free by definition on every Windows build and is
+  ## what makes this work when the ACCOUNT name is what carries the space.
+  ##
+  ## THE SYSTEM DRIVE ROOT WAS A THIRD CANDIDATE AND IS GONE. C:\ is world-writable on a
+  ## default install, usually refused by policy anyway, and it is the worst place to put a report
+  ## that has not been written yet.
+  ##
+  ## AND THE LEAF NAME IS UNPREDICTABLE, via tempfile(). A fixed name derived from the run's
+  ## folder is guessable -- two of the three real ones are "OQ_Test1" and "Run_1" -- and in a
+  ## shared location that is three problems at once: two sessions with the same run name share a
+  ## stage and collect each other's artefacts; the unlink() the caller does before rendering
+  ## destroys whatever a local user left there; and anything planted there is copied into the
+  ## operator's run folder, where it travels in the validation package. dir.create() must also
+  ## RETURN TRUE, so a path that already exists -- pre-created, or a reparse point aimed
+  ## somewhere else -- is refused rather than adopted.
+  if (is.null(candidates))
+    candidates <- c(tempdir(), Sys.getenv("PUBLIC", unset = NA_character_))
+  ## ONE CHECK, ON THE DIRECTORY ACTUALLY CREATED. Screening the CANDIDATE for a space and for
+  ## writability as well was redundant -- a spaced candidate can only produce a spaced path, and
+  ## an unwritable one can only fail dir.create() -- and a redundant guard is a guard no test can
+  ## fail, which is how this file accumulated twenty-odd assertions that proved nothing. The
+  ## candidate must EXIST, though: tempfile() on a missing directory plus a recursive dir.create()
+  ## would silently build a tree somewhere nobody asked for.
+  for (d in candidates) {
+    if (is.na(d) || !nzchar(d) || !dir.exists(d)) next
+    ## A KEPT STAGE IS NEVER SWEPT BY ANYONE ELSE, which is the price of keeping it: when a copy
+    ## fails the stage is retained on purpose so the report still exists, and the error tells the
+    ## operator to take it out of there -- but nothing removes it afterwards. In the public
+    ## profile, which is where this lands when the ACCOUNT name is what carries the space, that
+    ## means a complete report sitting in a world-readable directory indefinitely, one per
+    ## failure. Anything a week old has been abandoned; it goes before a new stage is made. Other
+    ## accounts' directories will refuse to unlink and that is fine -- this is best effort, not a
+    ## guarantee, and base R cannot set a Windows ACL to do better.
+    try({
+      .old <- Sys.glob(file.path(d, paste0(ACTA_REPORT_STAGE, "_*")))
+      .old <- .old[dir.exists(.old) &
+                     difftime(Sys.time(), file.mtime(.old), units = "days") > 7]
+      if (length(.old)) unlink(.old, recursive = TRUE)
+    }, silent = TRUE)
+    got <- tryCatch({
+      s <- tempfile(pattern = paste0(.sub, "_"), tmpdir = d)
+      if (grepl(" ", s, fixed = TRUE)) NULL
+      else if (isTRUE(dir.create(s, recursive = TRUE, showWarnings = FALSE)) &&
+               dir.exists(s) && file.access(s, 2L) == 0L) s
+      else NULL
+    }, error = function(e) NULL)
+    if (!is.null(got)) return(got)
+  }
+  ## Nothing space-free and writable: render where it has always rendered. That reproduces the
+  ## fault rather than inventing a new failure, which is the right way round -- the caller gets a
+  ## named LaTeX error it can act on.
+  version_dir
+}
+
+## Move what a staged render produced to where the run keeps its artefacts, and leave the stage
+## empty. Returns the files that arrived, for the caller to assert on.
+## EVERYTHING it produced, not only the PDF: on a FAILED render the .tex and .log are the evidence
+## and are collected the same way, because a staged failure would otherwise leave them in a temp
+## folder nobody will think to look in -- the exact problem the intermediates move was written for.
+actaRenderCollect <- function(stage, version_dir) {
+  if (identical(stage, version_dir)) return(list(moved = character(0), lost = character(0),
+                                                 stage = NA_character_))
+  got <- character(0); lost <- character(0)
+  for (f in list.files(stage, full.names = TRUE, all.files = FALSE, no.. = TRUE)) {
+    ## FILES ONLY, on every path. The figures directory has no business in the run folder: on
+    ## success it is swept again immediately after this returns, so moving it is pure cost, and on
+    ## FAILURE nothing sweeps it at all -- the intermediates are kept as evidence on purpose -- so
+    ## it sat in the case folder, which is exactly what broke the OQ's "carries no code copies"
+    ## check once before, and put a PNG per plot into a synced folder for every failure. A
+    ## `dirs` switch was tried and was worse: the success path moved the tree BEFORE reaching the
+    ## file it could not copy, so a partial collect leaked it anyway. It dies with the stage.
+    if (dir.exists(f)) next
+    dest <- file.path(version_dir, basename(f))
+    ok <- tryCatch(file.copy(f, dest, overwrite = TRUE), error = function(e) FALSE)
+    if (isTRUE(all(ok))) got <- c(got, dest) else lost <- c(lost, basename(f))
+  }
+  ## THE STAGE SURVIVES A FAILED COPY. It used to be unlinked unconditionally, outside the loop --
+  ## so a destination that could not be written (a PDF open in a viewer is a sharing violation on
+  ## Windows) lost the file and then destroyed the only other copy, while the caller, which
+  ## discarded the return value, reported the run as successful. Worse, a PREVIOUS run's report
+  ## was still in the folder and was picked up as this one's. Keeping the stage means the report
+  ## still exists somewhere and the caller can say where.
+  if (!length(lost)) unlink(stage, recursive = TRUE)
+  list(moved = got, lost = lost, stage = if (length(lost)) stage else NA_character_)
+}
+
+actaTexErrorLines <- function(ln) {
+  ## The LaTeX error, as much of it as names the fault. Split out of run_acta() so it can be
+  ## asserted against a real .log rather than only observed in the field.
+  ## TEX REPORTS AN ERROR ON TWO LINES, AND THIS KEPT ONLY THE FIRST. "! Undefined control
+  ## sequence." is followed by "l.312 <the text consumed>" and then a CONTINUATION line
+  ## carrying what came next -- and when the fault is inside a macro argument the naming line
+  ## is "<argument> ..." instead. Neither shape matches a ^! or ^l. pattern, so the ONE TOKEN
+  ## that identifies the fault was the one thing dropped. Measured on a colleague's Windows
+  ## run, 2026-09-16: the report said
+  ##     LaTeX said: ! Undefined control sequence. | l.312 ...-latex/GatingPlot-1}
+  ## and stopped there. The undefined command is the next token after that brace, and it was
+  ## not quoted -- so the log named the line and not the cause, which is the same failure this
+  ## whole block was written to end.
+  ## The first error's BLOCK is quoted now: the "!" line and the four after it, right-trimmed
+  ## only (the leading spaces of a continuation line are how TeX shows where it broke).
+  .i <- grep("^!", ln)
+  bang <- if (length(.i)) {
+    .j <- .i[1]:min(length(ln), .i[1] + 4L)
+    c(sub("[[:space:]]+$", "", ln[.j]),
+      unique(trimws(grep("LaTeX Error|Fatal error", ln[-.j], value = TRUE))))
+  } else unique(trimws(grep("^l[.][0-9]+|LaTeX Error|Fatal error", ln, value = TRUE)))
+  bang <- bang[nzchar(trimws(bang))]
+
+  bang
+}
+
 actaReportIntermediates <- function(dirs, ext = c("tex", "log", "aux", "out", "toc", "knit[.]md",
                                                  "utf8[.]md"),
                                     include_files_dir = TRUE) {
@@ -5194,11 +5376,35 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
     ## they are large (a figure per plot per page), and syncing them is pure cost. Only the PDF still
     ## lands in version_dir, via output_dir. This also removes the .knit.md accumulation that
     ## intermediates_dir = version_dir was introduced to fix.
-    .interDir <- file.path(tempdir(), sprintf("acta_render_%s", basename(version_dir)))
+    ## THE RUN'S NAME IS SANITISED INTO THE FOLDER NAME, not pasted in. basename(version_dir) is
+    ## operator-chosen, so it carries spaces ("Flow Cytometry"), and a space here puts one back in
+    ## a path that exists to be free of them -- see actaRenderStage(). It also keeps two runs in
+    ## one session apart, which a fixed name would not.
+    .runTag <- gsub("[^A-Za-z0-9._-]", "_", basename(version_dir))
+    .interDir <- file.path(tempdir(), sprintf("acta_render_%s", .runTag))
     unlink(.interDir, recursive = TRUE)      # a stale figure from a previous attempt must not be reused
     dir.create(.interDir, recursive = TRUE, showWarnings = FALSE)
+    ## THE STAGE. version_dir unless a Windows figure path would break on it -- see
+    ## actaRenderStage(). Cleared first, for the same reason .interDir is: a figure left by a
+    ## previous attempt must not be collected as if this run had produced it.
+    .stage <- actaRenderStage(version_dir, tag = .runTag)
+    if (!identical(.stage, version_dir)) {
+      unlink(.stage, recursive = TRUE)
+      dir.create(.stage, recursive = TRUE, showWarnings = FALSE)
+    }
     .tt <- options(tinytex.clean = FALSE)
     on.exit(options(.tt), add = TRUE)
+    ## THE STAGE IS SWEPT ON EXIT ONLY IF IT IS SAFE TO SWEEP. This handler used to unlink it
+    ## unconditionally, which undid the one thing actaRenderCollect() is careful about: it KEEPS
+    ## the stage when a copy fails, and the error raised below tells the operator to go and get
+    ## the report out of it. The handler then deleted it on the way out, so the report was
+    ## destroyed and the message named a directory that no longer existed -- and the run folder
+    ## was left holding the PREVIOUS run's PDF, which the dashboard links regardless. Measured.
+    ## An ENVIRONMENT, not a local: this flag is set from inside a tryCatch expression and from
+    ## inside its error handler, which are different frames, and `<-` vs `<<-` would be wrong in
+    ## one of them either way.
+    .stageState <- new.env(parent = emptyenv()); .stageState$keep <- FALSE
+    on.exit(actaStageSweep(.stage, version_dir, .stageState$keep), add = TRUE)
     report_ok <- tryCatch({
       ## output_dir as well as knit_root_dir: rmarkdown writes beside the INPUT by default, which
       ## would drop the PDF in the code folder when the two differ.
@@ -5230,9 +5436,23 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
       ## hand was the same thing. So sweep before rendering as well as after: one failure must not be
       ## able to fail the next run.
       unlink(actaReportIntermediates(c(version_dir, code_dir)), recursive = TRUE)
+      ## output_dir is the STAGE -- see actaRenderStage(). It is version_dir on every platform and
+      ## path where the Windows figure-path fault cannot happen, and a space-free directory when it
+      ## can; the report is moved back below. knit_root_dir stays the real folder: it is the
+      ## working directory for the chunks, never written into the .tex, and a chunk resolving a
+      ## relative path against it must land in the run.
       rmarkdown::render(rmd, envir = env, knit_root_dir = version_dir,
-                        output_dir = version_dir, intermediates_dir = .interDir,
+                        output_dir = .stage, intermediates_dir = .interDir,
                         quiet = isTRUE(quiet), clean = FALSE)
+      ## A COLLECT THAT LOST SOMETHING IS NOT A SUCCESSFUL RENDER. The report exists, but not
+      ## where the run keeps it -- and the folder may still hold an OLDER report that every
+      ## consumer downstream would pick up as this one's. Say so, and say where it actually is.
+      .col <- actaRenderCollect(.stage, version_dir)
+      if (actaStageKeep(.stageState, .col$lost))
+        stop(sprintf(paste0("the report rendered but could not be moved into the run folder ",
+                            "(%s). It is still in '%s' -- copy it out before that folder is ",
+                            "cleared. A file of the same name may be open in a viewer."),
+                     paste(.col$lost, collapse = ", "), .col$stage), call. = FALSE)
       ## Tidy the intermediates ONLY on success; on failure they are the evidence.
       ## Covers the figures DIRECTORY as well as the loose files. clean = FALSE keeps
       ## ACTA_Report_<ver>_files/ too, and an extension-only sweep left it sitting in the case folder
@@ -5255,15 +5475,27 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
       ## The .log and .tex now live on local disk, so COPY them back beside the run's artefacts --
       ## that is where actaOQFinish() and the operator look, and a temp dir is not somewhere anyone
       ## will think to check.
+      ## The STAGE first, for the same reason: a staged render puts the .tex and the .log there,
+      ## and a temp folder is not somewhere anyone will look for evidence.
+      try({ .ec <- actaRenderCollect(.stage, version_dir)
+             actaStageKeep(.stageState, .ec$lost) }, silent = TRUE)
       for (f in actaReportIntermediates(.interDir, ext = c("log", "tex"), include_files_dir = FALSE))
         try(file.copy(f, file.path(version_dir, basename(f)), overwrite = TRUE), silent = TRUE)
       for (f in actaReportIntermediates(code_dir, ext = "log"))
         try(file.rename(f, file.path(version_dir, basename(f))), silent = TRUE)
+      ## AND THE AUX FILES ARE NOT EVIDENCE. The .log and the .tex are, and they are moved beside
+      ## the run above; .aux/.out/.toc are LaTeX scratch that carry nothing a reader needs. Left in
+      ## the CODE folder they fail the release gate asserting inst/pipeline/ ships exactly one
+      ## ACTA_Report_* file -- measured: one failed render against the shipped pipeline left the
+      ## suite reporting 15 of 16 until they were deleted by hand, so the release's own evidence
+      ## was contingent on nobody having had a render fail. A truncated one also breaks the NEXT
+      ## render in the preamble, which is why the pre-render sweep exists; this is its other half.
+      try(unlink(actaReportIntermediates(code_dir, ext = c("aux", "out", "toc"),
+                                         include_files_dir = FALSE)), silent = TRUE)
       ln <- unlist(lapply(actaReportIntermediates(version_dir, ext = "log"),
                           function(f) tryCatch(readLines(f, warn = FALSE),
                                                error = function(e) character(0))))
-      bang <- unique(trimws(grep("^!|^l[.][0-9]+|LaTeX Error|Fatal error", ln, value = TRUE)))
-      bang <- bang[nzchar(bang)]
+      bang <- actaTexErrorLines(ln)
       ## NAME THE CAUSE WHEN THERE IS NO LOG TO QUOTE. The lines above only help when LaTeX
       ## actually ran; with no engine installed it never starts, so `bang` is empty and the
       ## message stays the bare "error in running command" -- which this file's own comment
@@ -5276,7 +5508,7 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
       report_error <<- paste(c(msg,
                                if (length(.why)) paste("cause:", paste(.why, collapse = "; ")),
                                if (length(bang))
-                                 paste("LaTeX said:", paste(utils::head(bang, 3), collapse = " | "))),
+                                 paste("LaTeX said:", paste(utils::head(bang, 6), collapse = " | "))),
                              collapse = " -- ")
       FALSE
     })
@@ -5505,8 +5737,15 @@ actaRunArtefacts <- function(res) {
             list.files(res$plots_dir, pattern = "\\.png$", full.names = TRUE) else character(0)
   skipped <- function(why) list(label = NA_character_, path = NA_character_, skipped = why)
   list(
-    report = if (isTRUE(res$report_ok))
+    ## length(pdfs) AS WELL AS report_ok. which.max(file.mtime(character(0))) is integer(0), and
+    ## pdfs[[integer(0)]] throws "attempt to select less than one element" -- straight out of the
+    ## app's completion panel, with the run itself having succeeded. report_ok said a PDF was
+    ## rendered; it did not say one is in this folder now, and those came apart the moment a
+    ## render could be staged elsewhere.
+    report = if (isTRUE(res$report_ok) && length(pdfs))
                list(label = "Report (PDF)", path = pdfs[[which.max(file.mtime(pdfs))]], skipped = NA_character_)
+             else if (isTRUE(res$report_ok))
+               skipped("the report rendered but is not in this folder")
              ## "render failed" is only true if the render is what failed. When the analysis never
              ## completed there was nothing to render, and blaming LaTeX sends the reader to the
              ## wrong stage -- the same misattribution the run log used to make.
@@ -5792,6 +6031,34 @@ actaCopyDestReachable <- function(dest, scan) {
                   d, s, ACTA_OUTPUT_SUBDIR), d)
 }
 
+## THE SYNC-CONFLICT FILTER WAS HERE, AND IT WAS TAKEN OUT DELIBERATELY. Read this before putting
+## it back.
+##
+## The leak is real and was seen on 2026-09-15: a sync client makes a conflict copy when two
+## machines touch one file and names it after the account and the machine
+## ("<export>-<account>@<domain>-Mac (2).xlsx"), and the dashboard links every export it finds
+## into an HTML file whose whole purpose is to be e-mailed.
+##
+## The filter that withheld those copies went through SIX review rounds and every one of them
+## found a defect in it. Five were in the rule itself, each iteration silently dropping a
+## different genuine artefact out of the index: a lone "@" took panels keyed "CD3@PE" and
+## "Lot@12345"; a lone "-Mac"/"-PC" took gates aliased "Mono-Mac" and "CD138-PC"; an unanchored
+## dotted domain took the standard dot spelling of every tandem dye; an unbounded machine-name
+## tail took "PE.Dazzle-594" and "APC.Fire-750"; anchoring the match then ADMITTED conflict copies
+## at co.uk, ac.uk and com.au, which is the leak itself. The last two rounds found the rule sound
+## and the tests guarding it hollow instead.
+##
+## Withholding a genuine run from the index is a worse failure than the leak, and it is silent.
+## v3.1.6 shipped with no filter at all, so removing it returns this channel to exactly the
+## posture the published version already has -- it takes nothing away from anyone. The rest of
+## what this release does (the identity scrubber, which IS measurably stronger than v3.1.6, and
+## the Windows render fix) does not depend on it.
+##
+## If it comes back: build it against the generated corpora in tests/legacy/test_diagnostics.R,
+## derive the artefact names from the code that WRITES them rather than from what a filename
+## looks like it contains, and gate it by execution -- all six rounds were lost to one or the
+## other of those.
+
 actaScanExports <- function(dir, dashboard_html = NA_character_) {
   if (is.na(dir) || !nzchar(dir) || !dir.exists(dir))
     return(list(recs = list(.appRec("exp_dir", "Export folder exists", "fail",
@@ -5809,6 +6076,9 @@ actaScanExports <- function(dir, dashboard_html = NA_character_) {
   runs <- list.dirs(dir, recursive = FALSE, full.names = TRUE)
   runs <- runs[!grepl("archive", runs, ignore.case = TRUE)]
   f <- unlist(lapply(runs, function(r)
+    ## Conflict copies excluded -- see actaIsSyncConflict(). Counting them here would also make
+    ## this pre-flight disagree with the generator, which is the divergence the note above warns
+    ## about, so both apply the same rule.
     list.files(c(r, file.path(r, ACTA_OUTPUT_SUBDIR)), pattern = "TitrationExport.*\\.xlsx$",
                full.names = TRUE)),
     use.names = FALSE)
@@ -6042,6 +6312,16 @@ actaHomePrefixes <- function() {
   ## where the parent of the home is /Users or /home and replacing THAT with ~ would be wrong
   ## for every other user on the machine.
   if (.Platform$OS.type == "windows") cand <- c(cand, dirname(cand))
+  ## AND THE 8.3 SHORT FORM OF EACH. Every candidate above is a LONG name, so a truncated
+  ## spelling of the same path matched none of them -- and that spelling is not hypothetical: anything
+  ## on Windows that passes a spaced path through utils::shortPathName() produces it, which is
+  ## what rmarkdown does to a figure directory (see actaRenderStage()). The account is still
+  ## named by the truncation, the login test cannot see it either because the 8.3 form is
+  ## upper-cased and cut, and the OQ check that reads this list is the control that caught the
+  ## long form in the field. Cheap, and it closes the spelling this file was already dealing with.
+  if (.Platform$OS.type == "windows")
+    cand <- c(cand, unlist(lapply(cand, function(d)
+      tryCatch(utils::shortPathName(d), error = function(e) character(0)))))
   ## ...but NOT the container itself. dirname() is applied to every candidate, including ones
   ## already at the profile root, so "C:/Users" and "C:\Users" entered the list -- 8 characters,
   ## past the length floor. Replacing THAT with ~ turns any colleague's path into
@@ -6160,7 +6440,38 @@ actaDeIdentifyText <- function(x, user = tryCatch(Sys.info()[["user"]], error = 
   if (nzchar(.u) && nchar(.u) >= 4L)
     x <- gsub(sprintf("(?<![A-Za-z0-9])\\Q%s\\E(?![A-Za-z0-9])", .u),
               "<redacted-user>", x, perl = TRUE)
-  gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<redacted-email>", x, perl = TRUE)
+  ## THE LOCAL PART IS UNICODE-AWARE TOO. It was [A-Za-z0-9._%+-], so an accented given name or an
+  ## apostrophe stopped the match partway and left a FRAGMENT glued to the marker: a name with an
+  ## acute came out "Ren<acute-lost><redacted-email>", and "O'Brien@..." came out "O'<redacted>".
+  ## The domain -- the high-value half -- was removed either way, which is why this survived six
+  ## reviews, but a given name beside the marker is still the person named.
+  ##
+  ## AND A HOST WITHOUT A TLD -- NARROWLY. The pattern required a dotted TLD, so an scp target
+  ## "someone@build-node-12:path" kept BOTH halves. The first widening ("any host of three or more
+  ## characters") was far too broad for THIS package: it is built on S4 objects, so "gs@pointer"
+  ## and "fs@phenoData" are ordinary traceback text and "ACTA@3.2.0" and "acta-public@v3.2.0" are
+  ## ordinary install text -- all four came out as <redacted-email>, and the slot name is often the
+  ## whole content of the diagnostic. The TLD-less form is therefore admitted only where the right
+  ## side cannot be an identifier or a version: it is HYPHENATED (build-node-12), or a colon
+  ## follows it immediately, which is the scp/ssh target shape and not "gs@pointer : invalid".
+  ## A LETTER-only TLD in the dotted form, for the same reason -- "v3.2.0" ends in a digit.
+  x <- gsub("[\\p{L}\\p{N}._%+'-]+@[A-Za-z0-9][A-Za-z0-9.-]*[.][A-Za-z]{2,}",
+            "<redacted-email>", x, perl = TRUE)
+  x <- gsub(paste0("[\\p{L}\\p{N}._%+'-]+@(?:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+",
+                   "|[A-Za-z0-9][A-Za-z0-9.-]{2,}(?=:[^[:space:]]))"),
+            "<redacted-email>", x, perl = TRUE)
+  ## AN INTERNAL FQDN IS NOT MASKED, and that is now a decision rather than an omission. A rule
+  ## keyed on the .local/.internal/.intra/.lan/.corp suffixes was added here and taken back out:
+  ## those are Unix and R CONFIG suffixes as much as network ones, and nothing distinguishes
+  ## "nas01.corp" from "Makevars.local", "Rprofile.site.local", "config.yml.local", "plate2.local"
+  ## or "pre-commit.local" without knowing which is a machine. Two review rounds found real
+  ## over-redaction in two successive attempts, and each attempt turned a filename into
+  ## <redacted-host>, which is worse than leaving it: the marker tells the reader the line named a
+  ## machine when it named the file they need. The bundle header promises only that THIS machine's
+  ## name is masked, and that promise is kept above, so what is lost here was never claimed.
+  ## An address AT such a host still goes -- the e-mail pass above does not care what the domain
+  ## is -- and so does an scp target.
+  x
 }
 
 actaDiagScrub <- function(lines) {
@@ -6216,14 +6527,44 @@ actaDiagScrub <- function(lines) {
   ## for -- so over-redaction here costs the diagnostic, which is a different failure from a leak
   ## but still a failure, and it was strictly worse than the release before it.
   ##
-  ## THE COMMA STAYS IN, deliberately. An account written "Surname,Given" would otherwise match
-  ## only as far as the comma and leave the given name standing -- an over-redaction traded for a
-  ## leak.
   ## A colon cannot appear in a POSIX filename and on Windows only follows a drive letter, so
   ## excluding it is free; quotes and closing brackets are punctuation no account name carries.
+  ## The comma is IN this class -- the match here is bounded by the container name on one side
+  ## and the next separator on the other, so a two-word account with a comma in it has nowhere
+  ## to run to. The collapse below has no such bound, which is why it does NOT get the comma;
+  ## see the block there.
   .acct <- "(?!Users[/\\\\]|home[/\\\\])[^/\\\\[:space:]:;\"\\]}]+"
   x <- gsub(sprintf("(?i)(Users[/\\\\])%s", .acct), "\\1<redacted>", x, perl = TRUE)
   x <- gsub(sprintf("(?i)(home[/\\\\])%s", .acct), "\\1<redacted>", x, perl = TRUE)
+
+  ## A "Surname, Given" COMPONENT, wherever it sits. A shared drive carries folders named that
+  ## way outside Users/ and home/, and the collapse below cannot be the thing that fixes them:
+  ## admitting `,` to its component class let the match run from the path, across the prose after
+  ## it, to the LAST slash in the line -- "wrote /data/lab/out.tsv, stain 0.25 ug/mL" published as
+  ## "wrote mL". The comma is the terminator nearly every message relies on, and the second slash
+  ## is supplied by ug/mL, cells/well, events/s, and/or, "row 3/4", a date, or a second path.
+  ## Measured against the release before it, twenty-odd ordinary shapes came out worse, in FIRST
+  ## ERROR and CHILD STDOUT -- the two fields the bundle exists for. So the SHAPE is matched
+  ## exactly instead: a CAPITALISED word each side of the comma (an apostrophe or hyphen allowed
+  ## inside), a separator on both ends, at most one space after the comma. That is what a person's
+  ## name looks like and what a unit is not: "out.tsv, stain 0.25 ug" has a dot in the first half,
+  ## and "0.25 ug/mL, cells/well" -- two of this tool's own units, which the first draft of this
+  ## rule collapsed to "ugs" -- has a lower-case word on each side. No case-insensitive flag here,
+  ## deliberately: it would undo the whole discrimination.
+  ## ANCHORED AT AN ABSOLUTE PATH ROOT. Without that anchor the rule fired on any "X/Word, Word/Y",
+  ## and this tool writes that shape constantly: "channels detected: FITC/PE, APC/Cy7" collapsed to
+  ## "FITCCy7", "FSC/Area, SSC/Area" to "FSCArea", and "3_1/DESCRIPTION, Publish/README.public.md"
+  ## to "3_1README.public.md". A person's home directory is always reached through a root -- ~, a
+  ## drive letter, or a separator that does not follow an alphanumeric -- and a channel pair never
+  ## is. The prefix is captured and put back, so only the name component is replaced.
+  ## The given name may be an initial or carry up to two further words ("Nguyen, Thi Minh"), and
+  ## the whole match must still end at a separator: that bound is what stops
+  ## "/data/Report, Stain 0.25 ug/mL" from being read as a name.
+  .root <- "(?:~|[A-Za-z]:[/\\\\]|(?<![\\p{L}\\p{N}])[/\\\\])"
+  x <- gsub(sprintf(paste0("(%s[\\p{L}\\p{N}._ +&@<>'()#%%!~/\\\\-]*?[/\\\\])",
+                           "\\p{Lu}[\\p{L}'-]+,[ ]{0,2}\\p{Lu}[\\p{L}'.-]*",
+                           "(?:[ ]\\p{Lu}[\\p{L}'.-]*){0,2}(?=[/\\\\])"), .root),
+            "\\1<redacted>", x, perl = TRUE)
 
   ## A DIRECTORY IS COLLAPSED TOO, to its basename. Reducing only paths that end in a
   ## filename left "~/Library/CloudStorage/OneDrive-SharedLibraries-<Employer>/<Library>/Flow"
@@ -6232,7 +6573,27 @@ actaDiagScrub <- function(lines) {
   x <- vapply(x, function(one) {
     ## SAME UNICODE WIDENING as .acct, for the same reason -- and space is kept IN here, which is
     ## what makes a two-word account name collapse cleanly rather than leaving its second word.
-    m <- gregexpr("(?:~|(?:[A-Za-z]:)?)(?:[/\\\\][\\p{L}\\p{N}._ +&@<>'()-]+){2,}", one, perl = TRUE)
+    ## THE COMPONENT CLASS TAKES PUNCTUATION A NAME CAN CONTAIN. It was a finite allowlist, so a
+    ## folder or account written with a hash, percent, exclamation or tilde broke the path match
+    ## outside the two container names, and the name survived AND the line was mangled:
+    ## "/nfs/lab#3/plate.xlsx" collapsed "/nfs/lab" and left "#3/plate.xlsx" beside it. A Windows
+    ## 8.3 short name (FOO~1) failed the same way.
+    ##
+    ## `,` `;` `=` AND `$` ARE DELIBERATELY OUT, and it was measured rather than guessed. This
+    ## pass has NO RIGHT-HAND BOUND: space is in the class (which is what makes a two-word account
+    ## collapse cleanly), so the only thing that stops the match is punctuation, and every
+    ## character admitted here is a character the match can cross to reach a later slash. The
+    ## comma is the one that matters, because it is the terminator nearly every message relies
+    ## on -- with it in, "wrote /data/lab/out.tsv, stain 0.25 ug/mL" came out "wrote mL" and
+    ## "layout '/data/lab/plate.xlsx', sheet 'Info', row 3/4" came out "layout '4". `;` cost the
+    ## word after "/Users/<acct>; retrying" and took a report render down with it; `=` and `$` sit
+    ## beside paths in prose ("R_LIBS_USER=/home/x:/y") and eat the variable name. The comma's
+    ## leak shape is handled ABOVE, by matching "Surname, Given" exactly where it is bounded.
+    ##
+    ## The space already lets this pass reach across two paths in one sentence and keep only the
+    ## last basename. That predates all of this, and is the reason the account redactions run
+    ## BEFORE the collapse instead of relying on it.
+    m <- gregexpr("(?:~|(?:[A-Za-z]:)?)(?:[/\\\\][\\p{L}\\p{N}._ +&@<>'()#%!~-]+){2,}", one, perl = TRUE)
     ## keep = 1: the BASENAME, which is what v3.0.12 did and what the bundle header promises.
     ## Keeping two components here is what published /data/<acct>/run.log as "<acct>/run.log".
     regmatches(one, m) <- list(vapply(regmatches(one, m)[[1]], actaPathLabel, character(1),
@@ -7703,6 +8064,20 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
       tx <- .texts(f); if (!length(tx)) next
       if (length(.hp) && any(vapply(.hp, function(p) any(grepl(p, tx, fixed = TRUE)),
                                     logical(1)))) hits$path <- c(hits$path, basename(f))
+      ## AND THE GENERIC 8.3 SHAPE, independent of the prefix list. A truncated account under the
+      ## container name names the person as surely as the long form; the login test cannot see it
+      ## either, because the 8.3 spelling is upper-cased and cut short; and no list built from THIS
+      ## machine's long names can hold a spelling some Windows API produced on another. This check
+      ## is the control that caught the long form in the field, so it should not depend on how the
+      ## path happens to be spelled.
+      ## FOUR BACKSLASHES, not two. With two, R hands PCRE `Users[/\][^/\]*~[0-9]`, where the
+      ## `\]` is an escaped bracket so the class never closes where it looks like it does: the
+      ## pattern degenerates to "Users" plus ONE character, which MISSED the backslash spelling
+      ## this check exists for, and matched a shared library path, a year in prose and this
+      ## file's own public stage candidate -- failing clean runs on paths that name nobody. The
+      ## idiom is four, as .acct uses above; measured both ways before and after.
+      else if (any(grepl("Users[/\\\\][^/\\\\]*~[0-9]", tx, perl = TRUE, ignore.case = TRUE)))
+        hits$path <- c(hits$path, basename(f))
       if (nzchar(.node) && any(grepl(.node, tx, fixed = TRUE))) hits$node <- c(hits$node, basename(f))
       if (nzchar(.user) && any(grepl(.user, tx, fixed = TRUE))) {
         ## WHERE the login name appears decides whether it can be innocent. In a workbook's

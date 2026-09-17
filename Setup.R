@@ -17,7 +17,8 @@
 ## `sys.frame(1)$ofile`, which misses whenever source() is not the outermost call -- measured).
 ## Merging removes the flag-passing problem by construction and leaves ONE resolver.
 ##
-## MINIMUM R VERSION, ENFORCED HERE. Security review of 2_94, finding L-2: R's native serialisation
+## MINIMUM R VERSION, ENFORCED HERE, and it is a security floor rather than a taste. R's native
+## serialisation
 ## had CVE-2024-27322 -- a crafted .rds could execute code on readRDS() through a lazy-evaluation
 ## promise -- fixed in R 4.4.0. ACTA calls readRDS() on its preferences file and on every child
 ## process result, so the finding's "not currently exploitable" rested entirely on a sentence in the

@@ -6,6 +6,13 @@
 
 ![](assets/overview.png)
 
+## YouTube tutorial for newbies
+
+A video walkthrough of installation and a first run, following the same steps as
+this page:
+
+<https://www.youtube.com/playlist?list=PLRmHaClkJp_U>
+
 ## Introduction & Workflow
 
 This is an automated tool for flow cytometry antibody titer analysis.
@@ -220,11 +227,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.1.6")
+remotes::install_github("jatin199517/acta-public@v3.2.0")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.1.6 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.2.0 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more

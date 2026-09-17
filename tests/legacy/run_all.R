@@ -46,7 +46,7 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_app_support.R",    # app-only helpers, incl. the LaTeX package check
              "test_diagnostics.R",    # the three write points and the diagnostic bundle
              "test_combinatorial.R", # the Combinatorial_group declaration and its per-value test
-             "test_arg_safety.R",     # no workbook cell is ever evaluated (2_94 review H-1)
+             "test_arg_safety.R",     # no workbook cell is ever evaluated
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer

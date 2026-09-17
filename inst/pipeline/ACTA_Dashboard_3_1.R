@@ -76,6 +76,11 @@ isYes <- function(x) !is.na(x) && toupper(trimws(x)) %in% c("TRUE", "T", "YES", 
 ## nested inside a live folder is skipped too.
 isArchived <- function(p) grepl("archive", p, ignore.case = TRUE)
 
+## THE SYNC-CONFLICT FILTER WAS HERE AND WAS REMOVED DELIBERATELY -- see the long note at the same
+## place in ACTA_Functions.R (search for SYNC-CONFLICT FILTER) before putting it back. Short
+## version: six review rounds, six defects, five of them this filter silently withholding a
+## genuine run or panel from the index, which is worse than the leak and invisible. v3.1.6 ships
+## no filter, so its absence takes nothing away from anyone.
 ## Path of `path` relative to `base`. Written out rather than taken from a package
 ## because the dashboard's links must be relative for the file to stay portable,
 ## and this keeps the script dependency-light.
@@ -274,6 +279,18 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## constant for the app's pre-flight; the two MUST stay in sync, because when they disagree the
   ## pre-flight passes and the dashboard comes out empty.
   OUTPUT_SUBDIR <- "Outputs"
+  ## THE MACHINE-SUFFIX HALF OF THE RULE IS FOR EXPORTS ONLY. Its justification is the export
+  ## FILENAME:
+  ## ACTA builds that name itself, the ELN goes through a rewrite that leaves only [A-Za-z0-9._+-],
+  ## and it ends in _TitrationExport_<version> -- so an "@", a " (2)" or a machine suffix in one
+  ## can only have come from the sync client. A FIGURE name is not built that way. Its gate alias
+  ## comes from the workbook, so hyphens reach the position the machine-suffix shape anchors on
+  ## and a panel aliased "CD3-PC" or "CD11b-Mac" would have had its layout PNG silently dropped
+  ## from the dashboard -- the exact failure this rule exists to prevent, one artefact type over.
+  ## Only THAT test is scoped. The "@" and " (n)" tests apply to every glob: a conflict copy of a
+  ## report or a figure is named after an account just the same, and both get their paths embedded
+  ## in an HTML file the README says can be e-mailed. Turning all three off for two of the three
+  ## artefact kinds -- which the first version of this fix did -- reopened the leak it was for.
   pick <- function(root, pattern, recursive) {
     roots <- if (recursive) root else c(root, file.path(root, OUTPUT_SUBDIR))
     f <- list.files(roots, pattern = pattern, recursive = recursive, full.names = TRUE,
@@ -547,7 +564,7 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
       "__DATA_JSON__"      = jsonlite::toJSON(records,   auto_unbox = TRUE, null = "null"),
       "__COLS_JSON__"      = jsonlite::toJSON(cols,      auto_unbox = TRUE, null = "null"),
       "__GROUPABLE_JSON__" = jsonlite::toJSON(groupable, auto_unbox = TRUE, null = "null"))
-    ## `</script>` CANNOT SURVIVE INTO THE PAGE. Security review of 2_94, finding L-1:
+    ## `</script>` CANNOT SURVIVE INTO THE PAGE.
     ## jsonlite::toJSON() escapes what JSON requires but leaves `<` and `>` alone, and this payload
     ## is substituted INSIDE a <script> block. A marker or sample name containing the literal text
     ## `</script>` would close that block early and whatever followed would be parsed as markup.

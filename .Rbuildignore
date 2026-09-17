@@ -23,3 +23,9 @@
 (^|/)Outputs(/|$)
 (^|/)Diagnostics_log(/|$)
 (^|/)\.DS_Store$
+
+# LaTeX SCRATCH FROM A FAILED RENDER IN THE PIPELINE FOLDER. run_acta() keeps the .log and the
+# .tex as evidence when a render fails and sweeps the rest, but the sweep missed the code folder
+# for a while, and inst/pipeline/ACTA_Report_*.aux/.toc then failed the gate asserting that folder
+# ships exactly ONE ACTA_Report_* file. Fixed at the source; this is the belt, for the tarball.
+(^|/)ACTA_Report_[^/]*\.(aux|toc|out)$

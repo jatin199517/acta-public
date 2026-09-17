@@ -1,4 +1,5 @@
-## Guards the fix for the 2_94 security review's H-1: NO WORKBOOK CELL IS EVER EVALUATED.
+## Guards one rule, and it was a real defect before it was a rule: NO WORKBOOK CELL IS EVER
+## EVALUATED.
 ##
 ## The review found one of three paths. `flowjo_transformation_arg` was handed to
 ## `eval(parse(text=...))` with the argument NAMES validated afterwards -- too late, the code has

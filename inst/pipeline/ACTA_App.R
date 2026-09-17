@@ -191,7 +191,7 @@ if (length(FN_FILE) == 1) {
 invisible(actaRepairPath())
 
 ## EVERY path spliced into the child's `-e` code goes through this, never through sprintf("'%s'").
-## Security review of 2_94, finding M-2: WORK_DIR / CODE_DIR are user-chosen folder paths, and a
+## A FOLDER NAME IS UNTRUSTED INPUT. WORK_DIR / CODE_DIR are user-chosen folder paths, and a
 ## single quote is a legal character in a folder name on both macOS and Windows. Interpolated raw,
 ## it closes the R string literal early -- so the child either dies with a syntax error or, worse,
 ## evaluates a fragment that was never meant to be code. processx passes args as an ARRAY and
