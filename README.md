@@ -8,8 +8,7 @@
 
 ## YouTube tutorial for newbies
 
-A video walkthrough of installation and a first run, following the same steps as
-this page:
+A video walkthrough of ACTA:
 
 <https://www.youtube.com/playlist?list=PLRmHaClkJp_U>
 
