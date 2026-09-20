@@ -224,3 +224,18 @@ actaTestFunctions <- function(vd = actaTestVersionDir()) {
   for (f in rfiles) suppressWarnings(suppressMessages(sys.source(f, envir = h)))
   h
 }
+
+## ---------------------------------------------------------------------------------------------
+## DOES A PATH CARRY A WINDOWS SEPARATOR? One line, shared, because both callers got it wrong the
+## same way and neither could notice: `fixed = TRUE` takes the pattern LITERALLY, so the pattern
+## for one backslash is "\\" -- and both wrote "\\\\", which is TWO. No ordinary Windows path
+## holds two adjacent backslashes (a UNC prefix does, and nothing else), so both predicates were
+## a CONSTANT FALSE on the only platform they are ever evaluated on.
+## What that cost: test_diagnostics.R printed "the fault is NOT reproducible -- upstream may have
+## fixed it; confirm before retiring actaRenderStage()" on the first real Windows machine to run
+## it, one line under a path visibly full of backslashes -- an argument for deleting a mechanism
+## that was working. In ci_report_render.R it made `ok <- FALSE` unreachable, so the branch that
+## exists to fail the Windows render job could never fire.
+## Defined here rather than twice because they are the same claim, and asserted in
+## test_diagnostics.R so it cannot silently become a constant again.
+actaFaultLive <- function(p) grepl("\\", p, fixed = TRUE)

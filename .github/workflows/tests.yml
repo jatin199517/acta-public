@@ -41,8 +41,25 @@ jobs:
         # review had to find it by reading. Windows is where path.expand("~") is the DOCUMENTS
         # folder rather than the profile root and where R hands back backslashes, which is exactly
         # the class of bug no amount of ubuntu and macOS green can see.
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        #
+        # MACOS IS PINNED TO 4.5, and it is a workaround with a shelf life. CRAN has begun shipping
+        # its macOS binaries ZSTD-compressed -- still named .tgz -- and pkgdepends only recognises
+        # gzip, zip, bzip2 and xz, so pak aborts with "unknown archive type" on the first zstd one
+        # it reaches. That is upstream on both sides and nothing here can route around it: the
+        # failure is in the dependency install, before a line of ACTA runs. It is a ROLLING
+        # migration, so it arrives package by package as CRAN rebuilds -- on 2026-09-20 knitr 1.52,
+        # xfun 0.61 and readxl 1.5.0.1 were zstd while dplyr, ggplot2 and ten others were still
+        # gzip, which is why this broke between two releases three days apart with no change here.
+        # The 4.5 binaries are gzip throughout, verified against CRAN the same day.
+        # R 4.6 IS STILL COVERED, by ubuntu and windows; what this gives up is the macOS-times-4.6
+        # cell, not R 4.6. REVERT TO "release" once pkgdepends detects zstd -- as of the same date
+        # neither its NEWS nor its main branch does (see detect_package_archive_type in
+        # R/install-tar.R), so check there rather than guessing from a pak version bump.
+        os: [ubuntu-latest, windows-latest]
         r: ["release"]
+        include:
+          - os: macos-latest
+            r: "4.5"
     steps:
       - uses: actions/checkout@v4
       - uses: r-lib/actions/setup-r@v2

@@ -126,13 +126,13 @@ cat("\n=== is the fault live here? (rmarkdown::pandoc_path_arg, no stub) ===\n")
 .raw <- rmarkdown::pandoc_path_arg(.fig, backslash = FALSE)
 cat("  run folder's figure dir ->", .raw, "\n")
 if (identical(.Platform$OS.type, "windows")) {
-  .live <- grepl("\\\\", .raw, fixed = TRUE)
+  .live <- actaFaultLive(.raw)
   .st   <- h$actaRenderStage(run, tag = "probe")
   .sfig <- rmarkdown::pandoc_path_arg(file.path(.st, "ACTA_Report_3.1_files", "figure-latex"),
                                       backslash = FALSE)
   cat("  the stage's figure dir  ->", .sfig, "\n")
   if (!identical(.st, run)) unlink(.st, recursive = TRUE)
-  if (.live && !grepl("\\\\", .sfig, fixed = TRUE)) {
+  if (.live && !actaFaultLive(.sfig)) {
     note("VERDICT: the fault IS live on this machine and the stage avoids it -- the fix is doing work")
   } else if (.live) {
     note("VERDICT: the fault is live AND the stage did not avoid it -- the fix is NOT working here")

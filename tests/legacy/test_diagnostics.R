@@ -812,10 +812,32 @@ local({
 
     ## THE LOOP CLOSED: the directory ACTA chooses, put through the same function, is clean. This
     ## is the assertion that says the fix addresses THIS mechanism rather than some other one.
+    ## "INTACT" IS NOT "HAS NO BACKSLASH". This read the RESULT for backslashes, which is a proxy
+    ## for damage only where the INPUT had none. True of /tmp on POSIX; FALSE ON WINDOWS, where
+    ## tempdir() is natively C:\Users\...\Temp\Rtmp..., so actaRenderStage hands back a perfectly
+    ## good stage whose separators are ALREADY backslashes before pandoc_path_arg touches it, and
+    ## the proxy reads those separators as damage. Green on ubuntu and macOS, RED on
+    ## windows-latest, for a stage that was correct -- the gate failing on the one platform it
+    ## exists to speak about, which is the recurring fault in this file's history.
+    ## The claim is intactness, so assert intactness: identical in, identical out. Platform
+    ## neutral, and stronger than the proxy was anywhere -- it also catches a rewrite that
+    ## happens to preserve the separator style.
     .stage <- h$actaRenderStage(.fig, windows = TRUE, tag = "premise")
     chk(sprintf("the stage actaRenderStage() picks survives it intact  [%s]",
                 basename(.stage)),
-        !identical(.stage, .fig) && !grepl("\\\\", .asWin(.stage, backslash = FALSE)))
+        !identical(.stage, .fig) && !grepl(" ", .stage, fixed = TRUE) &&
+          identical(.asWin(.stage, backslash = FALSE), .stage))
+    ## THE SAME CLAIM AS A LITERAL, so it is not one only the Windows runner can check. This is
+    ## the shape that runner actually produces, and under the old proxy it is FALSE -- which is
+    ## what makes this the gate on that bug rather than a restatement of the line above.
+    .winStage <- paste0("C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\RtmpAbc123\\",
+                        "acta_report_stage_premise_1a2b3c")
+    chk("...and so does a Windows-shaped stage, backslashed before pandoc ever sees it",
+        identical(.asWin(.winStage, backslash = FALSE), .winStage))
+    ## AND THE VERDICT PREDICATE ITSELF, which was a constant FALSE and said so to nobody.
+    chk("...and the LIVE/not-live predicate actually sees a single backslash",
+        actaFaultLive("C:\\Users\\someone\\Flow Cytometry\\x_files\\figure-latex") &&
+          !actaFaultLive("C:/Users/someone/FlowCytometry/x_files/figure-latex"))
     if (!identical(.stage, .fig)) unlink(.stage, recursive = TRUE)
 
     ## AND THIS MACHINE NEVER SEES ANY OF IT, via the real function. The whole block is inside
@@ -834,7 +856,7 @@ local({
       .real <- rmarkdown::pandoc_path_arg(.fig, backslash = FALSE)
       cat(sprintf("  [--] real pandoc_path_arg on this Windows machine: %s\n", .real))
       cat(sprintf("  [--] VERDICT: the fault is %s on this machine\n",
-                  if (grepl("\\\\", .real, fixed = TRUE)) "LIVE -- the staged render is doing work"
+                  if (actaFaultLive(.real)) "LIVE -- the staged render is doing work"
                   else paste("NOT reproducible -- upstream may have fixed it;",
                              "confirm before retiring actaRenderStage()")))
       ## OURS, though, is an ordinary assertion: a spaced Windows run folder must relocate to a
