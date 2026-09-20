@@ -1,3 +1,15 @@
+# THIS FILE IS HAND-WRITTEN. DO NOT RUN roxygen2 ON THIS PACKAGE.
+#
+# man/*.Rd is hand-written too, and DESCRIPTION deliberately carries no RoxygenNote. There are no
+# @export or @import tags anywhere in R/, so roxygen2::roxygenise() / devtools::document() would
+# regenerate this file with NEITHER the export list below NOR the wholesale import directives --
+# and the missing imports are SILENTLY WRONG rather than merely broken, for the reason set out under
+# "S4 GENERICS MUST BE IMPORTED". A documentation step that looks routine would break dispatch.
+#
+# To add an export: add the line here and a man/ topic for it. tests/legacy/test_man_pages.R
+# asserts the two agree, that every \usage still matches its formals, and that R/ has acquired no
+# roxygen tags.
+
 # EXPORTS ARE THE APP'S REQUIREMENTS, NOT THE PIPELINE'S.
 # The pipeline script and the report are sourced by run_acta() into an environment parented on this
 # namespace, so they reach all 203 helpers by lexical scoping and need NOTHING exported. The Shiny

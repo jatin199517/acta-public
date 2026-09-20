@@ -92,6 +92,25 @@ with no compensation; OQ_Test2 is three groups on a Bio-Rad ZE5 with a supplied 
 non-standard scatter names, `$PnS` gating dimensions, an 18-bit `$PnR` and `Downsample_to` set — so
 it is the case that proves vendor portability.
 
+## The report renders from a spaced path
+
+```sh
+Rscript tests/legacy/ci_report_render.R OQ_Test1
+```
+
+Copies one case into a folder whose name **contains a space**, runs it, and asserts the report
+rendered. Minutes, and a TeX engine, so it is not in `run_all.R`.
+
+The space is the whole point. `actaRenderStage()` returns its argument unchanged unless the
+platform is Windows *and* the path has a space in it, so a Windows job run in a GitHub workspace
+(`D:\a\<repo>\<repo>`) executes none of the mechanism and passes anyway. The script asserts the
+space is present before it runs, and prints `actaRenderStage()` for both the forced-Windows branch
+and this platform — which is the check the release manifest otherwise asks a human to run by hand
+on the affected machine.
+
+Driven in CI by the `report-windows` job, which is `continue-on-error: true` until it has been
+green on a schedule it did not choose.
+
 ## The regression gate
 
 The pipeline seeds its RNG per antibody group, so two runs of the same code on the same data produce

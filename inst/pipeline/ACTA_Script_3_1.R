@@ -1842,10 +1842,9 @@ if (!all(c("Fix","Perm") %in% names(stats)))
 ## ACTA derives it, so it takes the navy palette while sitting immediately after the value it is
 ## derived from. Same split as QC_Status, and for the same reason -- position and colour are set
 ## independently, by the relocate() and by `primary =` respectively.
-exportLeadCols <- c("Cat_Num","Vendor","Lot_Num","Clone","Titer","Well_volume_uL",
-                    "e6_cells_per_well","Titration_Status",
-                    "Test_Material","ELN_ID","Fix_Perm","Operator","SOP",
-                    "Combinatorial_group (n)")
+## FROM THE SHARED CONSTANT, not a second copy. The app re-emits this workbook when a titer is
+## entered and needs the same list; a list defined here was invisible to it.
+exportLeadCols <- ACTA_EXPORT_LEAD_COLS
 statsForExport<-stats |> dplyr::filter(SI==maxSI) |>
   mutate(ScriptVersion=ScriptVersion,
          Fix_Perm=fixPermLabel(Fix, Perm, ids=name),

@@ -47,6 +47,36 @@ testServer(app, {
   for (r in dr) cat(sprintf("  %-5s %-46s %s\n", r$status, r$label, if (is.na(r$detail)) "" else substr(r$detail,1,40)))
   chk("template contract evaluated", any(vapply(dr, function(r) r$id=="tpl_tokens", TRUE)))
 
+  ## THE INPUT THE GENERATOR STOPS ON. It reads the instructions workbook for its Info settings and
+  ## finds it via ACTA_LAYOUT_DIR, falling back to ITS OWN directory -- which under the package
+  ## layout is inst/pipeline, code-only by design and structurally unable to hold one. Every
+  ## dashboard run from an install died there while this panel showed nothing but passes, because
+  ## it had no row for that input; the app reports only "Dashboard generation failed", since it
+  ## judges success by whether an html appeared.
+  .lr <- Filter(function(r) r$id == "dash_layout", dr)
+  chk("the generator's workbook input has a preflight row at all", length(.lr) == 1L)
+  if (length(.lr) == 1L) {
+    ## THE GENERATOR'S OWN RULE, APPLIED TO THE APP'S ANSWER -- not a second copy of it. The row
+    ## names a directory; that directory has to contain exactly one *Titration_Instructions*.xlsx,
+    ## which is the test the generator itself performs before it will do anything.
+    .d <- .lr[[1]]$detail
+    .n <- if (!is.na(.d) && nzchar(.d) && dir.exists(.d))
+            length(grep("Titration_Instructions", list.files(.d, pattern = "[.]xlsx$"))) else -1L
+    chk(sprintf("...and the folder it names holds exactly one instructions workbook (found %d)", .n),
+        identical(.lr[[1]]$status, "pass") && .n == 1L)
+  }
+
+  ## AND THE WIRING, bound to the FUNCTION OBJECT rather than to the file's text: runDashboard()
+  ## must actually hand that directory over. This one is a source assertion and says so -- the
+  ## alternative is letting the handler spawn a real generator run, which needs exports and
+  ## minutes, in a gate that is meant to take three seconds. Deparsing the closure at least means
+  ## a renamed variable or a deleted line cannot pass, which a grep of the .R file would.
+  .rd <- paste(deparse(body(runDashboard)), collapse = " ")
+  chk("runDashboard() passes ACTA_LAYOUT_DIR to the generator",
+      grepl("ACTA_LAYOUT_DIR", .rd, fixed = TRUE) && grepl("dirname(layout)", .rd, fixed = TRUE))
+  chk("...and still passes the export and output folders",
+      grepl("ACTA_EXPORT_DIR", .rd, fixed = TRUE) && grepl("ACTA_DASHBOARD_DIR", .rd, fixed = TRUE))
+
   cat("\n=== button label tracks the checkbox ===\n")
   session$setInputs(copyGen = FALSE); l1 <- paste(as.character(output$runBtn), collapse=" ")
   session$setInputs(copyGen = TRUE);  l2 <- paste(as.character(output$runBtn), collapse=" ")

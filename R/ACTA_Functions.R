@@ -2475,9 +2475,23 @@ pop.MeFI<-function(fr){
 ## Values are untouched -- this is presentation only. Columns that are entirely NA (e.g. the
 ## operator-fillable Titer / Titration_Status) come out as genuinely EMPTY cells, still styled,
 ## ready to be typed into.
+## THE OPERATOR-FACING LEAD BLOCK, shared rather than restated. It lived in ACTA_Script_*.R, so
+## the APP -- which re-emits this workbook when a titer is entered -- had no way to name it and
+## re-emitted with `primary = character()`: every maroon header came back navy. Same class as the
+## audit sheets it was dropping at the same time. Making it this function's DEFAULT means the
+## common case is right without either caller having to remember, and `primary = character()`
+## stays available for a caller that genuinely wants no lead block.
+##
+## Membership drives BOTH the colour (here) and the position (the script's relocate()), which is
+## why the script still names it explicitly rather than relying on the default.
+ACTA_EXPORT_LEAD_COLS <- c("Cat_Num", "Vendor", "Lot_Num", "Clone", "Titer", "Well_volume_uL",
+                           "e6_cells_per_well", "Titration_Status",
+                           "Test_Material", "ELN_ID", "Fix_Perm", "Operator", "SOP",
+                           "Combinatorial_group (n)")
+
 writeTitrationExport <- function(df, path, sheet = "TitrationExport",
                                  audit = NULL,
-                                 primary = character(),
+                                 primary = ACTA_EXPORT_LEAD_COLS,
                                  primary_palette   = c(header = "#93398F", band = "#ECCFED"),
                                  secondary_palette = c(header = "#1F4E79", band = "#DCE9F5"),
                                  border_col = "#000000",
@@ -5057,6 +5071,15 @@ actaStageSweep <- function(stage, version_dir, keep) {
 ## is_windows(). The same path is why the surviving .tex then failed the OQ's "no output names the
 ## operator" check: one fault, two failures.
 ##
+## MEASURED ON DEMAND, 2026-09-18, Windows + rmarkdown 2.32 -- a NEWER upstream than the one this
+## was written against, still unchanged. A deliberately spaced probe folder gave:
+##     in   ...\Temp\RtmpMNtQsc/acta space probe/x_files/figure-latex
+##     out  ...\Temp\RTMPMN~1\ACTASP~1\x_files\FIGURE~1
+## TWO THINGS THAT OUTPUT CORRECTS ABOVE. It is not only the SPACED component that is mangled --
+## `figure-latex` and `RtmpMNtQsc` contain no space and were shortened anyway, so one space
+## anywhere 8.3-mangles the WHOLE path. And the account need not be truncated to leak: that probe
+## ran as a five-character login, which passed through in full and still reaches the .tex.
+##
 ## HANDING render() A SHORT PATH DOES NOT WORK, and that was the first attempt at this. render()
 ## calls normalize_path() on output_dir and on intermediates_dir BEFORE deriving the figure
 ## directory, and ?normalizePath says of Windows: "it converts relative paths to absolute paths,
@@ -6211,12 +6234,28 @@ actaArchiveThenCopy <- function(src_paths, dest_dir, eln_id = "run", stamp = NUL
     archived <- clash[okMove]
     if (any(!okMove)) {                       # rename fails across volumes; fall back to copy+unlink
       left <- clash[!okMove]
-      if (all(file.copy(left, file.path(archDir, basename(left)), copy.date = TRUE))) {
-        unlink(left); archived <- c(archived, left)
-      }
+      ## A DIRECTORY GOES TO THE PARENT, A FILE TO ITS OWN TARGET PATH. file.copy(recursive = TRUE)
+      ## creates `to`/basename(from) for a directory, so handing it the full target path the way a
+      ## file needs would produce Archived/<stamp>/Plots/Plots. And unlink() needs recursive = TRUE
+      ## or the directory is copied and then left behind, which would archive and NOT clear it.
+      .isd <- dir.exists(left)
+      okc  <- logical(length(left))
+      if (any(.isd))
+        okc[.isd]  <- file.copy(left[.isd], archDir, recursive = TRUE, copy.date = TRUE)
+      if (any(!.isd))
+        okc[!.isd] <- file.copy(left[!.isd], file.path(archDir, basename(left[!.isd])),
+                                copy.date = TRUE)
+      if (all(okc)) { unlink(left, recursive = TRUE); archived <- c(archived, left) }
     }
   }
-  okCopy <- file.copy(src_paths, dest_dir, overwrite = TRUE, copy.date = TRUE)
+  ## recursive = TRUE SO A DIRECTORY ARRIVES AS A DIRECTORY. The caller used to expand Plots/ into
+  ## its individual PNGs, so a copied run came out with every plot loose in the destination while
+  ## an uncopied one kept them in Plots/ -- two different shapes for the same run depending on one
+  ## checkbox, and the dashboard's figure lookup then had to cope with both. Passing the folder and
+  ## copying it whole is what keeps the structure the same either way. Measured: one vectorised
+  ## call takes a MIX of files and directories, and copy.date is still honoured for the files --
+  ## which matters, because the generator orders runs by export mtime.
+  okCopy <- file.copy(src_paths, dest_dir, overwrite = TRUE, copy.date = TRUE, recursive = TRUE)
   list(ok = all(okCopy), archive_dir = if (length(archived)) archDir else NA_character_,
        archived = archived, copied = targets[okCopy],
        failed = src_paths[!okCopy])
@@ -6340,6 +6379,68 @@ actaHomePrefixes <- function() {
   unique(cand[order(nchar(cand), decreasing = TRUE)])
 }
 
+## ============ THE MOUNT POINT THE HOME IS REACHED THROUGH ============
+## A home on a NAMED VOLUME publishes the volume's name for every path on that volume that is NOT
+## under the home. Measured: with HOME=/Volumes/<vol>/Users/<acct>, actaDeIdentifyText() renders
+##     /Volumes/<vol>/Users/<acct>/ACTA/x.fcs   ->  ~/ACTA/x.fcs            (masked, correct)
+##     /Volumes/<vol>/Rlibs/4.5/ACTA            ->  unchanged               (the volume survives)
+## and the second shape is exactly what sessioninfo::session_info() prints. THAT OUTPUT SHIPS IN
+## THE REPORT PDF -- ACTA_Report_*.Rmd calls actaDeIdentifyText() on it directly and never goes
+## through actaDiagScrub(), which is the pass that would have collapsed it. A volume name is
+## routinely a person or a device ("<name>'s SSD", "<name>-backup").
+##
+## Byte-identical in v3.1.6, v3.2.0 and v3.2.1, so this is not a regression. v3.2.0 appeared to
+## mask it, but only as a side effect of an over-match that also destroyed a second path on the
+## same line, and fixing that over-match restored v3.1.6's output here.
+##
+## THE RULE IS STRUCTURAL AND KEYED ON THIS MACHINE'S OWN HOME, exactly like actaHomePrefixes():
+## walk up from each home prefix and register an ancestor whose PARENT is a mount container. So
+## the list can only ever contain a volume this machine's home is actually reached through -- it
+## cannot reach into a foreign path, and it cannot invent a redaction for somebody else's disk.
+##
+## AN INCOMPLETE CONTAINER LIST FAILS SAFE, WHICH IS WHY A LIST IS ALLOWED HERE AT ALL. The file
+## says elsewhere that no allowlist of container names can be complete, and that is true -- but
+## there the cost of a miss was a leak, and here it is "no masking", i.e. today's behaviour. What
+## is NOT allowed is the inverse: registering a container itself. Replacing "/Volumes" or "/mnt"
+## with a marker would turn every other volume on the machine into the same token and hide that a
+## path was foreign, which is the mistake the "users"/"home" exclusion above exists to prevent.
+##
+## NOT HANDLED, DELIBERATELY: a UNC home (\\server\share) on Windows. The server name is
+## identity-shaped and a roaming profile is a real configuration, but it cannot be tested from
+## here and a guess at UNC splitting is how this file has been bitten before. Left as a known gap
+## rather than an untested rule.
+ACTA_MOUNT_CONTAINERS <- c("volumes", "mnt", "media")
+
+## THE MARKER IS A CONSTANT BECAUSE TWO PLACES MUST AGREE ON IT. actaDeIdentifyText() writes it in
+## place of a mount prefix, and the "Surname, Given" rule further down has to recognise it AS A
+## PATH ROOT -- see the note there. Spelled twice, they drift, and the failure is silent: a name
+## stops being redacted and nothing errors.
+ACTA_VOLUME_MARK <- "<redacted-volume>"
+
+actaMountPrefixes <- function(homes = actaHomePrefixes(),
+                              containers = ACTA_MOUNT_CONTAINERS) {
+  out <- character(0)
+  for (h in homes) {
+    q <- gsub("\\", "/", h, fixed = TRUE)
+    parts <- Filter(nzchar, strsplit(q, "/", fixed = TRUE)[[1]])
+    ## From the second component up to the one below the home itself: a component is a mount root
+    ## when the component BEFORE it names a container. i starts at 2 because a mount root always
+    ## has a parent.
+    for (i in seq_along(parts)) {
+      if (i < 2L) next
+      if (!tolower(parts[i - 1L]) %in% containers) next
+      root <- paste0(if (startsWith(q, "/")) "/" else "", paste(parts[1:i], collapse = "/"))
+      ## Never the container itself, and never something so short it would match half the tree.
+      if (nchar(root) > 4L && !tolower(parts[i]) %in% c(containers, "users", "home"))
+        out <- c(out, root)
+    }
+  }
+  if (!length(out)) return(character(0))
+  out <- unique(c(out, gsub("/", "\\", out, fixed = TRUE)))
+  ## Longest first, same reason as actaHomePrefixes().
+  unique(out[order(nchar(out), decreasing = TRUE)])
+}
+
 ## A PATH, REDUCED TO WHAT IDENTIFIES THE CODE OR THE RUN rather than where it lives.
 ## `keep = 2` by default: ACTA/pipeline tells an installed package from a clone's inst/pipeline,
 ## and MyLab/Run_1 tells two runs apart, which is what these fields are read for. The component
@@ -6425,6 +6526,12 @@ actaDeIdentifyText <- function(x, user = tryCatch(Sys.info()[["user"]], error = 
   ## \Q..\E quotes the prefix so a home containing regex metacharacters cannot misbehave.
   for (h in actaHomePrefixes())
     x <- gsub(paste0("\\Q", h, "\\E(?=[/\\\\]|$)"), "~", x, perl = TRUE)
+  ## AND THE MOUNT POINT, AFTER the homes so the longer, more specific prefix always wins: a path
+  ## under the home becomes ~, and only what is left on the same volume becomes the marker. Same
+  ## boundary lookahead, for the same reason -- a bare substring match would eat the separator and
+  ## half-rewrite a sibling volume whose name starts the same way ("Data" and "Data2").
+  for (m in actaMountPrefixes())
+    x <- gsub(paste0("\\Q", m, "\\E(?=[/\\\\]|$)"), ACTA_VOLUME_MARK, x, perl = TRUE)
   .node <- tryCatch(Sys.info()[["nodename"]], error = function(e) "")
   if (nzchar(.node) && nchar(.node) > 3L) x <- gsub(.node, "<redacted-host>", x, fixed = TRUE)
   ## AND THE LOGIN NAME, which nothing masked outside of a path. It survived only where the login
@@ -6547,11 +6654,40 @@ actaDiagScrub <- function(lines) {
   ## Measured against the release before it, twenty-odd ordinary shapes came out worse, in FIRST
   ## ERROR and CHILD STDOUT -- the two fields the bundle exists for. So the SHAPE is matched
   ## exactly instead: a CAPITALISED word each side of the comma (an apostrophe or hyphen allowed
-  ## inside), a separator on both ends, at most one space after the comma. That is what a person's
+  ## inside), a separator on both ends, at most two spaces after the comma. That is what a person's
   ## name looks like and what a unit is not: "out.tsv, stain 0.25 ug" has a dot in the first half,
   ## and "0.25 ug/mL, cells/well" -- two of this tool's own units, which the first draft of this
-  ## rule collapsed to "ugs" -- has a lower-case word on each side. No case-insensitive flag here,
-  ## deliberately: it would undo the whole discrimination.
+  ## rule collapsed to "ugs" -- has a lower-case word on each side. No case-insensitive flag here.
+  ##
+  ## THAT LAST POINT USED TO CARRY A REASON THAT IS NOT TRUE, and it is worth correcting rather
+  ## than deleting: it said a (?i) flag "would undo the whole discrimination". Measured -- in R's
+  ## PCRE2, caseless matching does NOT make \p{Lu} match a lower-case letter, so splicing (?i)
+  ## into this pattern changes nothing at all. The flag stays out anyway, for the reason that does
+  ## hold: case IS the entire discriminator here, so a flag announcing that case does not matter
+  ## would be a lie to the next reader -- and it would stop being a no-op the moment somebody
+  ## rewrote \p{Lu} as [A-Z], which is an ordinary tidy-up.
+  ##
+  ## WHERE THIS RULE STOPS, MEASURED RATHER THAN CLAIMED. Every bound below is a shape a name can
+  ## hide in, and every one of them is deliberate: the comment above used to say "at most one
+  ## space after the comma" when the pattern allows TWO, and said nothing at all about the last
+  ## two. They are gated in test_diagnostics.R so they stay decisions rather than drift.
+  ##
+  ##   1. at most TWO spaces after the comma -- "Smith,   John" (three) is not a match
+  ##   2. the given name plus at most two further words -- "Nguyen, Thi Minh Anh" matches,
+  ##      "Nguyen, Thi Minh Anh Le" does not
+  ##   3. the root must not follow an alphanumeric -- "X/data/Smith, John/" is not a match, which
+  ##      is the whole reason "FITC/PE, APC/Cy7" survives
+  ##   4. where the ROOT ITSELF supplies the separator -- a bare "/" or "C:/" -- the name cannot be
+  ##      the FIRST component: "/Smith, John/x" and "C:/Smith, John/x" are not matches, while
+  ##      "/data/Smith, John/x" and "C:/data/Smith, John/x" are. `~/Smith, John/x` IS a match,
+  ##      because "~" is not itself a separator and the pattern's own separator still follows it.
+  ##
+  ## NONE OF THESE IS WORTH WIDENING FOR, and the paragraph above is the evidence: every attempt
+  ## to loosen this rule has been paid for in over-redaction of ordinary output -- "FITCCy7",
+  ## "FSCArea", "ugs", "wrote mL" -- in FIRST ERROR and CHILD STDOUT, the two fields the bundle
+  ## exists for. A miss here leaves a name in a diagnostic the operator chose to send; a false
+  ## positive eats the diagnostic itself. Anyone revisiting this should re-run the differential
+  ## in the commit that added these bounds before touching the pattern.
   ## ANCHORED AT AN ABSOLUTE PATH ROOT. Without that anchor the rule fired on any "X/Word, Word/Y",
   ## and this tool writes that shape constantly: "channels detected: FITC/PE, APC/Cy7" collapsed to
   ## "FITCCy7", "FSC/Area, SSC/Area" to "FSCArea", and "3_1/DESCRIPTION, Publish/README.public.md"
@@ -6561,7 +6697,24 @@ actaDiagScrub <- function(lines) {
   ## The given name may be an initial or carry up to two further words ("Nguyen, Thi Minh"), and
   ## the whole match must still end at a separator: that bound is what stops
   ## "/data/Report, Stain 0.25 ug/mL" from being read as a name.
-  .root <- "(?:~|[A-Za-z]:[/\\\\]|(?<![\\p{L}\\p{N}])[/\\\\])"
+  ## THE VOLUME MARKER IS A ROOT, for exactly the reason `~` is one.
+  ##
+  ## MEASURED REGRESSION, caught by the release review. actaDeIdentifyText() runs FIRST and rewrites
+  ## a mounted home's prefix to <redacted-volume>. That marker is not a path root, so bound #4 above
+  ## -- "where the root itself supplies the separator the name cannot be the FIRST component" --
+  ## started applying to the separator straight after the marker, and a colleague's folder sitting
+  ## directly under the mount root stopped being redacted:
+  ##     published            /Volumes/<vol>/Smith, John/plate.xlsx  ->  plate.xlsx
+  ##     with the marker      <redacted-volume>/Smith, John/plate.xlsx  (name intact)
+  ## The collapse below cannot rescue it either: its component class excludes `,`, so it cannot
+  ## cross the name. Three of four ordinary shapes regressed, in FIRST ERROR and CHILD STDOUT --
+  ## the two fields the bundle exists for -- and only for a home on a mounted volume, which is
+  ## precisely the configuration actaMountPrefixes() was added to serve.
+  ##
+  ## \Q..\E because the marker contains regex metacharacters, and from the CONSTANT so the
+  ## spelling here cannot drift from the substitution that produces it.
+  .root <- sprintf("(?:~|\\Q%s\\E|[A-Za-z]:[/\\\\]|(?<![\\p{L}\\p{N}])[/\\\\])",
+                   ACTA_VOLUME_MARK)
   x <- gsub(sprintf(paste0("(%s[\\p{L}\\p{N}._ +&@<>'()#%%!~/\\\\-]*?[/\\\\])",
                            "\\p{Lu}[\\p{L}'-]+,[ ]{0,2}\\p{Lu}[\\p{L}'.-]*",
                            "(?:[ ]\\p{Lu}[\\p{L}'.-]*){0,2}(?=[/\\\\])"), .root),

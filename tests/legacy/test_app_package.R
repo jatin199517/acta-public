@@ -244,6 +244,72 @@ if (is.na(want)) {
         length(list.files("Diagnostics", pattern = "^OQ_Test")) == 3L)
     chk("dependency panel renders", nzchar(paste(as.character(actaDependencyChecks(getwd())),
                                                  collapse = "")))
+
+    ## THE INSTALL IS THE SAME CODE AS THIS CHECKOUT, not merely the same version number.
+    ##
+    ## The check above this file already refuses to run when the installed VERSION differs from
+    ## DESCRIPTION, which catches a bump nobody reinstalled after. It structurally cannot catch the
+    ## commoner case: editing R/ WITHOUT bumping, which leaves an install that reports the right
+    ## version and runs the wrong code. That is not hypothetical -- it cost a full manual test cycle
+    ## on 2026-09-20. actaArchiveThenCopy() gained recursive = TRUE so a copied run keeps its
+    ## Plots/ folder; every gate passed, because the gates sys.source() R/ directly; and the APP
+    ## does not -- under the package layout inst/pipeline carries no sibling ACTA_Functions.R by
+    ## design, so the app loads helpers from the installed namespace and quietly ran the old copy.
+    ##
+    ## Compared as deparsed BODIES with control = NULL, which drops srcref so a package installed
+    ## with keep.source and a file read by sys.source() do not differ over comments. Verified both
+    ## ways before being trusted: 0 of 30 differ when in sync, and a one-line mutation is detected.
+    local({
+      .src <- actaTestFunctions()
+      .ns  <- asNamespace("ACTA")
+      .dp  <- function(f) paste(deparse(body(f), control = NULL), collapse = "\n")
+      .nm  <- intersect(ls(.src, all.names = TRUE), ls(.ns, all.names = TRUE))
+      .nm  <- Filter(function(n) is.function(get(n, .src)) && is.function(get(n, .ns)), .nm)
+      .d   <- Filter(function(n) !identical(.dp(get(n, .src)), .dp(get(n, .ns))), .nm)
+      chk(sprintf("the installed namespace is this checkout's code (%d function(s) compared)",
+                  length(.nm)),
+          length(.nm) > 20L && length(.d) == 0L)
+      if (length(.d))
+        cat("          STALE INSTALL -- reinstall this checkout before trusting the app:\n",
+            "            ", paste(utils::head(.d, 8), collapse = ", "),
+            if (length(.d) > 8L) sprintf(" (+%d more)", length(.d) - 8L) else "", "\n",
+            "            Rscript -e 'install.packages(\"<this folder>\", repos = NULL, type = \"source\")'\n",
+            sep = "")
+    })
+
+    ## THE DASHBOARD'S LAYOUT INPUT. The generator finds the instructions workbook via
+    ## ACTA_LAYOUT_DIR and falls back to ITS OWN directory; the app never set the variable, so
+    ## every dashboard run in the one configuration where those differ died on
+    ##     expected exactly one *Titration_Instructions*.xlsx in '<lib>/inst/pipeline'; found 0
+    ## with the Dashboard panel showing nothing but passes.
+    ##
+    ## WHAT IS **NOT** GATED HERE, AND WHY -- READ THIS BEFORE ADDING AN ASSERTION FOR IT.
+    ## The interesting property is "the row names the WORK folder rather than the CODE folder",
+    ## and NEITHER app test can check it: smoke_app.R's stage and this file's stage both put the
+    ## app, the scripts and the workbook in ONE directory, so the two are the same path and there
+    ## is nothing to tell apart. The configuration that separates them is `acta_app()` -- the app
+    ## file in the library, ACTA_WORK_DIR pointing at the user's folder -- which is exactly where
+    ## the fault was reported, and which no harness here reproduces.
+    ##
+    ## I wrote that assertion first and it PASSED WITH THE BUG REINTRODUCED: CODE_DIR is not
+    ## reachable from the testServer environment, normalizePath() errored, the NA fell through a
+    ## `!identical(.d, .c)` and the whole thing was vacuous. Removed rather than reworded, because
+    ## a green assertion that cannot fail is worse than a recorded gap. The gap is this paragraph.
+    dr <- dashRecs()
+    .lr <- Filter(function(r) r$id == "dash_layout", dr)
+    chk("the generator's workbook input has a preflight row", length(.lr) == 1L)
+    if (length(.lr) == 1L) {
+      chk("...and it passes with a real workbook staged", identical(.lr[[1]]$status, "pass"))
+      ## THE GENERATOR'S OWN RULE, APPLIED TO THE APP'S ANSWER: the directory the row names has to
+      ## contain exactly one *Titration_Instructions*.xlsx, which is the test the generator runs
+      ## before it will do anything. This one does execute, and it fails if the row is deleted or
+      ## points somewhere without a workbook.
+      .d <- .lr[[1]]$detail
+      .n <- if (!is.na(.d) && nzchar(.d) && dir.exists(.d))
+              length(grep("Titration_Instructions", list.files(.d, pattern = "[.]xlsx$"))) else -1L
+      chk(sprintf("...and that folder holds exactly one instructions workbook (found %d)", .n),
+          .n == 1L)
+    }
   })
 }
 ## A SKIP IS NOT A PASS. Every assertion here sits behind "is this checkout installed?", and

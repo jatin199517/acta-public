@@ -145,6 +145,105 @@ chk("third run does NOT clobber the T2 archive",
 chk("archive path is excluded by the generator's rule",
     grepl("archive", r2$archive_dir, ignore.case = TRUE))
 
+## A DIRECTORY ARRIVES AS A DIRECTORY. The app used to expand Plots/ into its individual PNGs
+## before calling this, so ticking "copy ACTA output" produced a destination with every plot loose
+## at the top level while the SAME run without the checkbox kept them in Plots/ -- one checkbox,
+## two directory shapes. The copy is recursive now and the app passes the folder.
+local({
+  .r   <- file.path(tempdir(), "acta_copy_dir"); unlink(.r, recursive = TRUE)
+  .run <- file.path(.r, "run"); .dst <- file.path(.r, "dest")
+  dir.create(file.path(.run, "Plots"), recursive = TRUE); dir.create(.dst, recursive = TRUE)
+  writeLines("v1", file.path(.run, "EXP1_TitrationExport.xlsx"))
+  for (i in 1:3) writeLines("v1", file.path(.run, "Plots", sprintf("SIPlot_%d.png", i)))
+  .src <- c(file.path(.run, "EXP1_TitrationExport.xlsx"), file.path(.run, "Plots"))
+
+  .a <- h$actaArchiveThenCopy(.src, .dst, "EXP1", stamp = "P1")
+  chk("a copied run keeps its Plots/ folder",
+      .a$ok && dir.exists(file.path(.dst, "Plots")))
+  chk("...with the plots inside it, not loose at the destination root",
+      length(list.files(file.path(.dst, "Plots"), pattern = "[.]png$")) == 3L &&
+      length(list.files(.dst, pattern = "[.]png$")) == 0L)
+
+  ## AND THE CLASH PATH, which is the half a plain recursive copy gets wrong: on the second run
+  ## the destination already HAS Plots/, so it must be archived whole rather than merged into --
+  ## and file.copy(recursive=) creates `to`/basename(from), so a fallback handing it the full
+  ## target path would build Archived/<stamp>/Plots/Plots.
+  for (i in 1:3) writeLines("v2", file.path(.run, "Plots", sprintf("SIPlot_%d.png", i)))
+  .b <- h$actaArchiveThenCopy(.src, .dst, "EXP1", stamp = "P2")
+  chk("a second copy archives the whole Plots/ folder",
+      .b$ok && dir.exists(file.path(.b$archive_dir, "Plots")) &&
+      length(list.files(file.path(.b$archive_dir, "Plots"), pattern = "[.]png$")) == 3L)
+  chk("...the live plots are the new ones",
+      identical(readLines(file.path(.dst, "Plots", "SIPlot_1.png")), "v2"))
+  chk("...and nothing nested itself as Plots/Plots",
+      !dir.exists(file.path(.dst, "Plots", "Plots")) &&
+      !dir.exists(file.path(.b$archive_dir, "Plots", "Plots")))
+})
+
+## AND THE APP HANDS OVER THE FOLDER, not its contents -- the other half of the same fix. Bound to
+## the file's text because the copy handler spawns nothing this gate can drive cheaply; a
+## list.files() on plots_dir here is the defect returning.
+local({
+  .app <- readLines(actaTestAppFile(), warn = FALSE)
+  ## THE CALL, not any mention: the file's own header lists the helper by name, so grepping for
+  ## the bare word anchored the window on line 13 and read the comment block instead of the code.
+  .i   <- grep("<-[[:space:]]*actaArchiveThenCopy\\(", .app)
+  chk("the copy call site was found at all", length(.i) == 1L)
+  .win <- if (length(.i)) paste(.app[max(1, .i[[1]] - 12):.i[[1]]], collapse = " ") else ""
+  chk("the app passes plots_dir itself, not list.files() over it",
+      grepl("rv$result$plots_dir)", .win, fixed = TRUE) &&
+      !grepl("list.files(rv$result$plots_dir", .win, fixed = TRUE))
+})
+
+cat("\n=== 5b. re-emitting an export keeps its other sheets and its lead block ===\n")
+local({
+  ## THE TITER MODAL RE-EMITS THE WHOLE WORKBOOK rather than patching cells, because the export is
+  ## heavily styled. It passed neither `audit` nor `primary`, so the first time anybody entered a
+  ## titer the export went from SEVEN sheets to one -- SI_stats, Pop_stats, MiFlowCyt_metadata and
+  ## the verbatim Info / gating_template / Layout_Plate copies all destroyed -- and every maroon
+  ## operator-facing header came back navy. Silent both times: the file is still valid, still
+  ## opens, and still has the numbers.
+  .src <- Sys.glob(file.path(actaTestCaseRoot(), "OQ_Test*", "Outputs", "*TitrationExport*.xlsx"))
+  .src <- .src[file.exists(.src)]
+  if (!length(.src) || !requireNamespace("readxl", quietly = TRUE)) {
+    cat("  [skip] needs a run export on disk (run an OQ case first)\n"); return(invisible(NULL))
+  }
+  .f0 <- .src[[1]]
+  .n0 <- readxl::excel_sheets(.f0)
+  if (length(.n0) < 2L) {
+    cat("  [skip] the export on disk has no audit sheets to preserve\n"); return(invisible(NULL))
+  }
+  .ex <- file.path(tempdir(), "acta_titer_reemit.xlsx"); file.copy(.f0, .ex, overwrite = TRUE)
+
+  ## The app's own three lines, as they stand in ACTA_App.R.
+  .d <- suppressMessages(readxl::read_excel(.ex, .name_repair = "minimal"))
+  .ds <- as.character(eval(formals(h$writeTitrationExport)$sheet))
+  .keep <- setdiff(readxl::excel_sheets(.ex), .ds)
+  .aud  <- setNames(lapply(.keep, function(.s)
+             as.data.frame(suppressMessages(readxl::read_excel(.ex, sheet = .s, col_types = "text")),
+                           check.names = FALSE)), .keep)
+  h$writeTitrationExport(as.data.frame(.d), .ex, audit = .aud)
+
+  .n1 <- readxl::excel_sheets(.ex)
+  chk(sprintf("every sheet survives a re-emit (%d in, %d out)", length(.n0), length(.n1)),
+      setequal(.n0, .n1))
+  if (!setequal(.n0, .n1))
+    cat("          lost:", paste(setdiff(.n0, .n1), collapse = ", "), "\n")
+
+  ## AND THE LEAD BLOCK, which is the other half the same call dropped. Read from the package's
+  ## styles part rather than trusting the argument: the question is what is IN the file.
+  .fills <- function(f) {
+    .x <- tryCatch(paste(readLines(unz(f, "xl/styles.xml"), warn = FALSE), collapse = ""),
+                   error = function(e) "")
+    unique(unlist(regmatches(.x, gregexpr("(?<=fgColor rgb=\")[0-9A-Fa-f]+", .x, perl = TRUE))))
+  }
+  .want <- toupper(sub("^#", "", unname(eval(formals(h$writeTitrationExport)$primary_palette)["header"])))
+  .got  <- toupper(.fills(.ex))
+  chk(sprintf("...and the operator-facing lead block keeps its colour (%s in %s)",
+              .want, paste(.got, collapse = ",")),
+      any(grepl(.want, .got, fixed = TRUE)))
+})
+
 cat("\n=== 6. run log ===\n")
 lg <- file.path(tempdir(), "acta_run_log.tsv"); unlink(lg)
 ## A workbook to hash. In a fresh clone there is none in the version folder, so fall back to the
@@ -393,6 +492,32 @@ if (!length(.wf)) cat("  [skip] no CI workflow file found from here\n") else {
       length(.odd) == 0L)
   if (length(.odd))
     cat("          not a ref:", paste(utils::head(.odd, 8), collapse = " "), "\n")
+
+  ## AND EVERY SCRIPT A `run:` STEP INVOKES MUST EXIST. The package audit above says a job can
+  ## INSTALL what it needs; it says nothing about whether the thing the job then runs is still
+  ## there. A workflow naming a renamed or deleted gate fails at the last step of a job that has
+  ## already spent twenty minutes installing, and only on the event that triggers it -- which for
+  ## the schedule-only jobs is a week later. Same reasoning as test_readme_calls.R: prose and
+  ## behaviour drift silently, and CI yaml is prose.
+  ##
+  ## BY BASENAME, because the two release layouts put the gates in different folders -- tests/ in
+  ## the flat release, tests/legacy/ in the package -- and the `run:` blocks handle that with a
+  ## `[ -f ]` fallback naming BOTH. Requiring both paths to resolve would fail on every tree; the
+  ## file has to exist SOMEWHERE in this tree's test folder, which is what the fallback needs.
+  .runsteps <- unlist(lapply(yaml::read_yaml(.wf[1])$jobs, function(j)
+    unlist(lapply(j$steps, function(st) st$run))), use.names = FALSE)
+  .scripts <- unique(basename(unlist(regmatches(.runsteps,
+                gregexpr("tests(/legacy)?/[A-Za-z0-9._-]+[.]R\\b", .runsteps)))))
+  if (!length(.scripts)) {
+    chk("the workflow's run: steps name at least one gate script", FALSE)
+  } else {
+    .found <- vapply(.scripts, function(b) file.exists(file.path(ACTA_TEST_DIR, b)), logical(1))
+    chk(sprintf("every gate the workflow invokes exists here (%s)",
+                paste(.scripts, collapse = ", ")), all(.found))
+    if (any(!.found))
+      cat("          named by the workflow but not in", ACTA_TEST_DIR, ":",
+          paste(.scripts[!.found], collapse = ", "), "\n")
+  }
   ## AND THE PACKAGE'S OWN Imports, which are a DIFFERENT list. listOfLibrary is what the
   ## pipeline script attaches at run time; DESCRIPTION Imports is what `R CMD INSTALL` must
   ## resolve. The check above compares only the first, so when the suite job gained an

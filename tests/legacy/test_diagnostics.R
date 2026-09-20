@@ -736,6 +736,124 @@ local({
       sum(grepl("knit_root_dir = version_dir", .fn, fixed = TRUE)) == 1L)
 })
 
+cat("\n=== THE PREMISE: rmarkdown still does the thing the staged render exists for ===\n")
+local({
+  ## EVERYTHING ABOVE TESTS OUR HALF. Nothing tested the OTHER half, and the other half is not
+  ## ours: the staged render exists solely because rmarkdown::pandoc_path_arg() replaces a path
+  ## containing a space with utils::shortPathName(), which returns BACKSLASHES, and does so
+  ## OUTSIDE the `backslash` switch -- so a caller asking for forward slashes gets backslashes
+  ## anyway, and they land inside \includegraphics{} where every \word is an undefined control
+  ## sequence. That was established by READING the rmarkdown source once, by a human, and written
+  ## into a comment. A premise nothing executes is a premise that can be quietly withdrawn:
+  ## upstream fixing this would leave ACTA relocating every spaced Windows render forever, on a
+  ## code path this machine cannot test, for no reason -- and the comment explaining why would
+  ## still read as current.
+  ##
+  ## SO THE MECHANISM IS EXECUTED, FROM UPSTREAM'S OWN AST. pandoc_path_arg's body is taken from
+  ## the INSTALLED function, `utils::shortPathName` is swapped for a stub, and `is_windows` for
+  ## one that says yes. Nothing is retyped: change the function upstream and this runs the changed
+  ## one. What CANNOT be simulated is Windows itself -- shortPathName is a Windows API call and
+  ## normalizePath's short-to-long expansion is documented Windows behaviour -- so the stub
+  ## asserts the ONE property the fault depends on: that the returned path carries a backslash.
+  ##
+  ## IF THIS SECTION FAILS, READ IT AS NEWS RATHER THAN AS A REGRESSION. The likeliest cause is
+  ## that rmarkdown moved the shortPathName() call inside the `backslash` switch, which is the
+  ## upstream fix -- at which point actaRenderStage() can be retired and the long comment above
+  ## it deleted. Confirm on Windows before removing anything.
+  if (!requireNamespace("rmarkdown", quietly = TRUE)) {
+    cat("  [--] rmarkdown not installed, so the premise cannot be checked\n")
+  } else {
+    .ver <- as.character(utils::packageVersion("rmarkdown"))
+    ## Swap `utils::shortPathName` for a bare symbol we control, by walking the AST. substitute()
+    ## replaces SYMBOLS; this call is `::`(utils, shortPathName), so it has to be matched whole.
+    .swap <- function(e) {
+      if (is.call(e)) {
+        if (identical(e, quote(utils::shortPathName))) return(quote(.stubShortPath))
+        for (i in seq_along(e)) e[[i]] <- .swap(e[[i]])
+      }
+      e
+    }
+    .env <- new.env(parent = asNamespace("rmarkdown"))
+    ## The one Windows property that matters. The real call also 8.3-truncates a spaced component
+    ## -- which is how NAME~1 reached the .tex and tripped the identity scan -- but the backslash
+    ## alone is what breaks the LaTeX, and it is the half a stub can be faithful about.
+    .env$.stubShortPath <- function(p) gsub("/", "\\", p, fixed = TRUE)
+    .env$is_windows <- function() TRUE
+    .asWin <- rmarkdown::pandoc_path_arg
+    body(.asWin) <- .swap(body(.asWin))
+    environment(.asWin) <- .env
+    chk(sprintf("the swap found the shortPathName call in rmarkdown %s (nothing to test if not)",
+                .ver),
+        !identical(deparse(body(.asWin)), deparse(body(rmarkdown::pandoc_path_arg))))
+
+    ## THE FAULT. backslash = FALSE is the caller explicitly asking for forward slashes.
+    ## The space goes in a component ABOVE the run folder, not in the account name: that is the
+    ## real shape ("Flow Cytometry", "TIER 1"), and an invented spaced ACCOUNT reads to the
+    ## sanitisation gate as a home directory -- which it duly flagged.
+    .fig <- "C:/Users/someone/Flow Cytometry/ACTA_Report_3.1_files/figure-latex"
+    ## A spaced RUN FOLDER, as distinct from a spaced figure directory: the native-default
+    ## assertion below is about the folder actaRenderStage() is given, not about pandoc's argument.
+    .sp2 <- "C:/Users/someone/Flow Cytometry/Run_1"
+    .got <- .asWin(.fig, backslash = FALSE)
+    chk(paste0("a spaced path comes back with backslashes even when the caller asked for forward",
+               " slashes  [", .got, "]"),
+        grepl("\\\\", .got))
+
+    ## AND IT IS THE SPACE THAT DOES IT, not merely being on Windows -- which is why
+    ## actaRenderStage() keys on the space and not on the platform alone. Without this the
+    ## assertion above is consistent with "Windows always backslashes", and the fix would be
+    ## solving a different problem from the one it is aimed at.
+    ## IDENTICAL BUT FOR THE ONE SPACE, or this is not a control: it has to isolate the space as
+    ## the cause rather than merely being a different path that happens to survive.
+    .clean <- "C:/Users/someone/FlowCytometry/ACTA_Report_3.1_files/figure-latex"
+    chk(paste0("...and an identical path WITHOUT a space is left alone  [",
+               .asWin(.clean, backslash = FALSE), "]"),
+        !grepl("\\\\", .asWin(.clean, backslash = FALSE)))
+
+    ## THE LOOP CLOSED: the directory ACTA chooses, put through the same function, is clean. This
+    ## is the assertion that says the fix addresses THIS mechanism rather than some other one.
+    .stage <- h$actaRenderStage(.fig, windows = TRUE, tag = "premise")
+    chk(sprintf("the stage actaRenderStage() picks survives it intact  [%s]",
+                basename(.stage)),
+        !identical(.stage, .fig) && !grepl("\\\\", .asWin(.stage, backslash = FALSE)))
+    if (!identical(.stage, .fig)) unlink(.stage, recursive = TRUE)
+
+    ## AND THIS MACHINE NEVER SEES ANY OF IT, via the real function. The whole block is inside
+    ## is_windows(), which is why a macOS or Linux run cannot reproduce the fault and why item 4
+    ## of the open list can only be closed on Windows.
+    if (identical(.Platform$OS.type, "windows")) {
+      ## TWO DIFFERENT KINDS OF CLAIM, AND ONLY ONE OF THEM MAY TURN THIS JOB RED.
+      ##
+      ## `suite` runs on windows-latest on every push and is NOT continue-on-error, so an
+      ## assertion here about UPSTREAM's behaviour would block every release the day rmarkdown
+      ## improves -- a gate failing for a reason that is not the product, which is the recurring
+      ## fault in this file's history. And it would add nothing: if upstream moves the
+      ## shortPathName() call inside the `backslash` switch, the STUBBED assertions above fail on
+      ## all three runners already, because they drive upstream's own AST. So the real-API result
+      ## is corroboration and is REPORTED.
+      .real <- rmarkdown::pandoc_path_arg(.fig, backslash = FALSE)
+      cat(sprintf("  [--] real pandoc_path_arg on this Windows machine: %s\n", .real))
+      cat(sprintf("  [--] VERDICT: the fault is %s on this machine\n",
+                  if (grepl("\\\\", .real, fixed = TRUE)) "LIVE -- the staged render is doing work"
+                  else paste("NOT reproducible -- upstream may have fixed it;",
+                             "confirm before retiring actaRenderStage()")))
+      ## OURS, though, is an ordinary assertion: a spaced Windows run folder must relocate to a
+      ## space-free directory that exists, through the NATIVE default rather than windows = TRUE.
+      ## Every assertion above forces that argument, so nothing anywhere executes the real
+      ## default on the one platform where it is not the identity.
+      .nat <- h$actaRenderStage(.sp2)
+      chk(sprintf("the native default relocates a spaced Windows run folder  [%s]", basename(.nat)),
+          !identical(.nat, .sp2) && dir.exists(.nat) && !grepl(" ", .nat, fixed = TRUE))
+      if (!identical(.nat, .sp2)) unlink(.nat, recursive = TRUE)
+    } else {
+      chk(sprintf("off Windows the real function leaves the spaced path alone (%s)",
+                  .Platform$OS.type),
+          identical(rmarkdown::pandoc_path_arg(.fig, backslash = FALSE), .fig))
+      cat("  [--] the fault itself is unreachable here: shortPathName is a Windows API call\n")
+    }
+  }
+})
+
 cat("\n=== the truncated-account test in the OQ identity scan ===\n")
 local({
   ## THE CLASS HAD HALF ITS BACKSLASHES. R handed PCRE `Users[/\][^/\]*~[0-9]`, where `\]` is an
@@ -910,6 +1028,188 @@ local({
       identical(pref, pref[order(nchar(pref), decreasing = TRUE)]))
   ## Nothing short enough to match half the filesystem.
   chk("...and nothing shorter than a real home directory", all(nchar(pref) > 4L))
+})
+
+cat("\n=== where the \"Surname, Given\" rule STOPS ===\n")
+local({
+  ## THE BOUNDS WERE UNGATED, and the comment beside the pattern misstated one of them: it said
+  ## "at most one space after the comma" where the pattern allows TWO, and said nothing about the
+  ## last case below. Nothing here widens the rule -- every attempt to do that has been paid for
+  ## in over-redaction of ordinary output ("FITCCy7", "FSCArea", "ugs", "wrote mL") in the two
+  ## fields the bundle exists for. These assertions exist so the limits stay DECISIONS: if a
+  ## future change moves one, this says so instead of the change landing silently.
+  ##
+  ## A MISS AND A FALSE POSITIVE ARE NOT SYMMETRIC HERE, which is why the bounds sit where they
+  ## do. A miss leaves a name in a diagnostic the operator chose to send; a false positive eats
+  ## the diagnostic itself.
+  nm <- function(x) h$actaDiagScrub(x)
+  ## ignore.case, because the lower-case case below is precisely a name that SURVIVES -- a
+  ## case-sensitive probe reported it as redacted and failed on correct behaviour.
+  .has <- function(x) grepl("Smith|Nguyen|John|Thi", nm(x), ignore.case = TRUE)
+  hit  <- function(x) !.has(x)
+  miss <- function(x)  .has(x)
+
+  cat("  -- inside the rule --\n")
+  chk("no space after the comma is a name",            hit("/data/Smith,John/plate.xlsx"))
+  chk("one space is a name",                           hit("/data/Smith, John/plate.xlsx"))
+  chk("TWO spaces is a name (the comment said one)",   hit("/data/Smith,  John/plate.xlsx"))
+  chk("an initial is a name",                          hit("/data/Smith, J/plate.xlsx"))
+  chk("an apostrophe is a name",                       hit("/data/O'Brien, Sean/plate.xlsx"))
+  chk("a hyphenated surname is a name",                hit("/data/Smith-Jones, Ann/plate.xlsx"))
+  chk("two further given words is a name",             hit("/data/Nguyen, Thi Minh/plate.xlsx"))
+  chk("three is still a name",                         hit("/data/Nguyen, Thi Minh Anh/x.fcs"))
+  chk("a tilde root reaches a first-component name",   hit("~/Smith, John/x.fcs"))
+  chk("a drive root reaches a deeper name",            hit("C:/data/Smith, John/x.fcs"))
+  chk("...with backslashes too",                       hit("C:\\data\\Smith, John\\x.fcs"))
+
+  cat("  -- outside it, ON PURPOSE --\n")
+  chk("THREE spaces after the comma is not",           miss("/data/Smith,   John/plate.xlsx"))
+  chk("a FOURTH given word is not",                    miss("/data/Nguyen, Thi Minh Anh Le/x.fcs"))
+  ## The anchor that makes the whole rule affordable. Without it "X/Word, Word/Y" matched, and
+  ## this tool emits that shape constantly.
+  chk("a root preceded by an alphanumeric is not",     miss("reading X/data/Smith, John/x.fcs"))
+  ## Where the ROOT ITSELF is the separator there is none left for the pattern, so the name has
+  ## to be at least one component deep. "~" escapes this because it is not itself a separator.
+  chk("a bare / with the name first is not",           miss("/Smith, John/x.fcs"))
+  chk("...nor a drive with the name first",            miss("C:/Smith, John/x.fcs"))
+  chk("a lower-case pair is not",                      miss("/data/smith, john/x.fcs"))
+  ## NOT GATED, BECAUSE THERE IS NOTHING TO GATE: splicing (?i) into this pattern is a NO-OP in
+  ## R's PCRE2 -- caseless matching leaves \p{Lu} case-sensitive, measured. It is listed here so
+  ## nobody reads its absence as a hole in the mutation set.
+
+  cat("  -- and the output this rule must never eat --\n")
+  keep <- function(x) identical(nm(x), x)
+  chk("this tool's own units survive",     keep("0.25 ug/mL, cells/well and more"))
+  chk("a channel pair survives",           keep("channels detected: FITC/PE, APC/Cy7"))
+  chk("a scatter pair survives",           keep("gated on FSC/Area, SSC/Area"))
+})
+
+cat("\n=== the mount point a home is reached through ===\n")
+local({
+  ## A home on a NAMED VOLUME published the volume's name for every path on that volume NOT under
+  ## the home -- and sessioninfo::session_info() prints exactly that shape, straight into the
+  ## report PDF via actaDeIdentifyText(), which is the one consumer that does NOT go through
+  ## actaDiagScrub(). Byte-identical in v3.1.6, v3.2.0 and v3.2.1, so it was not a regression; it
+  ## had simply never been looked for.
+  ##
+  ## DRIVEN THROUGH `homes =`, not through HOME. The helper takes its input as an argument for the
+  ## same reason actaDeIdentifyText() takes `user`: a rule that can only be reached via this
+  ## machine's own environment is a rule that passes on one machine's particulars, which is the
+  ## recurring fault in this file. Every case below is deterministic on every platform.
+  mp <- function(...) h$actaMountPrefixes(homes = c(...))
+
+  chk("a macOS home on a named volume registers the volume, not the container",
+      identical(mp("/Volumes/Big Disk/Users/someone"), c("/Volumes/Big Disk", "\\Volumes\\Big Disk")))
+  chk("...and a Linux /mnt home does too",
+      "/mnt/bigdisk" %in% mp("/mnt/bigdisk/home/someone"))
+  chk("...and /media",
+      "/media/usbkey" %in% mp("/media/usbkey/someone"))
+
+  ## THE NO-OP PROPERTY, which is what makes this change safe to ship: an ordinary home is not
+  ## reached through a mount, so nothing is registered and nothing downstream changes.
+  chk("an ordinary POSIX home registers NOTHING", !length(mp("/Users/someone")))
+  chk("...and an ordinary Windows profile registers nothing", !length(mp("C:/Users/someone")))
+  chk("...and a home under neither registers nothing", !length(mp("/opt/someone")))
+
+  ## THE CONTAINER ITSELF MUST NEVER BE REGISTERED. Replacing "/Volumes" or "/mnt" with a marker
+  ## would render every volume on the machine as the same token and hide that a path was foreign
+  ## -- the same hazard the "users"/"home" exclusion in actaHomePrefixes() exists to prevent.
+  chk("the container itself is never registered",
+      !any(c("/Volumes", "/mnt", "/media") %in% mp("/Volumes", "/mnt", "/media")))
+  chk("...nor a Users directory sitting directly in one",
+      !any(grepl("/Users$", mp("/Volumes/Users"))))
+
+  ## SUBSTITUTION, END TO END, THROUGH THE REAL FUNCTION IN A CHILD PROCESS.
+  ##
+  ## The first version of this block defined a local `de()` that re-applied the production regex
+  ## to prefixes it chose itself. It passed, and it was worthless: deleting the boundary lookahead
+  ## from the shipped code left it GREEN, because it was testing its own copy of the pattern. The
+  ## same mistake the app's <<ACTA_NS_IMPORTS>> markers exist to prevent, made one file over.
+  ## Everything below goes through actaDeIdentifyText() as shipped.
+  ##
+  ## THE ENVIRONMENT IS SET INSIDE THE CHILD, not via system2(env=). Two reasons, both measured:
+  ## system2 pastes `env` in front of the command UNQUOTED, so a value containing a space -- which
+  ## is the whole point of a volume called "Big Disk" -- made the shell treat "Disk/Users/someone" as
+  ## the program and the call died with "error in running command"; and on Windows system2(env=)
+  ## is a NO-OP, so the assertion would have run against the real HOME and asserted nothing.
+  ## USERPROFILE too, since that is the first candidate there.
+  .rs <- file.path(tempdir(), "acta_mount_probe.R")
+  writeLines(c(
+    'Sys.setenv(HOME = "/Volumes/Big Disk/Users/someone",',
+    '           USERPROFILE = "/Volumes/Big Disk/Users/someone")',
+    'e <- new.env(parent = globalenv())',
+    ## ONE sys.source PER FILE. R/ holds two, and splatting them into one call made the second
+    ## sys.source's `chdir` argument -- "invalid 'x' type in 'x && y'".
+    sprintf('suppressWarnings(suppressMessages(sys.source("%s", envir = e)))',
+            actaTestFunctionsFiles()),
+    ## writeLines, not cat(sep="\\n"): this string is written into a generated FILE, so a
+    ## single-escaped \\n would be a real newline here and break the literal there.
+    'writeLines(e$actaDeIdentifyText(c(',
+    '  "/Volumes/Big Disk/Users/someone/ACTA/x.fcs",',   # inside the home  -> ~
+    '  "/Volumes/Big Disk/Rlibs/ACTA",',
+    '  "/Volumes/Big Disk",',                         # the volume root  -> marker
+    '  "/Volumes/Big Disk 2/x"',                      # a SIBLING volume -> untouched
+    '), user = "someone"))'
+  ), .rs)
+  .got <- suppressWarnings(system2("Rscript", shQuote(.rs), stdout = TRUE, stderr = FALSE))
+  .want <- c("~/ACTA/x.fcs", "<redacted-volume>/Rlibs/ACTA", "<redacted-volume>",
+             "/Volumes/Big Disk 2/x")
+  chk(sprintf("the home still wins over the mount (longest prefix first)  [%s]",
+              if (length(.got) >= 1L) .got[[1]] else "no output"),
+      length(.got) == 4L && identical(.got[[1]], .want[[1]]))
+  chk("a path on the volume but outside the home is masked",
+      length(.got) == 4L && identical(.got[[2]], .want[[2]]))
+  chk("...the bare volume root too",
+      length(.got) == 4L && identical(.got[[3]], .want[[3]]))
+  ## THE ONE THAT CATCHES A DROPPED LOOKAHEAD. "Big Disk" must not rewrite the start of
+  ## "Big Disk 2" -- a bare fixed = TRUE gsub renders it "<redacted-volume> 2/x", which both
+  ## corrupts the path and hides that it named a different disk.
+  chk(sprintf("...and a SIBLING volume whose name merely starts the same is untouched  [%s]",
+              if (length(.got) == 4L) .got[[4]] else "no output"),
+      length(.got) == 4L && identical(.got[[4]], .want[[4]]))
+  if (!identical(.got, .want) && length(.got))
+    cat("        got:", paste(.got, collapse = " | "), "\n")
+  unlink(.rs)
+})
+
+cat("\n=== a name directly under a mounted home is still redacted ===\n")
+local({
+  ## THE INTERACTION BETWEEN THE TWO PASSES, which is invisible to either alone and is what the
+  ## release review caught. actaDeIdentifyText() rewrites the mount prefix to the marker; the
+  ## "Surname, Given" rule in actaDiagScrub() then has to recognise that marker AS A ROOT, or its
+  ## documented bound #4 -- "where the root itself supplies the separator the name cannot be the
+  ## FIRST component" -- starts applying to the separator after the marker and a colleague's
+  ## folder sitting directly under the mount root stops being redacted. Measured before the fix:
+  ##     published            /Volumes/<vol>/Smith, John/plate.xlsx  ->  plate.xlsx
+  ##     with the marker      <redacted-volume>/Smith, John/plate.xlsx   (name intact)
+  ## Three of four ordinary shapes regressed, in FIRST ERROR and CHILD STDOUT.
+  ##
+  ## HAS TO RUN IN A CHILD with a mounted HOME, because actaMountPrefixes() reads the environment
+  ## and returns character(0) on the machine this suite runs on -- which is exactly why the probe
+  ## above it, driving actaDeIdentifyText() only, could not see this.
+  .rs2 <- file.path(tempdir(), "acta_mount_name_probe.R")
+  writeLines(c(
+    'Sys.setenv(HOME = "/Volumes/Big Disk/Users/someone",',
+    '           USERPROFILE = "/Volumes/Big Disk/Users/someone")',
+    'e <- new.env(parent = globalenv())',
+    sprintf('suppressWarnings(suppressMessages(sys.source("%s", envir = e)))',
+            actaTestFunctionsFiles()),
+    'writeLines(e$actaDiagScrub(c(',
+    '  "/Volumes/Big Disk/Smith, John/plate.xlsx",',
+    '  "cannot open /Volumes/Big Disk/O\'Brien, Aoife/run.log: Permission denied",',
+    '  "/Volumes/Big Disk/Runs/Doe, Jane/plate.xlsx"',
+    ')))'
+  ), .rs2)
+  .g <- suppressWarnings(system2("Rscript", shQuote(.rs2), stdout = TRUE, stderr = FALSE))
+  chk(sprintf("the child produced three scrubbed lines (%d)", length(.g)), length(.g) == 3L)
+  .names <- c("Smith", "Brien", "Doe")
+  .left  <- .names[vapply(seq_along(.names),
+                          function(i) length(.g) >= i && grepl(.names[i], .g[[i]]), TRUE)]
+  chk(sprintf("no surname survives under a mounted home%s",
+              if (length(.left)) paste0(" -- found ", paste(.left, collapse = ", ")) else ""),
+      length(.left) == 0L)
+  if (length(.left)) for (l in .g) cat("          ", l, "\n")
+  unlink(.rs2)
 })
 
 cat("=== a `started` row with no terminal row is detectable ===\n")

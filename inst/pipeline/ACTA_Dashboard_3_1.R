@@ -255,11 +255,27 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## titer entered a minute earlier was simply absent. actaScanExports() has always counted a
   ## root-level export ("loose in the root"), so the pre-flight reported it as found -- the same
   ## pre-flight/generator divergence as the Outputs/ one, in the other direction.
+  ## Hoisted from the pick() block below so the run scan and pick() cannot disagree about the name.
+  ## ACTA_Functions.R declares the same thing as ACTA_OUTPUT_SUBDIR; this script is deliberately
+  ## standalone and never sources it, so the two must stay in sync by hand.
+  OUTPUT_SUBDIR <- "Outputs"
   runs <- if (wdMode) scanDir else {
     subs <- list.dirs(scanDir, recursive = FALSE, full.names = TRUE)
     selfExp <- list.files(scanDir, pattern = "TitrationExport.*[.]xlsx$", full.names = TRUE,
                           ignore.case = TRUE)
-    if (length(selfExp[!isArchived(selfExp)])) c(scanDir, subs) else subs
+    if (length(selfExp[!isArchived(selfExp)])) {
+      ## THE SCAN ROOT AND ITS OWN Outputs/ ARE THE SAME RUN. pick() reads a run folder AND that
+      ## folder's OUTPUT_SUBDIR, so once scanDir counts as a run, enumerating scanDir/Outputs as a
+      ## sibling reads the same export a second time -- measured: a root export of 1 row plus an
+      ## Outputs export of 3 published 7 rows "from 2 runs" instead of 4.
+      ##
+      ## CONDITIONAL ON PURPOSE, and this is the whole of it. When scanDir is NOT a run, pick(scanDir)
+      ## never runs and that subfolder is the ONLY route to its export -- dropping it there loses the
+      ## run rather than de-duplicating it (measured: the same fixture without a root export indexes
+      ## 3 rows from 1 run through the subfolder alone). An unconditional exclusion passes the
+      ## duplication test and silently withholds data, which is the more dangerous of the two.
+      c(scanDir, subs[basename(subs) != OUTPUT_SUBDIR])
+    } else subs
   }
   runs <- runs[!isArchived(runs)]
   ## An EMPTY scan folder is a legitimate state, not an error: it is what you have before the first
@@ -278,7 +294,6 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## (see the header -- it has to be shareable on its own). ACTA_Functions.R declares the same
   ## constant for the app's pre-flight; the two MUST stay in sync, because when they disagree the
   ## pre-flight passes and the dashboard comes out empty.
-  OUTPUT_SUBDIR <- "Outputs"
   ## NO CONFLICT-COPY FILTERING HERE, deliberately -- see the SYNC-CONFLICT FILTER note near the
   ## top of this file and the long one in ACTA_Functions.R. These globs filter on isArchived()
   ## only, which is what v3.1.6 does. Twelve lines describing which half of a sync-conflict rule
@@ -324,18 +339,42 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## so an export written before a column existed still lines up. rbind() would
   ## refuse outright, which would make every schema change retroactively break the
   ## whole dashboard.
-  readExport <- function(path, runName) {
+  ## THE RAW HEADER, KEPT BESIDE THE NAME IT BECOMES. Two export columns that differ only by their
+  ## annotation -- `Combinatorial_group (n)` and `Combinatorial_group`, both real, one supplied by
+  ## the analyst and one derived -- collapse to the same string once stripAnn() has run, and
+  ## make.unique() then disambiguates the second as `Combinatorial_group.1`. That ".1" reached the
+  ## page, because the label is derived from the NAME. The name has to stay stripped and unique:
+  ## keyOf(), EXPORT_HIDE, MONO and LABELS all key off it, and stripping at read time is what keeps
+  ## a column's identity stable across runs that spell an annotation differently. So the fix is not
+  ## to stop stripping -- it is to stop throwing the original away.
+  RAW_SEEN <- list()
+  readExport <- function(path, runName, runIdx = NA_integer_) {
     d <- tryCatch(suppressMessages(read_excel(path, sheet = 1)),
                   error = function(e) NULL)
     if (is.null(d) || !nrow(d)) return(NULL)
+    .raw <- names(d)
     names(d) <- make.unique(stripAnn(names(d)))
+    RAW_SEEN[[length(RAW_SEEN) + 1L]] <<- setNames(.raw, names(d))
+    attr(d, "acta_raw") <- setNames(.raw, names(d))
     d <- mutate(d, across(everything(), as.character))   # one type per column across runs
     d$.run  <- runName
     d$.file <- path
+    ## THE RUN'S INDEX, not just its name. names(runInfo) is basename(run folder) and two runs can
+    ## share one, so runInfo[[<name>]] resolves to the FIRST match -- the third and last instance
+    ## of the idiom this generator kept getting wrong. The row scan double-counted and dropped;
+    ## the newest-export lookup picked the wrong schema; and this one hands a row the OTHER run's
+    ## figures, report and export links, in a dashboard attached to a validation package.
+    d$.runIdx <- runIdx
     d
   }
-  allRows <- bind_rows(lapply(names(runInfo), function(nm)
-    bind_rows(lapply(runInfo[[nm]]$export, readExport, runName = nm))))
+  ## BY POSITION, not by name. names(runInfo) is basename(run folder), and `runInfo[[nm]]` resolves
+  ## a name to the FIRST match -- so two runs sharing a basename read the first one twice and never
+  ## read the second: a double count and a silent drop from one idiom. Reachable whenever scanDir's
+  ## own basename equals a child's, which the scan above can produce. seq_along() cannot collide,
+  ## and runName is still the name so nothing downstream changes.
+  allRows <- bind_rows(lapply(seq_along(runInfo), function(i)
+    bind_rows(lapply(runInfo[[i]]$export, readExport, runName = names(runInfo)[[i]],
+                     runIdx = i))))
   if (is.null(allRows) || !nrow(allRows))
     stop("ACTA dashboard: every export found was empty or unreadable.", call. = FALSE)
 
@@ -388,19 +427,52 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
             "scriptversion", "acquisition_date", "maxsi", "maxsi_stainqty", "costain_size",
             "mm_r2", "mm_vmax", "mm_kd", "mm_90pct_vmax", "well_volume_ul")
   keyOf   <- function(x) gsub("[^a-z0-9]+", "_", tolower(trimws(x)))
-  labelOf <- function(x) { k <- keyOf(x); if (k %in% names(LABELS)) LABELS[[k]] else gsub("_", " ", x) }
+  ## Filled in below, once the newest export is known. Declared here because labelOf() closes over
+  ## it and is defined first.
+  RAWLAB  <- character(0)
+  ## THE ANNOTATION IS RESTORED, THE SPACING IS NOT CHANGED. Showing the raw header verbatim would
+  ## have been the literal reading of "exactly as the export has it" and it moves 27 of 60 headers
+  ## -- "Cat Num" becomes "Cat_Num" and so on -- for no gain: the annotation is the part that says
+  ## where a column came from, and the underscores say nothing. So the base keeps its spaces and
+  ## the trailing "(n)"/"(L)" is put back when the source header carried one. Three headers move.
+  ## A curated LABELS entry still wins over both.
+  labelOf <- function(x) {
+    k <- keyOf(x)
+    if (k %in% names(LABELS)) return(LABELS[[k]])
+    raw  <- if (x %in% names(RAWLAB)) unname(RAWLAB[[x]]) else x
+    ann  <- regmatches(raw, regexpr("[(][^()]*[)][^A-Za-z0-9]*$", raw))
+    base <- gsub("_", " ", stripAnn(raw))
+    if (length(ann) && nzchar(trimws(ann))) paste0(base, " ", trimws(ann)) else base
+  }
 
   ## "Newest" = most recently written export. Simple, and it tracks the run that actually defines
   ## the current schema better than a version string would (versions are not always monotonic).
-  newest    <- names(sort(vapply(runInfo, function(x) max(file.mtime(x$export)), 0), decreasing = TRUE))[1]
-  newestCol <- names(readExport(runInfo[[newest]]$export[1], newest))
+  ## BY POSITION. runInfo[[<name>]] resolves a name to the FIRST match, and two runs can share a
+  ## basename -- the same idiom that made the row scan double-count one run and drop another.
+  .newestIdx <- which.max(vapply(runInfo, function(x) max(file.mtime(x$export)), 0))
+  newest     <- names(runInfo)[[.newestIdx]]
+  .newestXl  <- runInfo[[.newestIdx]]$export[1]
+  .newestD   <- readExport(.newestXl, newest, runIdx = .newestIdx)
+  newestCol <- names(.newestD)
+  ## NEWEST SPELLING WINS, EXPLICITLY. Two runs can spell the same column's annotation differently,
+  ## and the generator already treats the newest export as the one that defines the current schema
+  ## (see `ordered` below). Seeding from it and only filling gaps from the rest keeps the header
+  ## consistent with that, instead of depending on the order readExport() happened to be called in.
+  RAWLAB <- attr(.newestD, "acta_raw")
+  if (is.null(RAWLAB)) RAWLAB <- character(0)
+  for (.m in RAW_SEEN) {
+    .miss <- setdiff(names(.m), names(RAWLAB))
+    if (length(.miss)) RAWLAB[.miss] <- .m[.miss]
+  }
   allCol    <- names(allRows)
   ordered   <- c(newestCol, setdiff(allCol, newestCol))
   dispCol   <- ordered[!keyOf(ordered) %in% EXPORT_HIDE & !startsWith(ordered, ".")]
 
   ## Derived columns the exports cannot carry: the run grouping and the file links.
-  ## Concatenation first, matching the report: the raw separation before the number derived from it.
-  FIGCOLS <- list(list(k = "concat", label = "Concatenation"),
+  ## Plate map first, then Concatenation, matching the report: the plate as it was laid out, then
+  ## the raw separation, then the number derived from it.
+  FIGCOLS <- list(list(k = "platemap", label = "Plate map"),
+                  list(k = "concat", label = "Concatenation"),
                   list(k = "si",     label = "Stain Index"),
                   list(k = "sat",    label = "Saturation"),
                   list(k = "plots",  label = "Flow plots"),
@@ -414,16 +486,49 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## than the folder name -- which is why the tabs previously read as versions: `project` WAS the
   ## version folder. The folder itself is still shown, in its own column.
   ## Renamed from `tabbed_by` on 2026-08-19: the Info sheet is read by three different consumers and
-  ## a bare "tabbed_by" gave no clue that it steers the DASHBOARD. Reads the new name and still
-  ## accepts the old one, so an instructions workbook written before the rename keeps working.
-  tabWant <- infoVal(info, "dashboard_tabbed_by")
-  if (is.na(tabWant) || !nzchar(tabWant)) tabWant <- infoVal(info, "tabbed_by")
-  if (is.na(tabWant)) tabWant <- "ScriptVersion"
-  tabCol <- names(allRows)[match(keyOf(tabWant), keyOf(names(allRows)))]
+  ## a bare "tabbed_by" gave no clue that it steers the DASHBOARD. Both names are still accepted,
+  ## so a workbook written before the rename keeps working.
+  ##
+  ## READ FROM THE NEWEST EXPORT, NOT FROM THE INSTRUCTIONS WORKBOOK. The workbook describes ONE
+  ## RUN; how a whole collection is grouped into tabs is a property of the collection, and the
+  ## workbook the generator happens to be pointed at (ACTA_LAYOUT_DIR) need have nothing to do
+  ## with the runs being pooled -- rebuild a dashboard over an archive of thirty runs and the
+  ## tabbing was decided by whichever unrelated experiment was open at the time.
+  ##
+  ## The export carries the instructions `Info` sheet verbatim as an audit copy, which is what
+  ## makes this possible: the setting travels WITH the data. "Newest" is the same export that
+  ## already defines the column schema a few lines above, so one run defines both.
+  ##
+  ## An export written before the audit sheets existed has no `Info` at all; that reads as unset
+  ## and falls through to the default, which is the same answer it gave before.
+  .newestInfo <- tryCatch({
+      if ("Info" %in% excel_sheets(.newestXl))
+        suppressMessages(read_excel(.newestXl, sheet = "Info")) else NULL
+    }, error = function(e) NULL)
+  tabWant <- infoVal(.newestInfo, "dashboard_tabbed_by")
+  if (is.na(tabWant) || !nzchar(tabWant)) tabWant <- infoVal(.newestInfo, "tabbed_by")
+  ## infoVal() already maps a blank cell and a literal "NA" to NA, so "empty" lands here too.
+  if (is.na(tabWant) || !nzchar(tabWant)) tabWant <- "ScriptVersion"
+  ## RESOLVED AGAINST DISPLAYABLE COLUMNS ONLY. The dot-prefixed ones are internal -- .run, .file
+  ## and .runIdx -- and .file is the export's ABSOLUTE PATH. Naming it here put
+  ## /Users/<account>/Library/CloudStorage/OneDrive-SharedLibraries-<employer>/<library>/... into
+  ## the page as every row's `project` value and as the tab label, in a file the README says can
+  ## be e-mailed. Everything else already treats these as internal: dispCol excludes them, the
+  ## "Available:" warning hides them, and meta$root was cut to a basename for this very reason.
+  ## This was the one path without the guard.
+  ##
+  ## IT MATTERS MORE NOW THAN IT DID. The same sink exists in the published version, but there
+  ## the value came from the OPERATOR'S OWN workbook; tabbed_by now comes from the newest export
+  ## in the scanned tree, so a foreign export dropped into a shared archive can steer it. An
+  ## unresolvable name falls through to the existing warn-and-tab-by-run-folder branch below,
+  ## which is the right answer for a name that does not denote a real column.
+  .tabCand <- names(allRows)[!startsWith(names(allRows), ".")]
+  tabCol <- .tabCand[match(keyOf(tabWant), keyOf(.tabCand))]
   if (is.na(tabCol)) {
     warning(sprintf(paste0("ACTA dashboard: Info!dashboard_tabbed_by names '%s', which is not a column in any ",
-                           "export; tabbing by run folder instead. Available: %s"),
-                    tabWant, paste(setdiff(names(allRows), c(".run", ".file")), collapse = ", ")),
+                           "export (%s); tabbing by run folder instead. Available: %s"),
+                    tabWant, basename(.newestXl),
+                    paste(setdiff(names(allRows), c(".run", ".file", ".runIdx")), collapse = ", ")),
             call. = FALSE)
     tabLabel <- "Run"
   } else {
@@ -475,7 +580,9 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
 
   records <- lapply(seq_len(nrow(allRows)), function(i) {
     r    <- allRows[i, ]
-    ri   <- runInfo[[ r$.run ]]
+    ## BY POSITION -- see the note in readExport(). Falls back to the name only if a row somehow
+    ## carries no index, which cannot happen for a row this loop produced.
+    ri   <- if (!is.na(r$.runIdx)) runInfo[[ r$.runIdx ]] else runInfo[[ r$.run ]]
     figs <- ri$figs
     bn   <- basename(figs)
     si   <- figs[grepl("^SIPlot",  bn, ignore.case = TRUE)]
@@ -485,11 +592,16 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
     ## match (its name starts "ConcatPlot_", not "CD19_") and was silently dropped: generated,
     ## exported, and invisible in the dashboard.
     conc <- figs[grepl("^ConcatPlot", bn, ignore.case = TRUE)]
+    ## PlateMap is RUN-level too, and per PLATE: a run with three PlateIDs writes three of them, so
+    ## this is a vector like the others rather than a single figure. Same trap ConcatPlot fell into
+    ## -- its name starts "PlateMap_", not "<marker>_", so without being named here it would reach
+    ## the per-antibody branch, fail that branch's group-prefix match and be dropped silently.
+    pmap <- figs[grepl("^PlateMap", bn, ignore.case = TRUE)]
     bid   <- one(col(r, "ELN_ID"))
     byBid <- function(x) { if (!nzchar(bid) || !length(x)) return(x)
                            k <- x[grepl(bid, basename(x), fixed = TRUE)]; if (length(k)) k else x }
-    si <- byBid(si); sat <- byBid(sat); conc <- byBid(conc)
-    perAb <- !(grepl("^SIPlot|^SatPlot|^ConcatPlot", bn, ignore.case = TRUE))
+    si <- byBid(si); sat <- byBid(sat); conc <- byBid(conc); pmap <- byBid(pmap)
+    perAb <- !(grepl("^SIPlot|^SatPlot|^ConcatPlot|^PlateMap", bn, ignore.case = TRUE))
     tokOf <- function(x) vapply(regmatches(x, regexec("^(.+)_([A-Za-z0-9]+)_parent_", x)),
                                 function(z) if (length(z) >= 2) z[2] else NA_character_, "")
     toks <- unique(na.omit(tokOf(bn[perAb])))
@@ -516,6 +628,7 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
       status  = if ("qc_status" %in% names(rec)) rec[["qc_status"]] else "",
       project = if (nzchar(tabVal)) tabVal else r$.run,
       ## I() keeps these AsIs so jsonlite never unboxes a single path into a bare string.
+      platemap = I(rel(pmap)),
       concat = I(rel(conc)), si = I(rel(si)), sat = I(rel(sat)), plots = I(rel(mine)),
       report = I(rel(ri$report)), export = I(rel(ri$export)),
       parent = parentOf(c(mine, si)), folder = relTo(ri$root, outDir)))

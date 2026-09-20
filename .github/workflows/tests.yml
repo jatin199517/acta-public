@@ -224,3 +224,80 @@ jobs:
             }
             if (length(bad)) { cat("FAILED:", paste(bad, collapse = ", "), "\n"); quit(status = 1) }
           '
+
+  report-windows:
+    name: report renders on Windows (from a spaced path)
+    # NOT BLOCKING YET, ON PURPOSE. The open item this closes carries its own warning -- "an
+    # untestable new workflow job is how v3.1.0's CI went red on a tag" -- and nothing about a
+    # first run on a platform nobody has rendered a report on is predictable. continue-on-error
+    # means the first few runs are OBSERVED rather than trusted: the job reports, and the badge
+    # does not move. Promoting it is a separate change, made once it has been green on a schedule
+    # it did not choose, and the line below is the only thing that has to go.
+    continue-on-error: true
+    # Weekly and on demand, like `oq`: this renders a real report, so it costs minutes and a TeX
+    # install, and a per-push job of that size is one people learn to ignore.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with: { r-version: release, use-public-rspm: true }
+      # rmarkdown SHELLS OUT to pandoc; TinyTeX alone gets no render at all, not even a failed one.
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-tinytex@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          # THE `oq` JOB'S LIST, plus magrittr, tibble, tidyselect and tinytex. Same reason as the
+          # note in `suite`: they are DESCRIPTION Imports that arrive transitively on ubuntu and
+          # have not always arrived elsewhere -- and anything missing here does not merely fail,
+          # it makes the pipeline install it mid-run, unpinned, into the library performing the
+          # analysis. Whatever this job proves about a render has to be about the render.
+          # NOTHING BUT `any::<pkg>` LINES BELOW THIS POINT -- see the note in `suite`.
+          packages: |
+            any::flowCore
+            any::flowWorkspace
+            any::openCyto
+            any::ggcyto
+            any::flowMeans
+            any::flowClust
+            any::dplyr
+            any::tidyr
+            any::ggplot2
+            any::ggplate
+            any::readxl
+            any::openxlsx
+            any::this.path
+            any::knitr
+            any::kableExtra
+            any::diptest
+            any::mclust
+            any::jsonlite
+            any::rmarkdown
+            any::lubridate
+            any::stringr
+            any::xml2
+            any::BiocManager
+            any::rstudioapi
+            any::ragg
+            any::sessioninfo
+            any::magrittr
+            any::tibble
+            any::tidyselect
+            any::tinytex
+      - name: render an OQ case from a path with a space in it
+        # WHY A SCRIPT AND NOT A `run:` BLOCK. This job exists because no report had ever been
+        # rendered on Windows by CI, and the recorded risk is a new job that cannot be tried
+        # first. tests/legacy/ci_report_render.R runs on a laptop; a `run:` block only ever runs
+        # here. It also has to stage the case under a directory whose name CONTAINS A SPACE --
+        # actaRenderStage() is a no-op without one, so a job run in the D:\a\<repo>\<repo>
+        # workspace would pass while executing none of the mechanism. The script asserts the
+        # space is there before it runs, so it cannot be green and inert.
+        shell: bash
+        run: |
+          f=tests/ci_report_render.R; [ -f "$f" ] || f=tests/legacy/ci_report_render.R
+          if [ ! -f "$f" ]; then
+            echo "no ci_report_render.R in this release -- nothing to run"
+            exit 0
+          fi
+          echo "running $f"
+          Rscript "$f" OQ_Test1

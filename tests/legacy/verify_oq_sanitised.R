@@ -351,11 +351,29 @@ if (!length(tracked)) {
   ## structural assertions, because a differently-worded internal SOP title matches no generic
   ## pattern and only the private token list would catch it.
   ##
-  ## READ FROM THE GIT INDEX, NOT THE WORKING TREE. What publishes is the staged/committed blob, and
-  ## in this repository they differ constantly: the OneDrive sync client re-injects customXml/* and
-  ## [trash]/*.dat into every workbook seconds after any write. Auditing the worktree means auditing
-  ## bytes nobody will ever receive -- and would report failures that are not in the commit.
-  cat("=== shipped workbooks: every PART of every tracked .xlsx, from the git index ===\n")
+  ## TWO SUBJECTS IN THIS SECTION, AND IT MATTERS WHICH IS WHICH. The note that stood here said
+  ## "READ FROM THE GIT INDEX, NOT THE WORKING TREE ... auditing the worktree means auditing bytes
+  ## nobody will ever receive", and described only the LAST sub-pass. Three of the four -- the cell
+  ## sweep, the docProps author check and the SharePoint part count -- read `f`, the file ON DISK.
+  ##
+  ## AND THE DISK IS THE RIGHT SUBJECT FOR THOSE, because the premise of that note was wrong about
+  ## this repository. make_public_release.sh takes NAMES from `git ls-files` and then `cp -p $f` --
+  ## it copies WORKING-TREE BYTES. So a worktree-only finding is not a false alarm about bytes
+  ## nobody receives; it is precisely the "do not build a release from this directory" signal, and
+  ## it fired for real on 2026-09-18: the sync client had put cp:lastModifiedBy into the shipping
+  ## 3_1 template while HEAD and the index were both clean. Had that note been acted on and these
+  ## three checks moved to the index, the gate would have gone quiet on a name that would have
+  ## shipped.
+  ##
+  ## In the INTENDED release procedure the distinction disappears -- releases are built from a
+  ## fresh clone OUTSIDE the synced library, where worktree == index == HEAD. It only appears in a
+  ## development checkout inside OneDrive, which is exactly where it needs to.
+  ##
+  ## The last sub-pass keeps reading the INDEX, and says so where it runs: a byte sweep of every
+  ## part is the one check whose subject genuinely is the blob, since it is looking for content
+  ## that was committed rather than for metadata a client re-injects.
+  cat("=== shipped workbooks: cells, author and SharePoint parts ON DISK (what cp -p would copy);\n")
+  cat("    every PART swept as text from the git index\n")
   wbs <- tracked[grepl("[.]xlsx$", tracked)]
   nW <- 0L
   if (!length(wbs)) cat("  none\n")

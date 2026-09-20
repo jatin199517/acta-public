@@ -155,7 +155,16 @@ if (length(FN_FILE) == 1) {
   ## regexes would be testing its own copy; the markers mean it runs this one.
   .nsFile <- file.path(dirname(R_DIR), "NAMESPACE")
   .nsPkgs <- if (file.exists(.nsFile)) {
-    .txt <- paste(readLines(.nsFile, warn = FALSE), collapse = "\n")
+    ## COMMENTS STRIPPED FIRST, and this is not tidiness. NAMESPACE takes `#` comments to end of
+    ## line, and it carries a long header explaining why it is hand-written -- which mentioned
+    ## `import()` in prose. The patterns below are NOT anchored and `[^),]*` matches the empty
+    ## string, so that sentence produced a package named "" and this loop died on
+    ## requireNamespace("") with "attempt to use zero-length variable name": the app refused to
+    ## start on a no-install clone because of a COMMENT. A note about the imports must not be read
+    ## as one. (Safe as a line-wise strip because no name in this file contains a `#`; R's own
+    ## parseNamespaceFile() is the shape that could not have this class of fault at all, and is
+    ## where this belongs if it is ever touched again.)
+    .txt <- paste(sub("#.*$", "", readLines(.nsFile, warn = FALSE)), collapse = "\n")
     .whole <- sub("^import\\(", "", sub("\\)$", "",
                   regmatches(.txt, gregexpr("import\\([^),]*\\)", .txt))[[1]]))
     .from  <- vapply(strsplit(gsub("[\n ]+", " ",
@@ -165,8 +174,11 @@ if (length(FN_FILE) == 1) {
     unique(c(.whole, .from))
   } else c("flowCore", "flowWorkspace", "ggcyto", "openCyto")
   ## Already attached by every R session, and library() on them is a no-op that only adds noise.
-  .nsPkgs <- setdiff(.nsPkgs, c("stats", "utils", "methods", "grDevices", "graphics", "datasets",
-                                "base", "grid", "tools"))
+  ## EMPTY NAMES DROPPED TOO -- belt for the braces above, because requireNamespace("") is a hard
+  ## error rather than a FALSE, so one bad capture stops the app instead of being skipped.
+  .nsPkgs <- setdiff(.nsPkgs[nzchar(.nsPkgs)],
+                     c("stats", "utils", "methods", "grDevices", "graphics", "datasets",
+                       "base", "grid", "tools"))
   ## <</ACTA_NS_IMPORTS>>
   for (.p in .nsPkgs) {
     if (!requireNamespace(.p, quietly = TRUE))
@@ -447,7 +459,7 @@ ui <- fluidPage(
                ## The button cannot be the mechanism on its own -- if R is dead or the app is
                ## wedged, no button fires, which is why P1-P3 write unconditionally. This is for
                ## the case where the run failed but the app is still up, which is most of them.
-               actionButton("saveDiag", "Save diagnostics", class = "btn-default",
+               actionButton("saveDiag", "Save log", class = "btn-default",
                             title = "Write one pasteable text file: first error, child output, sessionInfo, TeX and dependency state. Paths and usernames are scrubbed; the workbook is never included.")),
       uiOutput("progress"),
       uiOutput("actaResult"))),
@@ -734,7 +746,22 @@ server <- function(input, output, session) {
              list(id = "dash_out", label = "Dashboard output folder exists", status = "pass",
                   detail = dd, where = dd)
            else list(id = "dash_out", label = "Dashboard output folder exists", status = "fail",
-                     detail = if (nzchar(dd)) "folder does not exist" else "not set", where = dd)))
+                     detail = if (nzchar(dd)) "folder does not exist" else "not set", where = dd)),
+      ## THE INPUT THE GENERATOR ACTUALLY STOPS ON, and the row whose absence made a failing run
+      ## look like a passing panel. It reads the instructions workbook for its Info settings; no
+      ## workbook, no dashboard, every time. A fail rather than a warn, because the run cannot
+      ## succeed -- blocking it here costs nothing and replaces a mystery with a sentence.
+      ##
+      ## Keyed on the SAME `layout` the Files panel resolved, so this cannot drift from what the
+      ## generator is handed three hundred lines below.
+      list(if (!is.na(layout))
+             list(id = "dash_layout", label = "Instructions workbook for the generator",
+                  status = "pass", detail = dirname(layout), where = layout)
+           else list(id = "dash_layout", label = "Instructions workbook for the generator",
+                     status = "fail",
+                     detail = paste("no *Titration_Instructions*.xlsx resolved, and the generator",
+                                    "reads its settings from one -- see the Files check"),
+                     where = WORK_DIR)))
   })
   output$actaChecks <- renderUI(checkPanel("ACTA instructions check", actaRecs()))
   output$dashChecks <- renderUI(checkPanel("Dashboard check", dashRecs()))
@@ -974,7 +1001,26 @@ server <- function(input, output, session) {
     }
     ## Re-emit through the same writer rather than patching cells: the export is heavily styled
     ## and a targeted openxlsx write would risk the cell formatting.
-    writeTitrationExport(as.data.frame(d), ex)
+    ##
+    ## AND CARRY THE OTHER SHEETS ACROSS, or this re-emit DELETES them. The export ships six audit
+    ## sheets beside the data -- SI_stats, Pop_stats, MiFlowCyt_metadata and verbatim copies of
+    ## Info, gating_template and Layout_Plate -- and they exist so the workbook is self-contained:
+    ## the plate map, the gating template and the run settings travel with the numbers. Re-emitting
+    ## with `audit` unset wrote ONE sheet and destroyed the audit trail, silently, the first time
+    ## anybody entered a titer. Measured: 7 sheets in, 1 sheet out.
+    ##
+    ## Read back as text, exactly as the script builds them, so a zero-padded value is not coerced
+    ## on the way through. The data sheet is identified from the writer's OWN default rather than a
+    ## literal here, so the two cannot drift apart.
+    .dataSheet <- as.character(eval(formals(writeTitrationExport)$sheet))
+    .keep <- setdiff(readxl::excel_sheets(ex), .dataSheet)
+    .aud  <- setNames(lapply(.keep, function(.s)
+               as.data.frame(suppressMessages(readxl::read_excel(ex, sheet = .s, col_types = "text")),
+                             check.names = FALSE)), .keep)
+    ## `primary` is not passed: writeTitrationExport() now defaults to ACTA_EXPORT_LEAD_COLS, which
+    ## is the same list the script uses. Passing nothing used to mean "no lead block", so the
+    ## maroon operator-facing headers came back navy on every titer save.
+    writeTitrationExport(as.data.frame(d), ex, audit = .aud)
     say("Titer written for ", length(opts), " group(s) -> ", basename(ex))
     actaRunLogAppend(logFile, actaRunLogEntry("titer_entry", "success", WORK_DIR, res = rv$result,
                                               layout = layout, titer_edited = TRUE, outputs = ex,
@@ -988,8 +1034,13 @@ server <- function(input, output, session) {
   copyThenDashboard <- function() {
     dest <- effPath(copyDirR()$value)  # its own field; blank means this folder
     if (!dir.exists(dest)) { say("Export folder does not exist: ", dest); return(invisible()) }
+    ## THE PLOTS FOLDER, NOT ITS CONTENTS. list.files() here flattened the run: with the copy
+    ## checkbox ticked every PNG landed loose in the destination, while the same run WITHOUT the
+    ## checkbox kept them in Plots/. One checkbox, two directory shapes for the same output.
+    ## actaArchiveThenCopy() copies a directory whole (recursive = TRUE), so the destination now
+    ## looks like the run folder either way.
     src <- c(rv$result$export_file, reportPath(),
-             if (!is.na(rv$result$plots_dir)) list.files(rv$result$plots_dir, full.names = TRUE))
+             if (!is.na(rv$result$plots_dir)) rv$result$plots_dir)
     ## SANITISED HERE TOO: this is a workbook cell on its way to becoming a directory name.
     eln <- infoVal(layout, "ELN_ID"); if (is.na(eln)) eln <- "run"
     eln <- actaElnLabel(eln, for_file = TRUE)
@@ -1020,8 +1071,25 @@ server <- function(input, output, session) {
       ## Sys.setenv, NOT system2(env=): that argument prepends VAR=value to the COMMAND LINE, which
       ## the shell splits on whitespace -- and this repo path contains spaces and an "&", so the
       ## generator was invoked with fragments of its own path as commands.
-      old <- Sys.getenv(c("ACTA_DASHBOARD_DIR", "ACTA_EXPORT_DIR"), unset = NA)
+      ## AND ACTA_LAYOUT_DIR, WITHOUT WHICH THE GENERATOR CANNOT RUN FROM A PACKAGE AT ALL.
+      ## It needs the instructions workbook -- it reads the Info sheet for its settings -- and
+      ## resolves it from ACTA_LAYOUT_DIR, falling back to ITS OWN DIRECTORY when that is unset.
+      ## In a flat version folder the generator sat beside the workbook and the fallback was
+      ## right. Under the package layout inst/pipeline/ is code-only BY DESIGN and can never hold
+      ## one, so every dashboard run from an install died with
+      ##     expected exactly one *Titration_Instructions*.xlsx in '<...>/inst/pipeline'; found 0
+      ## while the Dashboard check panel showed nothing but passes -- it validated the template,
+      ## the scan folder, the exports and the output folder, and had no row for the one input the
+      ## generator would actually stop on. Reported as "Dashboard generation failed" with the
+      ## cause only in the Log, because success here is judged solely by whether an html appeared.
+      ##
+      ## `layout` is the SAME resolved path the Files panel shows, not a second guess at where the
+      ## workbook lives -- the app and the generator disagreeing about that is the whole defect.
+      old <- Sys.getenv(c("ACTA_DASHBOARD_DIR", "ACTA_EXPORT_DIR", "ACTA_LAYOUT_DIR"), unset = NA)
       Sys.setenv(ACTA_DASHBOARD_DIR = outDir, ACTA_EXPORT_DIR = scanDir)
+      ## Only when resolved. With no workbook the preflight row below is already failing and the
+      ## run is blocked; setting the variable to "NA" would turn a clear error into a confusing one.
+      if (!is.na(layout)) Sys.setenv(ACTA_LAYOUT_DIR = dirname(layout))
       on.exit({ for (k in names(old)) if (is.na(old[[k]])) Sys.unsetenv(k) else
                   do.call(Sys.setenv, setNames(list(old[[k]]), k)) }, add = TRUE)
       system2(file.path(R.home("bin"), "Rscript"), c("--vanilla", shQuote(gen)),

@@ -11,6 +11,7 @@
 ## NOT included, because both need a full pipeline run and minutes rather than seconds:
 ##   * the OQ cases        -- actaOQRun("<version>/Diagnostics/OQ_Test1"), and OQ_Test2
 ##   * the regression gate -- regression_capture.R / regression_compare.R (see README.md)
+##   * the spaced-path render -- ci_report_render.R, which runs a case and renders its report
 ## ---------------------------------------------------------------------------------------------
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 
@@ -49,9 +50,11 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_arg_safety.R",     # no workbook cell is ever evaluated
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
+             "test_dashboard_runs.R", # which folders count as runs -- the same export pooled twice
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer
              "test_install_path.R",   # what an install-only user can reach, incl. biocViews
              "test_readme_calls.R",   # the README's own R examples resolve against this layout
+             "test_man_pages.R",      # every export has a man/ topic that still matches its formals
              "verify_oq_sanitised.R") # the OQ cases carry nothing that cannot be published
 
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))
