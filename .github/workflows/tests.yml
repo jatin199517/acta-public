@@ -84,6 +84,23 @@ jobs:
       # where a workbook cell could \input an arbitrary file into the report, which had been
       # standing down silently on every runner.
       - uses: r-lib/actions/setup-tinytex@v2
+      # THE LINK LIBRARIES flowCore NEEDS WHEN IT IS BUILT FROM SOURCE, which on Linux is whenever
+      # P3M has no binary for the current R. flowCore links Rhdf5lib's STATIC libhdf5, and that
+      # pulls `-lcurl -lssl -lcrypto` into the link line even though nothing in flowCore's own
+      # SystemRequirements mentions them -- so pak's sysreqs resolution does not install them and
+      # the build dies at
+      #     /usr/bin/ld: cannot find -lcurl: No such file or directory
+      # The runner image ships the RUNTIME libcurl4 but not the -dev package that provides the
+      # linkable .so, which is the whole difference.
+      # WHY THIS WAS ONLY EVER SEEN WEEKLY: setup-r-dependencies caches by hashed package list, and
+      # GitHub evicts a cache untouched for 7 days. `suite` runs on every push so its cache stays
+      # warm and it reuses an already-built flowCore; `oq` runs exactly weekly, lands on the
+      # eviction boundary, rebuilds from source every time, and had therefore NEVER passed on a
+      # schedule. That makes this a latent failure in `suite` too -- one quiet week and it goes red
+      # the same way -- so the step is on both jobs, not just the one that showed it.
+      - name: link libraries for a source build of flowCore
+        if: runner.os == 'Linux'
+        run: sudo apt-get -y update && sudo apt-get -y install libcurl4-openssl-dev libssl-dev
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           # The authoritative list is `listOfLibrary` in ACTA_Script_*.R; these are the names needed
@@ -182,6 +199,23 @@ jobs:
       # a failed LaTeX pass. TinyTeX alone is not enough.
       - uses: r-lib/actions/setup-pandoc@v2
       - uses: r-lib/actions/setup-tinytex@v2
+      # THE LINK LIBRARIES flowCore NEEDS WHEN IT IS BUILT FROM SOURCE, which on Linux is whenever
+      # P3M has no binary for the current R. flowCore links Rhdf5lib's STATIC libhdf5, and that
+      # pulls `-lcurl -lssl -lcrypto` into the link line even though nothing in flowCore's own
+      # SystemRequirements mentions them -- so pak's sysreqs resolution does not install them and
+      # the build dies at
+      #     /usr/bin/ld: cannot find -lcurl: No such file or directory
+      # The runner image ships the RUNTIME libcurl4 but not the -dev package that provides the
+      # linkable .so, which is the whole difference.
+      # WHY THIS WAS ONLY EVER SEEN WEEKLY: setup-r-dependencies caches by hashed package list, and
+      # GitHub evicts a cache untouched for 7 days. `suite` runs on every push so its cache stays
+      # warm and it reuses an already-built flowCore; `oq` runs exactly weekly, lands on the
+      # eviction boundary, rebuilds from source every time, and had therefore NEVER passed on a
+      # schedule. That makes this a latent failure in `suite` too -- one quiet week and it goes red
+      # the same way -- so the step is on both jobs, not just the one that showed it.
+      - name: link libraries for a source build of flowCore
+        if: runner.os == 'Linux'
+        run: sudo apt-get -y update && sudo apt-get -y install libcurl4-openssl-dev libssl-dev
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           # DECLARE EVERYTHING listOfLibrary NAMES, here most of all: this is the job that actually

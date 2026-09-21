@@ -226,16 +226,20 @@ actaTestFunctions <- function(vd = actaTestVersionDir()) {
 }
 
 ## ---------------------------------------------------------------------------------------------
-## DOES A PATH CARRY A WINDOWS SEPARATOR? One line, shared, because both callers got it wrong the
-## same way and neither could notice: `fixed = TRUE` takes the pattern LITERALLY, so the pattern
-## for one backslash is "\\" -- and both wrote "\\\\", which is TWO. No ordinary Windows path
-## holds two adjacent backslashes (a UNC prefix does, and nothing else), so both predicates were
-## a CONSTANT FALSE on the only platform they are ever evaluated on.
-## What that cost: test_diagnostics.R printed "the fault is NOT reproducible -- upstream may have
-## fixed it; confirm before retiring actaRenderStage()" on the first real Windows machine to run
-## it, one line under a path visibly full of backslashes -- an argument for deleting a mechanism
-## that was working. In ci_report_render.R it made `ok <- FALSE` unreachable, so the branch that
-## exists to fail the Windows render job could never fire.
-## Defined here rather than twice because they are the same claim, and asserted in
-## test_diagnostics.R so it cannot silently become a constant again.
-actaFaultLive <- function(p) grepl("\\", p, fixed = TRUE)
+## DOES pandoc_path_arg MODIFY THIS PATH? That is the fault, stated directly, and it is the only
+## form of the question that is correct on Windows.
+##
+## Both callers used to ask "does the result contain a backslash", which is a proxy for damage ONLY
+## where the input had none. On Windows tempdir() is natively C:\Users\...\Temp\Rtmp..., so a
+## perfectly good space-free stage is backslashed before pandoc_path_arg is called and the proxy
+## reads the path's own separators as damage. That is what failed `report renders on Windows` on its
+## first ever run: the render PASSED, a PDF was produced, and the job still reported
+## "the fault is live AND the stage did not avoid it -- the fix is NOT working here".
+## (The proxy ALSO had the pattern wrong -- `fixed = TRUE` takes "\\" literally, i.e. TWO
+## backslashes, which no ordinary Windows path contains, so it was a constant FALSE. Fixing only
+## the escaping left the proxy itself wrong, which is exactly what happened in v3.2.4.)
+##
+## `f` is injectable so the claim can be gated off Windows against the stubbed pandoc_path_arg,
+## rather than being a claim only the runner can ever check.
+actaPandocTouches <- function(p, f = rmarkdown::pandoc_path_arg)
+  !identical(f(p, backslash = FALSE), p)

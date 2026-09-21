@@ -834,10 +834,12 @@ local({
                         "acta_report_stage_premise_1a2b3c")
     chk("...and so does a Windows-shaped stage, backslashed before pandoc ever sees it",
         identical(.asWin(.winStage, backslash = FALSE), .winStage))
-    ## AND THE VERDICT PREDICATE ITSELF, which was a constant FALSE and said so to nobody.
-    chk("...and the LIVE/not-live predicate actually sees a single backslash",
-        actaFaultLive("C:\\Users\\someone\\Flow Cytometry\\x_files\\figure-latex") &&
-          !actaFaultLive("C:/Users/someone/FlowCytometry/x_files/figure-latex"))
+    ## AND THE LIVE/NOT-LIVE PREDICATE, through the stub so it is checkable off Windows. It must
+    ## key on pandoc_path_arg CHANGING the path -- the spaced one -- and must NOT fire for a
+    ## space-free Windows stage whose separators are backslashes to begin with. Asserting the
+    ## second half is the whole point: that is the case that failed the Windows render job.
+    chk("...and the live/not-live predicate keys on a CHANGE, not on a backslash",
+        actaPandocTouches(.fig, .asWin) && !actaPandocTouches(.winStage, .asWin))
     if (!identical(.stage, .fig)) unlink(.stage, recursive = TRUE)
 
     ## AND THIS MACHINE NEVER SEES ANY OF IT, via the real function. The whole block is inside
@@ -856,7 +858,7 @@ local({
       .real <- rmarkdown::pandoc_path_arg(.fig, backslash = FALSE)
       cat(sprintf("  [--] real pandoc_path_arg on this Windows machine: %s\n", .real))
       cat(sprintf("  [--] VERDICT: the fault is %s on this machine\n",
-                  if (actaFaultLive(.real)) "LIVE -- the staged render is doing work"
+                  if (actaPandocTouches(.fig)) "LIVE -- the staged render is doing work"
                   else paste("NOT reproducible -- upstream may have fixed it;",
                              "confirm before retiring actaRenderStage()")))
       ## OURS, though, is an ordinary assertion: a spaced Windows run folder must relocate to a
