@@ -285,9 +285,15 @@ jobs:
     # does not move. Promoting it is a separate change, made once it has been green on a schedule
     # it did not choose, and the line below is the only thing that has to go.
     continue-on-error: true
-    # Weekly and on demand, like `oq`: this renders a real report, so it costs minutes and a TeX
-    # install, and a per-push job of that size is one people learn to ignore.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # EVERY EVENT, deliberately -- and this was schedule-and-dispatch-only until 3.2.6, on the
+    # reasoning that a ten-minute job "is one people learn to ignore". The cost of that was
+    # measured: it meant the job did not run for two releases, and v3.2.4 shipped an INVERTED
+    # verdict in it that reported "the fix is NOT working here" on a run whose report had rendered
+    # perfectly. Nothing caught it because nothing executed it. A gate that never runs is worse
+    # than one that fails, which is the same lesson the dashboard run-scan gate taught.
+    # It stays continue-on-error, so ten minutes per push buys observation at zero risk to the
+    # badge. `oq` is NOT promoted with it: that one is 15 minutes cold, needs the whole flow stack,
+    # and is the job whose cost this reasoning was actually about.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
