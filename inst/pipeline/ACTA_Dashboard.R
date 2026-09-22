@@ -3,7 +3,7 @@
 ## ---------------------------------------------------------------------------
 ## Builds a self-contained HTML dashboard from ACTA titration exports.
 ##
-## Run:  Rscript ACTA_Dashboard_2_86.R          (or source() it in RStudio)
+## Run:  Rscript ACTA_Dashboard.R               (or source() it in RStudio)
 ##
 ## DELIBERATELY INDEPENDENT of ACTA_Script: the analysis never calls this, and
 ## this never sources ACTA_Functions.R. It is meant to be shareable on its own,
@@ -508,7 +508,12 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   tabWant <- infoVal(.newestInfo, "dashboard_tabbed_by")
   if (is.na(tabWant) || !nzchar(tabWant)) tabWant <- infoVal(.newestInfo, "tabbed_by")
   ## infoVal() already maps a blank cell and a literal "NA" to NA, so "empty" lands here too.
-  if (is.na(tabWant) || !nzchar(tabWant)) tabWant <- "ScriptVersion"
+  ## THE COLUMN WAS RENAMED ScriptVersion -> ACTA_version IN 3.4.0, and a dashboard routinely pools
+  ## runs from either side of that. Prefer the new name, fall back to the old, so an index built
+  ## over pre-3.4.0 exports still tabs by version instead of silently falling through to the first
+  ## displayable column.
+  if (is.na(tabWant) || !nzchar(tabWant))
+    tabWant <- if ("ACTA_version" %in% names(allRows)) "ACTA_version" else "ScriptVersion"
   ## RESOLVED AGAINST DISPLAYABLE COLUMNS ONLY. The dot-prefixed ones are internal -- .run, .file
   ## and .runIdx -- and .file is the export's ABSOLUTE PATH. Naming it here put
   ## /Users/<account>/Library/CloudStorage/OneDrive-SharedLibraries-<employer>/<library>/... into

@@ -174,8 +174,8 @@ chk("no black (that is the Stain ring) and no yellow (it dies under the alpha fl
 chk("every hue distinct", !anyDuplicated(h$ACTA_PLATE_FILL_COL))
 
 cat("=== the script exports one PNG per plate, and the report prints the same object ===\n")
-scr <- paste(readLines(Sys.glob(file.path(vd, "ACTA_Script_*.R"))[1], warn = FALSE), collapse = "\n")
-rmd <- paste(readLines(Sys.glob(file.path(vd, "ACTA_Report_*.Rmd"))[1], warn = FALSE), collapse = "\n")
+scr <- paste(readLines(Sys.glob(file.path(vd, "ACTA_Script*.R"))[1], warn = FALSE), collapse = "\n")
+rmd <- paste(readLines(Sys.glob(file.path(vd, "ACTA_Report*.Rmd"))[1], warn = FALSE), collapse = "\n")
 chk("the script builds PlateMapList", grepl("PlateMapList <- tryCatch", scr))
 ## PlateMap_<BID>_<PlateID>.png -- the kind leads, as it does for every other run-level figure.
 ## The PlateID is load-bearing, not decoration: a run can span several plates and without it they

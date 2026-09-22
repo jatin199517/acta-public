@@ -2484,15 +2484,22 @@ pop.MeFI<-function(fr){
 ##
 ## Membership drives BOTH the colour (here) and the position (the script's relocate()), which is
 ## why the script still names it explicitly rather than relying on the default.
-ACTA_EXPORT_LEAD_COLS <- c("Cat_Num", "Vendor", "Lot_Num", "Clone", "Titer", "Well_volume_uL",
-                           "e6_cells_per_well", "Titration_Status",
+## THE OPERATOR-FACING BLOCK: the columns a person fills in or reads first. Membership drives BOTH
+## the position (the relocate() in ACTA_Script) and the absence of fill (`primary =` on
+## writeTitrationExport), which is why there is one list and not two.
+## UNFORMATTED SINCE 3.4.0. This block used to carry a maroon/pink theme; it now carries none, so
+## the sheet has exactly two looks -- plain here, navy/blue everywhere else.
+## `Combinatorial_group (n)` LEFT the block in 3.4.0 and so takes the navy theme; it is still
+## exported, just no longer part of the operator-facing run.
+ACTA_EXPORT_LEAD_COLS <- c("Vendor", "Clone", "Alias", "Fl", "Cat_Num", "Lot_Num",
+                           "Titer", "Titration_Status", "Well_volume_uL", "e6_cells_per_well",
                            "Test_Material", "ELN_ID", "Fix_Perm", "Operator", "SOP",
-                           "Combinatorial_group (n)")
+                           "Costain_Panel_Iteration", "ACTA_version")
 
 writeTitrationExport <- function(df, path, sheet = "TitrationExport",
                                  audit = NULL,
                                  primary = ACTA_EXPORT_LEAD_COLS,
-                                 primary_palette   = c(header = "#93398F", band = "#ECCFED"),
+                                 primary_palette   = NULL,
                                  secondary_palette = c(header = "#1F4E79", band = "#DCE9F5"),
                                  border_col = "#000000",
                                  font_name = "Aptos Narrow", font_size = 12) {
@@ -2513,14 +2520,20 @@ writeTitrationExport <- function(df, path, sheet = "TitrationExport",
   openxlsx::addWorksheet(wb, sheet)
   openxlsx::writeData(wb, sheet, df, withFilter = TRUE)   # header styled per block below
 
+  ## A NULL PALETTE MEANS NO THEME AT ALL -- no header fill, no banding, and black header text
+  ## rather than the white that only reads against a fill. The border, the centring and the font
+  ## are NOT part of either theme: they are how every cell on this sheet looks, so an unthemed
+  ## block keeps them and the sheet stays one table rather than two.
   hdrStyle <- function(pal)
     openxlsx::createStyle(fontName = font_name, fontSize = font_size,
-                          fontColour = "#FFFFFF", fgFill = pal[["header"]],
+                          fontColour = if (is.null(pal)) "#000000" else "#FFFFFF",
+                          fgFill = if (is.null(pal)) NULL else pal[["header"]],
                           textDecoration = "bold", halign = "center", valign = "center",
                           wrapText = TRUE, border = "TopBottomLeftRight",
                           borderColour = border_col, borderStyle = "thin")
   bodyStyle <- function(fill)
-    openxlsx::createStyle(fontName = font_name, fontSize = font_size, fgFill = fill,
+    openxlsx::createStyle(fontName = font_name, fontSize = font_size,
+                          fgFill = if (is.null(fill) || all(is.na(fill))) NULL else fill,
                           halign = "center", valign = "center",
                           border = "TopBottomLeftRight",
                           borderColour = border_col, borderStyle = "thin")
@@ -2531,10 +2544,13 @@ writeTitrationExport <- function(df, path, sheet = "TitrationExport",
                    list(idx = idx_secondary, pal = secondary_palette))) {
     if (!length(grp$idx)) next
     openxlsx::addStyle(wb, sheet, hdrStyle(grp$pal), rows = 1, cols = grp$idx, gridExpand = TRUE)
+    ## Both row parities take NO fill when the block is unthemed; banding IS the theme.
+    .oddFill  <- if (is.null(grp$pal)) NULL else "#FFFFFF"
+    .evenFill <- if (is.null(grp$pal)) NULL else grp$pal[["band"]]
     if (length(odd))
-      openxlsx::addStyle(wb, sheet, bodyStyle("#FFFFFF"), rows = odd, cols = grp$idx, gridExpand = TRUE)
+      openxlsx::addStyle(wb, sheet, bodyStyle(.oddFill), rows = odd, cols = grp$idx, gridExpand = TRUE)
     if (length(even))
-      openxlsx::addStyle(wb, sheet, bodyStyle(grp$pal[["band"]]), rows = even, cols = grp$idx, gridExpand = TRUE)
+      openxlsx::addStyle(wb, sheet, bodyStyle(.evenFill), rows = even, cols = grp$idx, gridExpand = TRUE)
   }
   ## Date columns: keep the banding/borders (stack=TRUE) and add an unambiguous ISO format.
   ## Font and centring are restated so the stacked style cannot drop them.
@@ -4299,7 +4315,7 @@ actaMiFlowCytAppendix <- function(mfc) {
       v(paste(sprintf("%s = %s", names(a$transformation$arguments),
                       vapply(a$transformation$arguments, function(z) v(z), character(1))),
               collapse = "; ")))
-  add("4.4", "Gating (Data Filtering) Details")
+  add("4.4", "Gating Details")
   add("4.4.1", "Gate Description", v(a$gating$description))
   add("4.4.2", "Gate Statistics",
       if (!is.null(a$gating$statistics) && nrow(a$gating$statistics))
@@ -5867,6 +5883,64 @@ ACTA_GLYPH <- c(pass = "\u2713", fail = "\u2717", warn = "!", skip = "\u2013")
 ## directory in a version folder (hence the default), and different when ACTA runs from an installed
 ## package: the scripts live read-only in inst/pipeline/ while the workbook sits in the user's own
 ## folder. Checking all five in one place is what made the app unusable from a package.
+## ---------------------------------------------------------------------------------------------
+## THE VERSION STAMPED ON A RUN -- the export column, the export FILENAME, the dashboard's default
+## tabbing column and acta_version.tsv all key on this.
+##
+## IT USED TO BE PARSED FROM THE SCRIPT'S OWN FILENAME, `ACTA_Script_<n>_<n>.R`, so it changed only
+## when somebody created a new version FOLDER. That made it claim more than it could deliver: in the
+## six days the 3_1 folder existed the analysis library took 27 commits and +726/-28 lines -- an
+## export that lost six sheets, a report that would not compile on Windows at all, two changes to
+## the plate map -- and every one of those runs was stamped "3_1". A stamp that says "same analysis"
+## when the analysis differs is a FALSE NEGATIVE, which is the dangerous direction for a record
+## whose entire job is telling two runs apart.
+##
+## So it is now the PACKAGE version, which moved 3.1.0 -> 3.2.6 across exactly those changes. It
+## errs the other way -- it changes on a release that touched nothing analytical -- and a false
+## positive is the safe direction: it over-reports a difference rather than hiding one.
+##
+## RESOLVED FROM THE CODE THAT IS ACTUALLY RUNNING, not from whatever ACTA happens to be installed.
+## Those differ: the pipeline sources ACTA_Function*.R out of `code_dir` when it finds one, and a
+## developer machine can easily have a DIFFERENT version installed at the same time. Walking up
+## from code_dir to the governing DESCRIPTION gets this right in both layouts without having to be
+## told which one it is:
+##   * installed  -- <lib>/ACTA/pipeline      -> <lib>/ACTA/DESCRIPTION
+##   * source     -- <ver>/inst/pipeline      -> <ver>/DESCRIPTION
+## The filename parse survives BELOW that, for the flat pre-3.0 layouts that have no DESCRIPTION at
+## all; for those it is still the honest answer, and it is deliberately preferred over an installed
+## package that did not supply the code. utils::packageVersion() is the last resort, not the first.
+actaScriptVersion <- function(code_dir = NULL) {
+  cd <- if (is.null(code_dir)) "" else as.character(code_dir)[1]
+  if (is.na(cd)) cd <- ""
+  ## 1. the DESCRIPTION governing code_dir, at most three levels up
+  d <- if (nzchar(cd)) tryCatch(normalizePath(cd, mustWork = FALSE), error = function(e) "") else ""
+  for (i in seq_len(3L)) {
+    if (!nzchar(d) || !dir.exists(d)) break
+    f <- file.path(d, "DESCRIPTION")
+    if (file.exists(f)) {
+      v <- tryCatch({
+        dcf <- read.dcf(f, fields = c("Package", "Version"))
+        if (identical(as.character(dcf[1L, "Package"]), "ACTA"))
+          as.character(dcf[1L, "Version"]) else NA_character_
+      }, error = function(e) NA_character_)
+      if (!is.na(v) && nzchar(v)) return(v)
+    }
+    up <- dirname(d)
+    if (identical(up, d)) break
+    d <- up
+  }
+  ## 2. a flat pre-3.0 layout: the script's own filename, which is all there is
+  if (nzchar(cd) && dir.exists(cd)) {
+    fs <- list.files(cd, pattern = "ACTA_Script.*[.]R$")
+    m  <- regmatches(fs, regexpr("[0-9]{1,3}_[0-9]{1,3}", fs))
+    if (length(m)) return(as.character(m[1L]))
+  }
+  ## 3. only now the installed package, which may not be what ran
+  v <- tryCatch(as.character(utils::packageVersion("ACTA")), error = function(e) NA_character_)
+  if (!is.na(v) && nzchar(v)) return(v)
+  NA_character_
+}
+
 actaVersionFiles <- function(version_dir, code_dir = version_dir) {
   want <- list(
     script    = list(label = "ACTA Script",     pat = "^ACTA_Script.*\\.R$",    dir = "code"),
@@ -7957,7 +8031,7 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   ## and look at 2_98/. A package has no such folder, so the run has to say so itself, and the
   ## pair (git tag, this record) replaces it. A tag is the stronger half: it is content-addressed
   ## and cannot drift, whereas a directory is something a person can edit.
-  ## Recorded SEPARATELY from script_version, which is parsed out of the ACTA_Script_*.R FILENAME
+  ## Recorded SEPARATELY from script_version, which since 3.3.0 is the package version too
   ## and so reports 3_0, where DESCRIPTION carries the full patch version. The filename is the
   ## pipeline's own idea of its version; DESCRIPTION is the package's. When ACTA is not installed
   ## there is no package version to report and the field says so rather than guessing.

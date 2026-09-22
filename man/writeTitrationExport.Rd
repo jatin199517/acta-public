@@ -8,7 +8,7 @@ reads and fills in is unmistakable against the derived data.
 \usage{
 writeTitrationExport(df, path, sheet = "TitrationExport", audit = NULL,
                      primary = ACTA_EXPORT_LEAD_COLS,
-                     primary_palette = c(header = "#93398F", band = "#ECCFED"),
+                     primary_palette = NULL,
                      secondary_palette = c(header = "#1F4E79", band = "#DCE9F5"),
                      border_col = "#000000", font_name = "Aptos Narrow",
                      font_size = 12)
@@ -18,11 +18,15 @@ writeTitrationExport(df, path, sheet = "TitrationExport", audit = NULL,
   \item{path}{the \code{.xlsx} to write. Overwritten if it exists.}
   \item{sheet}{name of the data worksheet.}
   \item{audit}{a named list of data frames, written as extra sheets \emph{after} the data sheet.}
-  \item{primary}{names of the columns that get the primary colour family -- the block the operator
+  \item{primary}{names of the columns that form the operator-facing block -- the block the operator
     reads and fills in. Everything else is secondary. Defaults to ACTA's own lead block, so a
     caller that re-emits an export does not silently lose it; pass \code{character()} for none.}
   \item{primary_palette, secondary_palette}{named character vectors with \code{header} and
-    \code{band} hex colours.}
+    \code{band} hex colours, or \code{NULL} for no theme at all -- no header fill, no banding,
+    and black header text instead of the white that only reads against a fill. The border, the
+    centring and the font are not part of either theme, so an unthemed block keeps them and the
+    sheet stays one table. \code{primary_palette} defaults to \code{NULL}: since 3.4.0 the
+    operator-facing block is unformatted, and the sheet has exactly two looks.}
   \item{border_col}{hex colour for the thin border every cell gets.}
   \item{font_name, font_size}{applied to the whole sheet, not only to styled cells.}
 }

@@ -187,8 +187,12 @@ local({
   ## against a value this test invented.
   .ei <- suppressMessages(readxl::read_excel(.ex[[1]], sheet = "Info"))
   .ek <- grep("tabbed", names(.ei), ignore.case = TRUE, value = TRUE)
-  .want <- if (length(.ek)) as.character(.ei[[.ek[[1]]]][1]) else "ScriptVersion"
-  if (!nzchar(.want) || is.na(.want)) .want <- "ScriptVersion"
+  ## Mirrors the dashboard's own default, which prefers ACTA_version and falls back to the
+  ## pre-3.4.0 ScriptVersion so a pooled index spanning the rename still tabs by version.
+  .ecols <- names(suppressMessages(readxl::read_excel(.ex[[1]], sheet = "TitrationExport", n_max = 0)))
+  .dflt  <- if ("ACTA_version" %in% .ecols) "ACTA_version" else "ScriptVersion"
+  .want <- if (length(.ek)) as.character(.ei[[.ek[[1]]]][1]) else .dflt
+  if (!nzchar(.want) || is.na(.want)) .want <- .dflt
 
   d <- file.path(tempdir(), "acta_dash_tab"); unlink(d, recursive = TRUE)
   dir.create(file.path(d, "scan", "RUN1"), recursive = TRUE); dir.create(file.path(d, "out"))

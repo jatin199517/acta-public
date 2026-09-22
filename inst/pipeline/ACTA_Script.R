@@ -1212,18 +1212,20 @@ for(q in seq_along(antibody)){
                        label=abLabelLine, benchlingID=BID, operator=OPR, clone=abMeta$Clone,
                        trans=actaTrans, maxValue=actaMaxValue, layout_ncol=fLay$ncol,
                        caption_width=fLay$width)), buildAliases)
-## Parsed from the SCRIPT's own filename, so it tracks the version folder automatically -- and it
-## must look in the CODE dir, not the working directory. Those differ when a diagnostic case
-## supplies only its inputs: globbing the wd found no script, ScriptVersion came back empty, and
-## the export died with an opaque "In argument: `ScriptVersion = ScriptVersion`".
-ScriptVersion<-str_extract(list.files(acta_code_dir, pattern="ACTA_Script.*\\.R$"),
-                           "\\d{1,3}_\\d{1,3}")
-ScriptVersion<-ScriptVersion[!is.na(ScriptVersion)]
-if (!length(ScriptVersion))
-  stop(sprintf(paste0("Could not read a version from any ACTA_Script*.R in the code folder '%s'. ",
-                      "The export and the dashboard are both keyed on it."), acta_code_dir),
+## THE PACKAGE VERSION OF THE CODE THAT IS RUNNING -- resolved by actaScriptVersion(), whose
+## comment carries the reasoning. It was parsed from this script's own filename until 3.3.0, which
+## meant it only moved when somebody made a new version folder, and so it stamped 27 commits'
+## worth of analysis changes as one value.
+## STILL THE CODE DIR, NOT THE WORKING DIRECTORY. Those differ when a diagnostic case supplies only
+## its inputs; globbing the wd once found no script, left ScriptVersion empty, and the export died
+## on an opaque "In argument: `ScriptVersion = ScriptVersion`". The guard below is kept for that
+## reason: an unresolved version has to fail HERE, loudly, rather than downstream.
+ScriptVersion<-actaScriptVersion(acta_code_dir)
+if (!length(ScriptVersion) || is.na(ScriptVersion) || !nzchar(ScriptVersion))
+  stop(sprintf(paste0("Could not resolve a version for the code in '%s': no ACTA DESCRIPTION ",
+                      "above it, no ACTA_Script*.R in it, and no installed ACTA. The export and ",
+                      "the dashboard are both keyed on it."), acta_code_dir),
        call. = FALSE)
-ScriptVersion<-ScriptVersion[1]
   ## ---- StatsExport rows for this antibody (populations flagged stats_export=TRUE) -----------------
   ## count + percent from openCyto, MeFI + robustSD from ACTA's own pop.MeFI()/pop.rsd(). Note
   ## those two read `channel` from THIS scope -- i.e. they report the TITRATED REAGENT's median
@@ -1837,16 +1839,21 @@ if (!all(c("Fix","Perm") %in% names(stats)))
 ## vector is what gives it the maroon/pink operator-facing header rather than the navy applied to
 ## derived columns -- membership here drives both the position (via the relocate() below) and the
 ## colour (via `primary = exportLeadCols`).
-## `Combinatorial_group (n)` is in the block because the analyst supplies it, exactly like ELN_ID
-## and SOP -- membership drives both the maroon header and the position. `Combinatorial (L)` is NOT:
-## ACTA derives it, so it takes the navy palette while sitting immediately after the value it is
+## `Combinatorial_group (n)` LEFT the block in 3.4.0: it is still exported and still analyst-supplied,
+## but it is no longer part of the operator-facing run, so it takes the navy theme. `Combinatorial (L)` is NOT:
+## ACTA derives it, and it likewise takes the navy theme while sitting immediately after the value it is
 ## derived from. Same split as QC_Status, and for the same reason -- position and colour are set
 ## independently, by the relocate() and by `primary =` respectively.
 ## FROM THE SHARED CONSTANT, not a second copy. The app re-emits this workbook when a titer is
 ## entered and needs the same list; a list defined here was invisible to it.
 exportLeadCols <- ACTA_EXPORT_LEAD_COLS
+## ALWAYS EMITTED, BLANK IF THE WORKBOOK PREDATES IT. Costain_Panel_Iteration is a Layout_Plate
+## column the analyst fills in, so it arrives through pData like Operator and SOP do -- but a
+## workbook written before 3.4.0 simply does not have it, and the operator-facing block is a fixed
+## schema. Absent becomes NA here rather than a column that silently disappears from the export.
+if (!"Costain_Panel_Iteration" %in% names(stats)) stats$Costain_Panel_Iteration <- NA_character_
 statsForExport<-stats |> dplyr::filter(SI==maxSI) |>
-  mutate(ScriptVersion=ScriptVersion,
+  mutate(ACTA_version=ScriptVersion,
          Fix_Perm=fixPermLabel(Fix, Perm, ids=name),
          Titer=NA_character_, Titration_Status=NA_character_,
          ## The declaration, verbatim, and the logical derived from it. Keyed on Titration for the
@@ -1937,7 +1944,7 @@ actaMfc <- actaMiFlowCyt(
                                               actaEventsRead else integer(0)))
 
 exportName<-paste0(str_replace_all(str_replace_all(lubridate::today(),"-",""),"^(\\d{2})",""),"_",BIDfile,"_TitrationExport_",ScriptVersion,".xlsx")
-## Formatted export: the operator-facing lead block in orchid/purple, all derived columns in
+## Formatted export: the operator-facing lead block UNFORMATTED, all derived columns in
 ## blue, every cell centred with a thin black border, Aptos Narrow 12 throughout -- see
 ## writeTitrationExport(). writexl cannot style cells, hence openxlsx.
 ## Audit copies of the instructions workbook, appended after the data sheet so the export is

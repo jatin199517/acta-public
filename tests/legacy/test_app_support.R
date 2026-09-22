@@ -237,11 +237,20 @@ local({
                    error = function(e) "")
     unique(unlist(regmatches(.x, gregexpr("(?<=fgColor rgb=\")[0-9A-Fa-f]+", .x, perl = TRUE))))
   }
-  .want <- toupper(sub("^#", "", unname(eval(formals(h$writeTitrationExport)$primary_palette)["header"])))
+  ## TWO HALVES, because the lead block stopped having a colour in 3.4.0 and "no fill" is not a
+  ## thing a fill list can show you. The re-emit must still carry the SECONDARY theme -- that is
+  ## what proves styling survived the round trip at all -- and it must NOT carry the retired
+  ## maroon, which is what proves the lead block really is unformatted rather than merely
+  ## defaulted somewhere else.
   .got  <- toupper(.fills(.ex))
-  chk(sprintf("...and the operator-facing lead block keeps its colour (%s in %s)",
-              .want, paste(.got, collapse = ",")),
-      any(grepl(.want, .got, fixed = TRUE)))
+  .navy <- toupper(sub("^#", "", unname(eval(formals(h$writeTitrationExport)$secondary_palette)["header"])))
+  chk(sprintf("...and a re-emit keeps the derived block's navy theme (%s in %s)",
+              .navy, paste(.got, collapse = ",")),
+      length(.navy) == 1L && any(grepl(.navy, .got, fixed = TRUE)))
+  chk("...while the retired maroon lead-block fill is gone from the file",
+      !any(grepl("93398F", .got, fixed = TRUE)) && !any(grepl("ECCFED", .got, fixed = TRUE)))
+  chk("...and writeTitrationExport still defaults the lead block to no theme at all",
+      is.null(eval(formals(h$writeTitrationExport)$primary_palette)))
 })
 
 cat("\n=== 6. run log ===\n")
@@ -1088,7 +1097,7 @@ local({
     ## reads only one file type cannot pass.
     writeLines(sprintf("code_dir\t%s", .home), file.path(.out, "acta_version.tsv"))
     writeLines(sprintf("! LaTeX Error: nothing in %s/texmf", .home),
-               file.path(.sc, "case", "ACTA_Report_3.1.log"))
+               file.path(.sc, "case", "ACTA_Report.log"))
     writeLines(sprintf("timestamp\toperator\n2026\t%s", .home),
                file.path(.wd, "ACTA_app_run_log.tsv"))
     .src <- unlist(lapply(actaTestFunctionsFiles(vd), readLines, warn = FALSE))
@@ -1107,10 +1116,10 @@ local({
         cat("         the block did not run:", conditionMessage(attr(.r, "condition")), "\n")
       .found <- if (is.null(.hit)) character(0) else unique(.hit$path)
       chk("...and it reaches Outputs/", "acta_version.tsv" %in% .found)
-      chk("...the run folder above it", "ACTA_Report_3.1.log" %in% .found)
+      chk("...the run folder above it", "ACTA_Report.log" %in% .found)
       chk("...and the app's working folder, which is neither",
           "ACTA_app_run_log.tsv" %in% .found)
-      if (!setequal(.found, c("acta_version.tsv", "ACTA_Report_3.1.log", "ACTA_app_run_log.tsv")))
+      if (!setequal(.found, c("acta_version.tsv", "ACTA_Report.log", "ACTA_app_run_log.tsv")))
         cat("         found:", paste(.found, collapse = ", "), "\n")
     }
     unlink(.sc, recursive = TRUE)
@@ -1162,6 +1171,66 @@ local({
   ## The severity the comment promised, which for two releases the code did not implement.
   chk("...with a login-only hit recorded as warn rather than pass",
       any(grepl('else if (length(.idScan$user) ||', code, fixed = TRUE)))
+})
+
+## ---------------------------------------------------------------------------------------------
+## actaScriptVersion(): THE STAMP MUST DESCRIBE THE CODE THAT RAN
+##
+## Built as fixtures on disk rather than against this checkout, so the assertions are about the
+## RESOLUTION RULE and not about whatever version happens to be released today.
+cat("\n=== actaScriptVersion resolves from the code actually in use ===\n")
+local({
+  mk <- function(...) { d <- file.path(tempdir(), "asv", ...); dir.create(d, recursive = TRUE, showWarnings = FALSE); d }
+  unlink(file.path(tempdir(), "asv"), recursive = TRUE)
+
+  ## 1. AN INSTALLED-PACKAGE SHAPE: <root>/pipeline, DESCRIPTION one level up.
+  inst <- mk("inst", "pipeline")
+  writeLines(c("Package: ACTA", "Version: 9.9.1"), file.path(dirname(inst), "DESCRIPTION"))
+  chk("an installed layout reads the DESCRIPTION one level up",
+      identical(h$actaScriptVersion(inst), "9.9.1"))
+
+  ## 2. A SOURCE-TREE SHAPE: <ver>/inst/pipeline, DESCRIPTION two levels up. Both layouts have to
+  ## work without the function being told which one it is looking at.
+  src <- mk("src", "inst", "pipeline")
+  writeLines(c("Package: ACTA", "Version: 9.9.2"),
+             file.path(dirname(dirname(src)), "DESCRIPTION"))
+  chk("...and a source tree reads it two levels up", identical(h$actaScriptVersion(src), "9.9.2"))
+
+  ## 3. SOMEBODY ELSE'S DESCRIPTION IS NOT OURS. Walking up must not accept the first DESCRIPTION
+  ## it trips over -- a clone inside another R package would otherwise take that package's version.
+  other <- mk("other", "inst", "pipeline")
+  writeLines(c("Package: notACTA", "Version: 1.2.3"),
+             file.path(dirname(dirname(other)), "DESCRIPTION"))
+  chk("...and a non-ACTA DESCRIPTION is ignored, not adopted",
+      !identical(h$actaScriptVersion(other), "1.2.3"))
+
+  ## 4. THE FLAT PRE-3.0 LAYOUT has no DESCRIPTION anywhere, and the filename is the only answer
+  ## there is. It must be preferred over the installed package, which did NOT supply this code --
+  ## that is the whole point of resolving from code_dir rather than from the library.
+  flat <- mk("flat")
+  writeLines("x", file.path(flat, "ACTA_Script_2_99.R"))
+  writeLines("x", file.path(flat, "ACTA_Functions_2_99.R"))
+  .inst <- tryCatch(as.character(utils::packageVersion("ACTA")), error = function(e) NA_character_)
+  chk("a flat layout falls back to the script filename, not to the installed package",
+      identical(h$actaScriptVersion(flat), "2_99") &&
+        (is.na(.inst) || !identical(h$actaScriptVersion(flat), .inst)))
+
+  ## 5. A DESCRIPTION BEATS A FILENAME when both are present -- otherwise the package layouts,
+  ## whose scripts are still called ACTA_Script.R, would keep reporting the folder number and
+  ## this whole change would be inert.
+  both <- mk("both", "inst", "pipeline")
+  writeLines("x", file.path(both, "ACTA_Script.R"))
+  writeLines(c("Package: ACTA", "Version: 9.9.3"),
+             file.path(dirname(dirname(both)), "DESCRIPTION"))
+  chk("...and a DESCRIPTION wins over a co-located ACTA_Script_<n>_<n>.R",
+      identical(h$actaScriptVersion(both), "9.9.3"))
+
+  ## 6. IT NEVER RETURNS SOMETHING UNUSABLE. The pipeline stops on NA rather than writing an empty
+  ## stamp, so an empty string or a zero-length answer must not be possible here either.
+  v <- h$actaScriptVersion(file.path(tempdir(), "asv", "nope"))
+  chk("an unresolvable code dir yields one usable value or NA, never empty",
+      length(v) == 1L && (is.na(v) || nzchar(v)))
+  unlink(file.path(tempdir(), "asv"), recursive = TRUE)
 })
 
 cat(if (ok) "\nALL APP-SUPPORT TESTS PASS\n" else "\nFAILURES ABOVE\n")

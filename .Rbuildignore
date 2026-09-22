@@ -28,7 +28,7 @@
 # .tex as evidence when a render fails and sweeps the rest, but the sweep missed the code folder
 # for a while, and inst/pipeline/ACTA_Report_*.aux/.toc then failed the gate asserting that folder
 # ships exactly ONE ACTA_Report_* file. Fixed at the source; this is the belt, for the tarball.
-(^|/)ACTA_Report_[^/]*\.(aux|toc|out)$
+(^|/)ACTA_Report[^/]*\.(aux|toc|out)$
 
 # R's DEFAULT GRAPHICS DEVICE FILE. Any Rscript that draws without opening a device writes
 # Rplots.pdf into the working directory, and running a gate from the package root leaves one here.

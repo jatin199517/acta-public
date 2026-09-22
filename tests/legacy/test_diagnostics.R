@@ -625,51 +625,51 @@ local({
   ## the run folder, and the stage has to end up gone.
   .st <- file.path(tempdir(), "acta_stage_gate_src"); .vd <- file.path(tempdir(), "acta_stage_gate_dst")
   unlink(c(.st, .vd), recursive = TRUE)
-  dir.create(file.path(.st, "ACTA_Report_3.1_files", "figure-latex"), recursive = TRUE)
+  dir.create(file.path(.st, "ACTA_Report_files", "figure-latex"), recursive = TRUE)
   dir.create(.vd, recursive = TRUE)
-  writeLines("pdf", file.path(.st, "ACTA_Report_3.1.pdf"))
-  writeLines("tex", file.path(.st, "ACTA_Report_3.1.tex"))
-  writeLines("png", file.path(.st, "ACTA_Report_3.1_files", "figure-latex", "GatingPlot-1.png"))
+  writeLines("pdf", file.path(.st, "ACTA_Report.pdf"))
+  writeLines("tex", file.path(.st, "ACTA_Report.tex"))
+  writeLines("png", file.path(.st, "ACTA_Report_files", "figure-latex", "GatingPlot-1.png"))
   .got <- h$actaRenderCollect(.st, .vd)
   chk("a staged render's PDF arrives in the run folder",
-      file.exists(file.path(.vd, "ACTA_Report_3.1.pdf")) && length(.got$moved) == 2L)
+      file.exists(file.path(.vd, "ACTA_Report.pdf")) && length(.got$moved) == 2L)
   chk("...and so does its evidence, while the figures tree stays behind",
-      file.exists(file.path(.vd, "ACTA_Report_3.1.tex")) &&
-        !dir.exists(file.path(.vd, "ACTA_Report_3.1_files")))
+      file.exists(file.path(.vd, "ACTA_Report.tex")) &&
+        !dir.exists(file.path(.vd, "ACTA_Report_files")))
   chk("...and the stage is left gone, not full", !dir.exists(.st))
   chk("collecting from a stage that IS the run folder does nothing",
       identical(h$actaRenderCollect(.vd, .vd)$moved, character(0)) &&
-        file.exists(file.path(.vd, "ACTA_Report_3.1.pdf")))
+        file.exists(file.path(.vd, "ACTA_Report.pdf")))
   ## THE FAILURE PATH TAKES FILES AND LEAVES THE FIGURES TREE. Nothing sweeps a figures directory
   ## in the run folder when a render fails -- the intermediates are kept as evidence on purpose --
   ## so it sat in the case folder, which is what broke the OQ's self-containment check once
   ## before, and put a PNG per plot into a synced folder for every failure.
   unlink(c(.st, .vd), recursive = TRUE)
-  dir.create(file.path(.st, "ACTA_Report_3.1_files"), recursive = TRUE); dir.create(.vd)
-  writeLines("tex", file.path(.st, "ACTA_Report_3.1.tex"))
-  writeLines("png", file.path(.st, "ACTA_Report_3.1_files", "GatingPlot-1.png"))
+  dir.create(file.path(.st, "ACTA_Report_files"), recursive = TRUE); dir.create(.vd)
+  writeLines("tex", file.path(.st, "ACTA_Report.tex"))
+  writeLines("png", file.path(.st, "ACTA_Report_files", "GatingPlot-1.png"))
   .cf <- h$actaRenderCollect(.st, .vd)
   chk("a failed render's evidence arrives without its figures tree",
-      file.exists(file.path(.vd, "ACTA_Report_3.1.tex")) &&
-        !dir.exists(file.path(.vd, "ACTA_Report_3.1_files")) && !length(.cf$lost))
+      file.exists(file.path(.vd, "ACTA_Report.tex")) &&
+        !dir.exists(file.path(.vd, "ACTA_Report_files")) && !length(.cf$lost))
   ## A COPY THAT CANNOT LAND MUST NOT DESTROY THE ONLY OTHER COPY. It used to: the stage was
   ## unlinked outside the loop whatever happened, both callers discarded the return value, and an
   ## OLDER report already in the folder was then picked up as this run's.
   unlink(c(.st, .vd), recursive = TRUE)
   dir.create(.st); dir.create(.vd)
-  writeLines("new", file.path(.st, "ACTA_Report_3.1.pdf"))
-  writeLines("old", file.path(.vd, "ACTA_Report_3.1.pdf"))
+  writeLines("new", file.path(.st, "ACTA_Report.pdf"))
+  writeLines("old", file.path(.vd, "ACTA_Report.pdf"))
   ## The DESTINATION FILE is what has to be unwritable. A read-only DIRECTORY does not stop
   ## file.copy() overwriting a file that is already in it -- measured -- so a gate built that way
   ## asserts nothing. This shape leaves the OLD content in place, which is the scenario itself:
   ## a stale report standing in for the one that could not land.
-  Sys.chmod(file.path(.vd, "ACTA_Report_3.1.pdf"), "0444")
+  Sys.chmod(file.path(.vd, "ACTA_Report.pdf"), "0444")
   .lc <- suppressWarnings(h$actaRenderCollect(.st, .vd))
-  Sys.chmod(file.path(.vd, "ACTA_Report_3.1.pdf"), "0644")
+  Sys.chmod(file.path(.vd, "ACTA_Report.pdf"), "0644")
   chk("a report that cannot be moved is reported lost, not silently dropped",
-      identical(.lc$lost, "ACTA_Report_3.1.pdf") && identical(.lc$stage, .st))
-  chk("...and the stage still holds it", file.exists(file.path(.st, "ACTA_Report_3.1.pdf")) &&
-        identical(readLines(file.path(.st, "ACTA_Report_3.1.pdf")), "new"))
+      identical(.lc$lost, "ACTA_Report.pdf") && identical(.lc$stage, .st))
+  chk("...and the stage still holds it", file.exists(file.path(.st, "ACTA_Report.pdf")) &&
+        identical(readLines(file.path(.st, "ACTA_Report.pdf")), "new"))
   ## The PREDICATE is executed above (actaStageKeep); what is left to pin is the WIRING -- that
   ## the stop is reached through it, on the success path, and that it names where the report is.
   chk("...and run_acta() turns that into a failure rather than a green run",
@@ -715,7 +715,7 @@ local({
   .st <- new.env(parent = emptyenv()); .st$keep <- FALSE
   chk("nothing lost leaves the flag down", isFALSE(h$actaStageKeep(.st, character(0))) &&
         isFALSE(.st$keep))
-  chk("ONE lost report raises it", isTRUE(h$actaStageKeep(.st, "ACTA_Report_3.1.pdf")) &&
+  chk("ONE lost report raises it", isTRUE(h$actaStageKeep(.st, "ACTA_Report.pdf")) &&
         isTRUE(.st$keep))
   .d1 <- file.path(tempdir(), "acta_sweep_keep"); .d2 <- file.path(tempdir(), "acta_sweep_go")
   unlink(c(.d1, .d2), recursive = TRUE); dir.create(.d1); dir.create(.d2)
@@ -790,7 +790,7 @@ local({
     ## The space goes in a component ABOVE the run folder, not in the account name: that is the
     ## real shape ("Flow Cytometry", "TIER 1"), and an invented spaced ACCOUNT reads to the
     ## sanitisation gate as a home directory -- which it duly flagged.
-    .fig <- "C:/Users/someone/Flow Cytometry/ACTA_Report_3.1_files/figure-latex"
+    .fig <- "C:/Users/someone/Flow Cytometry/ACTA_Report_files/figure-latex"
     ## A spaced RUN FOLDER, as distinct from a spaced figure directory: the native-default
     ## assertion below is about the folder actaRenderStage() is given, not about pandoc's argument.
     .sp2 <- "C:/Users/someone/Flow Cytometry/Run_1"
@@ -805,7 +805,7 @@ local({
     ## solving a different problem from the one it is aimed at.
     ## IDENTICAL BUT FOR THE ONE SPACE, or this is not a control: it has to isolate the space as
     ## the cause rather than merely being a different path that happens to survive.
-    .clean <- "C:/Users/someone/FlowCytometry/ACTA_Report_3.1_files/figure-latex"
+    .clean <- "C:/Users/someone/FlowCytometry/ACTA_Report_files/figure-latex"
     chk(paste0("...and an identical path WITHOUT a space is left alone  [",
                .asWin(.clean, backslash = FALSE), "]"),
         !grepl("\\\\", .asWin(.clean, backslash = FALSE)))
@@ -920,11 +920,11 @@ local({
   ## release's own "16 of 16" was contingent on nobody having had a render fail since the last
   ## cleanup. Measured: one failed render left the suite at 15 of 16.
   .cd <- file.path(tempdir(), "acta_codedir_gate"); unlink(.cd, recursive = TRUE); dir.create(.cd)
-  for (.e in c("aux", "out", "toc", "log", "tex")) writeLines("x", file.path(.cd, paste0("ACTA_Report_3.1.", .e)))
+  for (.e in c("aux", "out", "toc", "log", "tex")) writeLines("x", file.path(.cd, paste0("ACTA_Report.", .e)))
   chk("the scratch extensions are found where a failed render leaves them",
       setequal(basename(h$actaReportIntermediates(.cd, ext = c("aux", "out", "toc"),
                                                   include_files_dir = FALSE)),
-               paste0("ACTA_Report_3.1.", c("aux", "out", "toc"))))
+               paste0("ACTA_Report.", c("aux", "out", "toc"))))
   chk("...and the .log and .tex are NOT among them, because they are the evidence",
       !any(grepl("[.](log|tex)$", h$actaReportIntermediates(.cd, ext = c("aux", "out", "toc"),
                                                             include_files_dir = FALSE))))

@@ -122,7 +122,7 @@ cat("=== the REPORT's asis sinks route untrusted values through the escaper ===\
 ## So this asserts the WIRING, not the escaper: every asis line that prints one of these values must
 ## pass it through .actaTexEsc (or knitr's own escaper). A grep is the right shape here -- rendering
 ## the whole report needs FCS, LaTeX and minutes, which is what the OQ cases are for.
-rmd <- Sys.glob(file.path(vd, "ACTA_Report_*.Rmd"))
+rmd <- Sys.glob(file.path(vd, "ACTA_Report*.Rmd"))
 chk("the report file is there to inspect", length(rmd) == 1L)
 if (length(rmd) == 1L) {
   ln <- readLines(rmd, warn = FALSE)

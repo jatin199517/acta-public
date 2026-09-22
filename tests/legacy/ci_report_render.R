@@ -122,13 +122,13 @@ if (identical(.Platform$OS.type, "windows")) {
 ## mechanism lives in test_diagnostics.R ("THE PREMISE"), which runs on every platform because it
 ## drives upstream's AST rather than the Windows API.
 cat("\n=== is the fault live here? (rmarkdown::pandoc_path_arg, no stub) ===\n")
-.fig <- file.path(run, "ACTA_Report_3.1_files", "figure-latex")
+.fig <- file.path(run, "ACTA_Report_files", "figure-latex")
 .raw <- rmarkdown::pandoc_path_arg(.fig, backslash = FALSE)
 cat("  run folder's figure dir ->", .raw, "\n")
 if (identical(.Platform$OS.type, "windows")) {
   .live <- actaPandocTouches(.fig)
   .st   <- h$actaRenderStage(run, tag = "probe")
-  .sfigIn <- file.path(.st, "ACTA_Report_3.1_files", "figure-latex")
+  .sfigIn <- file.path(.st, "ACTA_Report_files", "figure-latex")
   .sfig   <- rmarkdown::pandoc_path_arg(.sfigIn, backslash = FALSE)
   cat("  the stage's figure dir  ->", .sfig, "\n")
   if (!identical(.st, run)) unlink(.st, recursive = TRUE)

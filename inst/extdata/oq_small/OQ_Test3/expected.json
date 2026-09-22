@@ -11,7 +11,7 @@
   "n_groups": 3,
   "events_per_well": 20000,
   "stats_rows": 21,
-  "stats_cols": 42,
+  "stats_cols": 43,
   "export_rows": 3,
   "dashboard_rows": 3,
   "n_plots": 19,
@@ -32,7 +32,7 @@
   "gating_note": "The Cells gate is the built-in `boundary` method, min=c(1.5e6,-Inf) max=c(Inf,Inf). The source workbook had min=c(1.5e6,Inf), max=c(-Inf,Inf), which makes both intervals EMPTY and keeps zero events; corrected here because a fixture cannot ship a gate that empties the tree. stats_export is TRUE on the three hierarchy rows so the export carries Pop_stats -- 3 populations x 21 wells = 63 rows -- which the stats_sheets check requires.",
   "platemap_note": "n_plots 18 -> 19: the Plots/ export gained one plate map per PlateID in 2_97 (<BenchlingID>_PlateMap_plate_<PlateID>.png). One plate in this case.",
   "plots_note": "n_plots 18 = 3 titrations x (histogram + pseudocolor + 3 layout pages) plus the 3 run-level figures (SIPlot, SatPlot, ConcatPlot).",
-  "schema_note": "stats_cols 42 matches OQ_Test1/2 as of 2_91: the Titration column added by the combinatorial work is counted there. Went 41 -> 42 in 2_95 when Layout_Plate gained Combinatorial_group (n), which rides into `stats` through pData.",
+  "schema_note": "stats_cols 42 matches OQ_Test1/2 as of 2_91: the Titration column added by the combinatorial work is counted there. Went 41 -> 42 in 2_95 when Layout_Plate gained Combinatorial_group (n), which rides into `stats` through pData. Then 42 -> 43 in 3.4.0 when Layout_Plate gained Costain_Panel_Iteration: same mechanism again -- an analyst-filled layout column rides into `stats` through pData, so the per-well count moves even though the column's job is the operator-facing block of the titration export. ACTA supplies it as NA when a pre-3.4.0 workbook does not have the column, so the schema is 43 either way rather than depending on the age of the workbook.",
   "qc_verdicts": {
     "CCR7": {
       "cells_fsc": "PASS",

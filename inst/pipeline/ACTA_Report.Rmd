@@ -2,8 +2,15 @@
 ## The version comes from THIS FILE'S OWN NAME. It cannot come from ScriptVersion: inline R in the
 ## YAML header is evaluated before the setup chunk runs, so the script has not been sourced yet.
 ## ScriptVersion is underscored ("2_88") anyway, whereas the .Rmd name already carries the dotted
-## form the title wants. The %||% fallback keeps the title renderable if knitted without a file.
-title: "ACTA (Anybody Can Titrate Antibody) Report v`r sub('^ACTA_Report_', '', tools::file_path_sans_ext(basename(knitr::current_input() %||% 'ACTA_Report_?.Rmd')))`"
+## THE PACKAGE VERSION, resolved the same way every other stamp is -- see actaScriptVersion().
+## This used to parse the version out of THIS FILE'S OWN NAME, which stopped working the moment
+## 3.4.0 renamed it to ACTA_Report.Rmd: sub('^ACTA_Report_', ...) then matched nothing and every
+## PDF came out titled "Report vACTA_Report". Resolving from code_dir instead means the title
+## cannot drift from the filename again, because it no longer reads the filename.
+## Three layers because the YAML is evaluated before the setup chunk: the helper if ACTA is
+## loaded (sourced or attached), the installed package otherwise, and an empty string rather
+## than an error if the report is knitted standalone with neither.
+title: "ACTA (Anybody Can Titrate Antibody) Report v`r local({ .d <- tryCatch(dirname(knitr::current_input()), error = function(e) '.'); .v <- tryCatch(if (exists('actaScriptVersion')) actaScriptVersion(.d) else NA_character_, error = function(e) NA_character_); if (is.na(.v)) .v <- tryCatch(as.character(utils::packageVersion('ACTA')), error = function(e) NA_character_); if (is.na(.v)) '' else .v })`"
 output:
   pdf_document:
     latex_engine: xelatex
@@ -443,7 +450,7 @@ if (!exists("actaTransEff") || !length(grp)) {
 \clearpage
 ```
 
-## 4.4 Gating (Data Filtering) Details
+## 4.4 Gating Details
 
 ```{r GatingPlot, fig.width=12, fig.height=8, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center"}
 plot(gs)

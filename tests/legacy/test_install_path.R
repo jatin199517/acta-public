@@ -72,7 +72,9 @@ chk(sprintf("the Bioconductor-only Imports are still declared (%s)", paste(BIOC_
 ## ---- 2. what has to be INSIDE the install, because there is no clone to fall back on -----------
 pl <- file.path(vd, "inst", "pipeline")
 chk("inst/pipeline/ exists", dir.exists(pl))
-for (pat in c("^ACTA_Script_",  "^ACTA_Report_", "^ACTA_Dashboard_", "^ACTA_App[.]R$"))
+## NO TRAILING UNDERSCORE since 3.4.0: the pipeline files dropped the version from their
+## names, so ACTA_Script_3_1.R is now ACTA_Script.R. The prefix is still the claim.
+for (pat in c("^ACTA_Script",  "^ACTA_Report", "^ACTA_Dashboard", "^ACTA_App[.]R$"))
   chk(sprintf("inst/pipeline/ ships %s", pat),
       length(dir(pl, pattern = pat)) == 1L)
 
