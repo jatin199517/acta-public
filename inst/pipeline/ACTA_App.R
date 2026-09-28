@@ -726,7 +726,10 @@ server <- function(input, output, session) {
                                      antibody = unique(grp$dirname))
       c(r, cmp, list(if (gm)
         list(id = "gate_manual", label = "No gate_manual in the gating template", status = "fail",
-             detail = "gate_manual is NOT ACTIVE as of v2_86 -- use an automated method", where = layout)
+             detail = paste0("gate_manual is NOT IMPLEMENTED in this version of ACTA. Drawing gates ",
+                             "by hand needs an interactive gating UI that ACTA does not have. ",
+                             "Planned for a future release; use an automated method."),
+             where = layout)
         else list(id = "gate_manual", label = "No gate_manual in the gating template",
                   status = "pass", detail = NA_character_, where = layout)))
     }, error = function(e)

@@ -248,5 +248,29 @@ chk("an export written through a RELATIVE path is well formed",
 if (!inherits(res, "try-error")) for (x in res) cat("         ", x, "\n")
 unlink(relp, recursive = TRUE)
 
+## ---------------------------------------------------------------------------------------------
+## NO INLINE STRING MAY CARRY xml:space="preserve".
+##
+## The attribute is perfectly valid OOXML and readxl handles it correctly. openxlsx does NOT: it
+## returns the attribute text as part of the VALUE, so a cell reading `#CD3` comes back as
+## `xml:space="preserve">#CD3`. ACTA itself reads instructions with readxl and was never affected,
+## which is exactly why this sat in the shipped template unnoticed -- users open these workbooks
+## with whatever they have.
+##
+## TWELVE CELLS in one row of the template carried it, which is the "a bare openxlsx round-trip
+## corrupts 12 cells in sheets you never touched" artefact this project already had on record; the
+## form is the fingerprint. A hand-written row added in 3.4.0 reproduced it by copying the shape.
+## Nothing shipped needs the attribute -- no value in any of these workbooks has leading or
+## trailing whitespace -- so the rule is simply that it must not appear.
+cat("\n=== no inline string carries xml:space=\"preserve\" ===\n")
+for (f in books) {
+  hits <- 0L
+  for (part in grep("^xl/worksheets/", utils::unzip(f, list = TRUE)$Name, value = TRUE)) {
+    con <- unz(f, part); txt <- paste(readLines(con, warn = FALSE), collapse = ""); close(con)
+    hits <- hits + lengths(regmatches(txt, gregexpr('<t xml:space="preserve">', txt, fixed = TRUE)))
+  }
+  chk(sprintf("%s carries none (%d)", basename(f), hits), hits == 0L)
+}
+
 cat(if (ok) "\nWORKBOOK PACKAGE: all checks passed\n" else "\nWORKBOOK PACKAGE: FAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

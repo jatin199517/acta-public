@@ -227,11 +227,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.4.0")
+remotes::install_github("jatin199517/acta-public@v3.5.0")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.4.0 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.5.0 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
@@ -378,7 +378,7 @@ Each dataset covers a unique test case, across two instruments from different ve
 | Events per well | 60,000 | 12,000 | 20,000 |
 | Compensation | none | **matrix from CSV** | none |
 | Combinatorial titration | no | no | **yes** |
-| What it covers | the whole path end to end, single reagent | a second vendor's channel naming (`FS00-A`, not `FSC-A`) and the compensation path | **combinatorial titration** — one set of FCS files carrying two independently titrated reagents |
+| What it covers | the whole path end to end, single reagent | a second vendor's channel naming (`FS00-A`, not `FSC-A`) and the compensation path | **combinatorial titration** — two reagents across three titration series: CD14 and CCR7 co-stained in one set of FCS files, plus a standalone CCR7 series to compare against |
 
 ## Running
 

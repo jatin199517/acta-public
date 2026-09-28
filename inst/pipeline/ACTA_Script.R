@@ -410,6 +410,17 @@ actaTransEff <- c(list(maxValue = actaMaxValue), modifyList(actaTransEff, actaTr
 manualGateRedraw <- FALSE
 gate_dir <- file.path(getwd(), "Manual_Gates")
 markerIsManual <- tolower(trimws(reagentMethod)) == "gate_manual"
+## STOPS HERE, DELIBERATELY, AND SAYS WHY. Everything below is intact and is kept as the starting
+## point for a revival, but it cannot run: drawManualGates() is NOT EXPORTED, and since 3.0 an
+## installed run loads ACTA with library() rather than sourcing a sibling ACTA_Function*.R -- so
+## the call at the gating step died with "object 'drawManualGates' not found", which tells the
+## operator nothing. gate_manual also requires interactive(), so it can never run from the app,
+## from CI, or under Rscript.
+## The app refuses the same configuration in pre-flight with the same wording, and the workbook's
+## help_notes says NOT IMPLEMENTED. Those three have to agree; for six weeks they did not, and the
+## script was the one claiming it worked.
+if (markerIsManual)
+  stop("gate_manual is NOT IMPLEMENTED in this version of ACTA. Drawing gates by hand needs an interactive gating UI that ACTA does not have -- flowGate's drawer launches its own blocking Shiny app, which cannot run inside this one. Planned for a future release; use an automated method.", call. = FALSE)
 manualGroupBy <- ""
 if (markerIsManual) {
   manualGroupBy <- trimws(as.character(gating_template$groupBy[markerGateRowIdx]))

@@ -55,6 +55,7 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_install_path.R",   # what an install-only user can reach, incl. biocViews
              "test_readme_calls.R",   # the README's own R examples resolve against this layout
              "test_man_pages.R",      # every export has a man/ topic that still matches its formals
+             "test_release_pointer.R", # the published-version pointer still matches the tags
              "verify_oq_sanitised.R") # the OQ cases carry nothing that cannot be published
 
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))

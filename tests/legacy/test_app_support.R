@@ -1233,5 +1233,42 @@ local({
   unlink(file.path(tempdir(), "asv"), recursive = TRUE)
 })
 
+## ---------------------------------------------------------------------------------------------
+## MANUAL GATING: THE THREE PLACES THAT DESCRIBE IT MUST AGREE.
+##
+## They did not, for six weeks. The workbook's help_notes and the app's pre-flight both said
+## gate_manual was off; the SCRIPT carried a complete, unguarded code path and so implicitly said
+## it worked. It did not -- drawManualGates() is not exported, so since 3.0 an installed run died
+## at the gating step with "object 'drawManualGates' not found". Whichever way that contradiction
+## is eventually resolved -- implemented, or removed -- all three have to move together, and this
+## is what makes that true rather than remembered.
+cat("\n=== manual gating is described consistently in all three places ===\n")
+local({
+  .vd <- ACTA_VERSION_DIR          # `vd` is re-pointed at a temp stage earlier in this file
+  scr <- paste(readLines(file.path(.vd, "ACTA_Script.R"), warn = FALSE), collapse = "\n")
+  app <- paste(readLines(file.path(.vd, "ACTA_App.R"),   warn = FALSE), collapse = "\n")
+  chk("the script refuses gate_manual before it reaches the gating step",
+      grepl("if (markerIsManual)", scr, fixed = TRUE) &&
+        grepl("NOT IMPLEMENTED in this version of ACTA", scr, fixed = TRUE))
+  chk("...and the app's pre-flight says the same thing",
+      grepl("NOT IMPLEMENTED in this version of ACTA", app, fixed = TRUE))
+  chk("...and neither still claims it is merely 'NOT ACTIVE as of v2_86'",
+      !grepl("NOT ACTIVE as of v2_86", paste(scr, app), fixed = TRUE))
+  ## every shipped workbook that mentions gate_manual at all
+  wbs <- c(Sys.glob(file.path(.vd, "Template", "*.xlsx")),
+           Sys.glob(file.path(actaTestCaseRoot(), "OQ_Test*", "*Instructions*.xlsx")))
+  stale <- Filter(function(f) {
+    txt <- tryCatch(paste(vapply(grep("sharedStrings|worksheets",
+                    utils::unzip(f, list = TRUE)$Name, value = TRUE),
+                    function(p) { con <- unz(f, p); on.exit(close(con))
+                                  paste(readLines(con, warn = FALSE), collapse = "") },
+                    character(1)), collapse = ""), error = function(e) "")
+    grepl("NOT ACTIVE as of v2_86", txt, fixed = TRUE)
+  }, wbs)
+  chk(sprintf("...and no shipped workbook carries the retired wording (%d checked)", length(wbs)),
+      length(stale) == 0L)
+  if (length(stale)) for (f in stale) cat("          stale:", basename(f), "\n")
+})
+
 cat(if (ok) "\nALL APP-SUPPORT TESTS PASS\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0 else 1)
