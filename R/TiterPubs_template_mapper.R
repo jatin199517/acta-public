@@ -1017,7 +1017,23 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
       r <- stats::setNames(rep("", length(cols)), cols)
       r[["Antigen"]]         <- tb$Antigen[i]      %||% ""
       r[["Fluorochrome"]]    <- tb$Fluorochrome[i] %||% ""
-      r[["Marker_Alias"]]    <- tb$Antigen[i]      %||% ""
+      ## THE ALIAS THAT MADE IT MATCH, not the antigen.
+      ##
+      ## This wrote tb$Antigen into Marker_Alias, which silently broke the one thing the file
+      ## exists for: a reader who re-runs the bundle resolves the same reagents. A reagent whose
+      ## antigen differs from its marker name in the FCS matches on Marker_Alias, so overwriting
+      ## that column loses the match. MEASURED on OQ_Test1: the viability dye's antigen is
+      ## "Live Dead eFluor 780 (LD) (Viability)" while its FCS marker is "Viability", so the
+      ## original run reported 4 of 4 reagents matched and the same run re-resolved against the
+      ## inventory this function had written reported 3 of 4 -- correct numbers either way, but a
+      ## reproduction artefact that cannot reproduce.
+      ##
+      ## Matched_to IS that alias: actaPanelIterationTable() puts the marker each row matched
+      ## there. NA when the row did not match, and then the antigen is the honest fallback --
+      ## writing a blank would lose the only name the reagent has.
+      .al <- if ("Matched_to" %in% names(tb)) tb$Matched_to[i] else NA_character_
+      r[["Marker_Alias"]]    <- if (!is.na(.al) && nzchar(trimws(as.character(.al))))
+                                  as.character(.al) else (tb$Antigen[i] %||% "")
       r[["Vendor"]]          <- tb$Vendor[i]       %||% ""
       r[["Catalog"]]         <- tb$Catalog[i]      %||% ""
       r[["Clone"]]           <- tb$Clone[i]        %||% ""
@@ -1607,6 +1623,103 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
                        TRUE))) y <- sub(el, "", y, fixed = TRUE)
       y <- gsub("<hyperlinks>\\s*</hyperlinks>|<hyperlinks\\s*/>", "", y)
       writeLines(y, sh, useBytes = TRUE)
+    }
+
+    ## UNREFERENCED SHARED STRINGS, EMPTIED. A value no cell points at is still in the file.
+    ##
+    ## Writing a cell as an INLINE string -- which is what every XML-level edit in this project
+    ## does, deliberately, so the shared-string table never has to be renumbered -- leaves the
+    ## PREVIOUS value sitting in xl/sharedStrings.xml with nothing referencing it. It is invisible
+    ## in Excel and invisible to anything that reads cells, and the scrub cannot reach it either:
+    ## .tpApplyRepl() keys on the value it was TOLD to replace, and an orphan holds whatever was
+    ## there before that. So a workbook can be correct in every visible cell and still publish the
+    ## string it used to hold.
+    ##
+    ## MEASURED, on a bundle that every other control passed: a run whose costain panel iteration
+    ## was corrected from one name to another published the ORIGINAL panel name from an orphaned
+    ## <si>, while the live cell, the export, the report and ACTA's own bundle scan were all
+    ## clean. Only a sweep that decompressed the workbook and read its parts found it -- which is
+    ## the same lesson as the FCS filename leak: a value can be inside a published artefact
+    ## without being inside anything a reader of that artefact would look at.
+    ##
+    ## BLANKED, NOT DELETED, and this is the part not to get wrong. Removing an <si> renumbers
+    ## every index after it, and every t="s" cell in every sheet addresses them BY POSITION -- so
+    ## a delete means rewriting all of those too, with a corrupt workbook if it goes wrong. An
+    ## orphan carries no live data, so emptying it in place is lossless and touches no cell at all.
+    ##
+    ## It does NOT make <sst count=>/uniqueCount accurate, and an earlier version of this comment
+    ## claimed it did. Blanking leaves both attributes at their original values while the number of
+    ## DISTINCT texts drops, so uniqueCount over-reports afterwards. That is tolerated rather than
+    ## corrected: Excel does not validate either attribute -- OQ_Test3 already ships count=522
+    ## against 108 entries, from long before any of this -- and recomputing uniqueCount means
+    ## deciding what "unique" means across rich-text runs, which is a bigger change than the
+    ## problem deserves. Said out loud because a comment asserting an invariant the code does not
+    ## hold is worse than no comment.
+    ssf <- file.path(tmp, "xl/sharedStrings.xml")
+    if (file.exists(ssf)) {
+      ss <- paste(readLines(ssf, warn = FALSE), collapse = "\n"); wasSS <- ss
+      used <- integer(0)
+      ## EVERY part under xl/worksheets/, not a `sheet[0-9]+` pattern, and the asymmetry is the
+      ## reason. Missing a part that references the table marks LIVE strings dead and blanks them
+      ## -- silent data loss. Scanning a part that references nothing costs an orphan left behind.
+      ## So this errs towards scanning: a case-different name (`Sheet1.xml`), a chartsheet, or
+      ## anything else a writer puts there is read rather than assumed irrelevant. `_rels` is
+      ## excluded because it holds no cells, and that exclusion is by directory, not by guesswork.
+      for (sheet in grep("^xl/worksheets/[^/]+[.]xml$", keep, value = TRUE, ignore.case = TRUE)) {
+        sf <- file.path(tmp, sheet); if (!file.exists(sf)) next
+        sx <- paste(readLines(sf, warn = FALSE), collapse = "\n")
+        ## Only t="s" cells index the table. An inline string carries its own text and a formula
+        ## cached result is t="str", neither of which points here.
+        hits <- regmatches(sx, gregexpr('<c[^>]*\\st="s"[^>]*>\\s*<v>[0-9]+</v>', sx))[[1]]
+        if (length(hits))
+          used <- c(used, as.integer(sub('.*<v>([0-9]+)</v>.*', "\\1", hits)))
+      }
+      used <- unique(used)
+      ## REPLACED BY POSITION, NOT BY TEXT. An earlier version of this did
+      ## sub(si[[j]], "<si><t></t></si>", ss, fixed = TRUE), which rewrites the FIRST occurrence of
+      ## that text -- so if two <si> elements were byte-identical and the LIVE one came first, a
+      ## dead duplicate at index j silently blanked the live string instead, and every cell
+      ## pointing at it would read empty. A shared-string table is meant to hold unique values, so
+      ## this needs a workbook some other tool wrote badly; "the input is supposed to be well formed"
+      ## is not a control, and the cost of being right here is one assignment.
+      ## regmatches<- substitutes the Nth match with the Nth replacement, which is exactly the
+      ## index-addressed semantics the sheet cells use.
+      ## BOTH <si> FORMS, AND THE SELF-CLOSING ONE FIRST.
+      ##
+      ## "<si>.*?</si>" cannot see a schema-valid <si/>, and because this blanking is POSITIONAL
+      ## every entry after one shifts by a place: live strings get marked dead and emptied, the
+      ## function still returns TRUE, the workbook still opens, and actaOpcFindings() still reports
+      ## clean. Measured on a table of 4 entries with <si/> at index 0 -- the enumeration found 3
+      ## and blanked the first LIVE string instead of the orphan. On a real instructions workbook
+      ## that cost five cells including a gating_template row, which is the reproducibility the
+      ## sibling change in this release exists to protect.
+      ##
+      ## ORDER MATTERS: "<si\\b[^>]*>" also matches "<si/>", so a self-closing entry put second
+      ## would be swallowed as the opening tag of the next pair and the desync would survive the
+      ## fix. The self-closing alternative has to be tried first.
+      ##
+      ## No producer in this pipeline emits <si/> -- Excel, openxlsx, openpyxl and LibreOffice all
+      ## write <si><t/></si>, which is handled correctly either way. It is fixed anyway, for the
+      ## reason the `used` side of this same block already gives: the failure is silent data loss
+      ## in a published artefact, and the cost of being right is one alternation.
+      m <- gregexpr("<si\\b[^>]*/>|<si\\b[^>]*>.*?</si>", ss)
+      si <- regmatches(ss, m)[[1]]
+      if (length(si)) {
+        ## 0-based in the sheet XML, 1-based here.
+        dead <- setdiff(seq_along(si), used + 1L)
+        ## Leave anything already textless alone, so `blanked` counts real changes only.
+        dead <- dead[vapply(si[dead], function(s)
+                     nzchar(trimws(gsub("<[^>]*>", "", s))), TRUE)]
+        if (length(dead)) {
+          si[dead] <- "<si><t></t></si>"
+          regmatches(ss, m) <- list(si)
+          if (!identical(ss, wasSS)) {
+            writeLines(ss, ssf, useBytes = TRUE)
+            message(sprintf("  %d unreferenced shared string(s) emptied in %s",
+                            length(dead), basename(path)))
+          }
+        }
+      }
     }
 
     ## Every .rels file, resolved against its own owner: a relationship left pointing at a part

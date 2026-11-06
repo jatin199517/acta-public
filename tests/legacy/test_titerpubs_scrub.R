@@ -316,5 +316,233 @@ chk("the workbook still opens with all four sheets after the chain",
     identical(tryCatch(readxl::excel_sheets(p), error = function(e) character(0)),
               c("Info", "gating_template", "Layout_Plate", "TiterPubs_template")))
 
+## ---------------------------------------------------------------------------------------------
+## AN ORPHANED SHARED STRING IS A PUBLISHED VALUE. .tpCleanWorkbook() must empty it.
+##
+## Writing a cell as an inline string leaves the PREVIOUS value in xl/sharedStrings.xml with
+## nothing pointing at it: invisible in Excel, invisible to any reader that goes through cells,
+## and unreachable by the scrub, which keys on the value it was told to replace rather than on
+## whatever was there before. Measured on a real bundle that every other control passed -- the
+## live cell, the export, the report and actaBundleScan() were all clean while an orphan
+## published the panel name the cell used to hold.
+cat("\n=== orphaned shared strings ===\n")
+local({
+  ## Plant an orphan the way an inline-string edit does: add an <si> no cell indexes.
+  pl <- file.path(tempdir(), paste0("orph_", basename(tempfile(""))), "wb.xlsx")
+  dir.create(dirname(pl), recursive = TRUE); file.copy(SRC, pl)
+  d <- unpack(pl); f <- file.path(d, "xl", "sharedStrings.xml")
+  x <- paste(readLines(f, warn = FALSE), collapse = "\n")
+  SECRET <- "ORPHANED-PANEL-NAME-SHOULD-NOT-PUBLISH"
+  ## Appended LAST, so its index is one past anything a sheet references.
+  x <- sub("</sst>", sprintf("<si><t>%s</t></si></sst>", SECRET), x, fixed = TRUE)
+  writeLines(x, f, useBytes = TRUE); repack(d, pl)
+
+  chk("the planted orphan is really in the file before cleaning",
+      any(grepl(SECRET, rawParts(pl), fixed = TRUE, useBytes = TRUE)))
+  ## ...and really is unreferenced, or this fixture proves nothing: an orphan a cell points at
+  ## is live data and must NOT be emptied.
+  live <- cellValues(pl)
+  chk("...and no cell reads it", !any(grepl(SECRET, live, fixed = TRUE)))
+
+  chk("cleaning succeeds", isTRUE(.tp(".tpCleanWorkbook")(pl)))
+  chk("THE ORPHAN IS GONE from every part",
+      !any(grepl(SECRET, rawParts(pl), fixed = TRUE, useBytes = TRUE)))
+  ## The fix must not have eaten live strings along with the dead one. Deleting an <si> would
+  ## renumber every index after it and silently shift every t="s" cell in the workbook.
+  after <- cellValues(pl)
+  chk("...and every live cell value in the workbook survives unchanged",
+      identical(sort(live), sort(after)),
+      sprintf("%d before, %d after", length(live), length(after)))
+  chk("...the workbook still opens with all four sheets",
+      identical(tryCatch(readxl::excel_sheets(pl), error = function(e) character(0)),
+                c("Info", "gating_template", "Layout_Plate", "TiterPubs_template")))
+  ## Indices are kept, not compacted -- that is what makes the blanking safe.
+  nsi <- function(p) length(regmatches(paste(rawParts(p), collapse = ""),
+                                       gregexpr("<si>", paste(rawParts(p), collapse = "")))[[1]])
+  chk("...and the shared-string table still has every entry (blanked, not deleted)", nsi(pl) > 0L)
+})
+
+## A SELF-CLOSING <si/> MUST NOT SHIFT THE INDEX OF EVERYTHING AFTER IT.
+##
+## The blanking is positional, so an entry the enumeration cannot see desyncs every later index
+## and live strings get emptied instead of orphans. "<si>.*?</si>" cannot see a schema-valid
+## <si/>. Measured before the fix: a 4-entry table with <si/> at index 0 enumerated 3 and blanked
+## the first LIVE string rather than the orphan -- while the function returned TRUE, the workbook
+## opened, and the OPC checks reported clean. Nothing in this pipeline writes <si/>, which is
+## exactly why only a gate keeps it fixed.
+cat("\n=== a self-closing <si/> does not desync the table ===\n")
+local({
+  pl <- file.path(tempdir(), paste0("selfc_", basename(tempfile(""))), "wb.xlsx")
+  dir.create(dirname(pl), recursive = TRUE); file.copy(SRC, pl)
+  d <- unpack(pl); f <- file.path(d, "xl", "sharedStrings.xml")
+  x <- paste(readLines(f, warn = FALSE), collapse = "\n")
+  ORPH <- "SELFCLOSE-ORPHAN-MUST-GO"
+  LIVE <- "SELFCLOSE-LIVE-MUST-SURVIVE"
+  ## APPENDED, with a LIVE entry placed AFTER the <si/>. Nothing existing is renumbered.
+  ##
+  ## Placement is the whole fixture. A bare appended <si/> sits after every live entry, shifts
+  ## nothing, and the gate passes against the broken code -- measured; the first version of this
+  ## fixture did exactly that. Prepending triggers the bug but forces every existing t="s"
+  ## reference to be renumbered, and that rewrite was itself wrong twice. Appending a live entry
+  ## after the <si/> gets the trigger without the rewrite: with the defective pattern the <si/>
+  ## is not enumerated, so the live entry is read as the orphan's index and BLANKED, and the real
+  ## orphan is read as the live index and SURVIVES. Both assertions below fail, in opposite
+  ## directions, which is a sharper signal than either alone.
+  n <- length(regmatches(x, gregexpr("<si[ />]", x))[[1]])      # index of the <si/> we add
+  x <- sub("</sst>", sprintf("<si/><si><t>%s</t></si><si><t>%s</t></si></sst>", LIVE, ORPH),
+           x, fixed = TRUE)
+  writeLines(x, f, useBytes = TRUE)
+
+  ## REPOINT ONE EXISTING t="s" CELL at the LIVE entry rather than inserting a new one. Inserting
+  ## meant choosing a row and a column that keep cells ascending, and getting that wrong is its
+  ## own corruption; repointing changes one <v> and cannot disturb the sheet's structure at all.
+  sf <- list.files(file.path(d, "xl", "worksheets"), pattern = "[.]xml$", full.names = TRUE)
+  done <- FALSE
+  for (p1 in sf) {
+    sx <- paste(readLines(p1, warn = FALSE), collapse = "\n")
+    one <- regmatches(sx, regexpr('<c[^>]*\\st="s"[^>]*>\\s*<v>[0-9]+</v>', sx))
+    if (!length(one) || !nzchar(one)) next
+    sx <- sub(one, sub('<v>[0-9]+</v>', sprintf("<v>%d</v>", n + 1L), one), sx, fixed = TRUE)
+    writeLines(sx, p1, useBytes = TRUE); done <- TRUE; break
+  }
+  repack(d, pl)
+
+  ## ASSERTED AT XML LEVEL, NOT THROUGH readxl.
+  ##
+  ## What matters here is which <si> keeps its text, and `used` is built from the sheet XML -- so
+  ## the sheet reference is what makes an entry live, whether or not read_excel() surfaces that
+  ## particular cell. Going through cellValues() made this fixture fail for an unrelated reason
+  ## (the first t="s" cell is A1, which read_excel turns into a column NAME), and chasing that
+  ## was three rounds of fixture plumbing with the product fix already measured correct twice.
+  sstOf <- function(p) {
+    dd <- unpack(p); on.exit(unlink(dd, recursive = TRUE), add = TRUE)
+    paste(readLines(file.path(dd, "xl", "sharedStrings.xml"), warn = FALSE), collapse = "\n")
+  }
+  hasText <- function(s, tag) grepl(sprintf("<si><t>%s</t></si>", tag), s, fixed = TRUE)
+  s0 <- sstOf(pl)
+  chk("fixture: <si/> at n, a LIVE entry at n+1, an orphan at n+2",
+      done && hasText(s0, LIVE) && hasText(s0, ORPH), sprintf("n = %d", n))
+  chk("fixture: a sheet cell really references index n+1", done)
+  chk("cleaning succeeds", isTRUE(.tp(".tpCleanWorkbook")(pl)))
+  s1 <- sstOf(pl)
+  chk("the orphan after the <si/> is still emptied", !hasText(s1, ORPH))
+  ## THE REAL ASSERTION. With the defective pattern the <si/> is not enumerated, so the LIVE entry
+  ## is read as the orphan's index and blanked while the orphan is read as the live one and kept
+  ## -- both of these fail, in opposite directions.
+  chk("THE LIVE ENTRY AFTER THE <si/> SURVIVES", hasText(s1, LIVE))
+})
+
+## A DEAD DUPLICATE OF A LIVE STRING MUST NOT TAKE THE LIVE ONE WITH IT.
+##
+## The table is addressed BY POSITION, so blanking has to be positional too. Locating each <si> by
+## its TEXT -- which the first version of the fix did, with sub(fixed = TRUE) -- rewrites the
+## FIRST match, so a dead duplicate blanks the LIVE copy that precedes it and every cell pointing
+## at it reads empty. Silent data loss in a published artefact, and invisible unless a workbook
+## actually contains a duplicate, which a correct writer never produces.
+local({
+  pl <- file.path(tempdir(), paste0("dup_", basename(tempfile(""))), "wb.xlsx")
+  dir.create(dirname(pl), recursive = TRUE); file.copy(SRC, pl)
+  d <- unpack(pl); f <- file.path(d, "xl", "sharedStrings.xml")
+  x <- paste(readLines(f, warn = FALSE), collapse = "\n")
+  DUP <- "DUPLICATED-SHARED-STRING-MUST-SURVIVE"
+
+  ## BUILT, NOT FOUND. An earlier version looked for an existing referenced <si> and SKIPPED when
+  ## there was none -- which is what happens here, because this workbook's cells are inline
+  ## strings and almost every entry in its table is already an orphan. A gate that stands down on
+  ## the fixture it needs is not a gate, so the live reference is constructed.
+  n <- length(regmatches(x, gregexpr("<si>", x))[[1]])        # next index, 0-based
+  x <- sub("</sst>", sprintf("<si><t>%s</t></si><si><t>%s</t></si></sst>", DUP, DUP), x, fixed = TRUE)
+  writeLines(x, f, useBytes = TRUE)
+
+  ## Point a cell at the FIRST of the pair, so index n is live and n+1 is the dead duplicate.
+  ## Appended as a new cell on the last row, in a column after its last one: cells within a row
+  ## must ascend, and an out-of-order cell is its own corruption (see set_workbook_cells.R).
+  sf <- file.path(d, "xl", "worksheets", "sheet3.xml")
+  if (!file.exists(sf)) sf <- list.files(file.path(d, "xl", "worksheets"),
+                                         pattern = "^sheet[0-9]+[.]xml$", full.names = TRUE)[1]
+  sx <- paste(readLines(sf, warn = FALSE), collapse = "\n")
+  rows <- regmatches(sx, gregexpr("<row[^>]*r=\"[0-9]+\"[^>]*>.*?</row>", sx))[[1]]
+  if (!length(rows)) {
+    cat("  [skip] no addressable row in the fixture sheet\n")
+  } else {
+    last <- rows[[length(rows)]]
+    rn   <- sub('.*\\sr="([0-9]+)".*', "\\1", substr(last, 1, 40))
+    cols <- regmatches(last, gregexpr('<c r="([A-Z]+)', last))[[1]]
+    lastL <- if (length(cols)) sub('<c r="', "", cols[[length(cols)]]) else "A"
+    nxt  <- if (nchar(lastL) == 1L && lastL < "Z") chartr("ABCDEFGHIJKLMNOPQRSTUVWXY",
+                                                          "BCDEFGHIJKLMNOPQRSTUVWXYZ", lastL)
+            else paste0(lastL, "A")
+    newc <- sprintf('<c r="%s%s" t="s"><v>%d</v></c>', nxt, rn, n)
+    sx <- sub(last, sub("</row>", paste0(newc, "</row>"), last, fixed = TRUE), sx, fixed = TRUE)
+    writeLines(sx, sf, useBytes = TRUE)
+    repack(d, pl)
+
+    chk("fixture: index n is referenced by a cell and n+1 is its dead duplicate",
+        any(grepl(DUP, cellValues(pl), fixed = TRUE)), sprintf("index %d", n))
+    chk("cleaning succeeds with a duplicate present", isTRUE(.tp(".tpCleanWorkbook")(pl)))
+    chk("THE LIVE STRING SURVIVES -- the dead duplicate did not take it with it",
+        any(grepl(DUP, cellValues(pl), fixed = TRUE)))
+  }
+})
+
+## ---------------------------------------------------------------------------------------------
+## THE BUNDLE'S INVENTORY MUST RE-RESOLVE TO THE SAME PANEL. Round trip, not inspection.
+##
+## .tpWriteInventory() wrote tb$Antigen into Marker_Alias, which looks right in every structural
+## check and in the file itself. The only thing that catches it is resolving a panel, writing the
+## subset, and resolving the SAME panel again from that subset: a reagent whose antigen differs
+## from its marker name in the FCS matches on Marker_Alias, so the written file reported one
+## reagent fewer than the run it was written from. Measured on OQ_Test1: 4 of 4 became 3 of 4.
+cat("\n=== the written inventory re-resolves (round trip) ===\n")
+local({
+  ## THE SOURCE GOES THROUGH actaPanelInventory() TOO, not hand-built: it renames the sheet's
+  ## headers to its own internal names, so a frame built with the sheet's spelling resolves
+  ## nothing -- and a round-trip gate that skips the read path is not testing the round trip.
+  ## A panel whose reagent's ANTIGEN DIFFERS FROM ITS MARKER is the only shape that bites.
+  src <- data.frame(
+    Antigen            = c("CD3", "Live Dead eFluor 780 (LD) (Viability)"),
+    Fluorochrome       = c("BUV805", "efluor780"),
+    Fluorochrome_Alias = c("", "efluor 780"),
+    Marker_Alias       = c("", "Viability"),
+    Vendor = c("BD", "TS"), Catalog = c("612893", "65-0865-14"),
+    Clone = c("SK7", ""), `Species / Isotype` = c("", ""), Type = c("Base", "Base"),
+    `Panel Iteration` = c("DemoPanel_1", "DemoPanel_1"),
+    check.names = FALSE, stringsAsFactors = FALSE)
+  srcf <- file.path(tempdir(), paste0("src_", basename(tempfile(""))), "Master_Panel_Inventory.xlsx")
+  dir.create(dirname(srcf), recursive = TRUE)
+  wb0 <- openxlsx::createWorkbook(creator = "ACTA")
+  openxlsx::addWorksheet(wb0, "Master")
+  openxlsx::writeData(wb0, "Master", src, keepNA = FALSE)
+  openxlsx::saveWorkbook(wb0, srcf, overwrite = TRUE)
+
+  mk <- c("CD3", "Viability"); ch <- character(0)
+  inv0 <- .tp("actaPanelInventory")(srcf)
+  r1 <- .tp("actaPanelIterationTable")(inv0, "DemoPanel_1", mk, ch)
+  chk("the source inventory resolves both reagents",
+      !is.null(r1$table) && all(tolower(r1$table$Verdict) == "matched"),
+      paste(r1$table$Verdict, collapse = ","))
+
+  ## Write it the way a bundle does, then read it back as a recipient would.
+  out <- file.path(tempdir(), paste0("inv_", basename(tempfile(""))), "Master_Panel_Inventory.xlsx")
+  dir.create(dirname(out), recursive = TRUE)
+  w <- .tp(".tpWriteInventory")(list(DemoPanel_1 = list(table = r1$table)), out)
+  chk("the subset workbook is written", !is.null(w) && file.exists(out))
+
+  if (file.exists(out)) {
+    inv1 <- .tp("actaPanelInventory")(out)
+    r2 <- .tp("actaPanelIterationTable")(inv1, "DemoPanel_1", mk, ch)
+    chk("IT RE-RESOLVES THE SAME NUMBER OF REAGENTS",
+        !is.null(r2$table) && nrow(r2$table) == nrow(r1$table),
+        sprintf("%d then %d", nrow(r1$table), if (is.null(r2$table)) 0L else nrow(r2$table)))
+    chk("...with the same verdict for every reagent -- this is the whole gate",
+        !is.null(r2$table) && identical(sort(tolower(r1$table$Verdict)),
+                                        sort(tolower(r2$table$Verdict))),
+        paste(r2$table$Verdict, collapse = ","))
+    chk("...and the reagent whose antigen is not its marker still matches",
+        !is.null(r2$table) &&
+          identical(tolower(r2$table$Verdict[grepl("Viability", r2$table$Antigen)]), "matched"))
+  }
+})
+
 cat(if (ok) "\nTITERPUBS SCRUB TESTS PASSED\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)
