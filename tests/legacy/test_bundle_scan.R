@@ -55,7 +55,19 @@ clean <- mkzip(list("notes.txt" = "CD4 BUV496 clone SK3, lot 5315516"))
 ## DRIVES THE REAL FUNCTION, not a copy of its arithmetic: actaBundleScan() uses the path it is
 ## given as the root when that path is a directory, and a backslash is a legal filename
 ## character on POSIX -- so the Windows shape is reproducible wherever this suite runs.
-local({
+## NOT ON WINDOWS, and the reason is the point of the fixture. It needs a directory literally
+## named `C:\\Users\\...` to reproduce the Windows temp root on a POSIX machine -- and on Windows
+## itself that name CANNOT EXIST: ":" is reserved and "\\" is the separator, so dir.create()
+## fails and the test errors out. Measured on the CI runner: this fixture is what turned the
+## windows job red on v3.6.1 after the real defect was already fixed.
+##
+## Nothing is lost by skipping it there. On Windows the REAL extraction root is that shape
+## already, so "a clean bundle scans with no findings" below exercises the same code path
+## natively -- which is exactly how the original defect was caught.
+if (.Platform$OS.type == "windows") {
+  cat("  [skip] the synthetic Windows-root fixture needs a path Windows cannot name;\n",
+      "        the real root has that shape here, so the clean-bundle check covers it.\n", sep = "")
+} else local({
   ## The first name reproduces the Windows temp root EXACTLY, `C:\\Users\\` and all -- a colon
   ## and a backslash are both legal in a POSIX filename, so the real failing input is
   ## constructible here. An earlier version of this fixture used backslashes WITHOUT the

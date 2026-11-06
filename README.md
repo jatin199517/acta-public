@@ -127,10 +127,7 @@ bundle can be uploaded directly to the
 [TiterPubs repository](https://metrdy.com/titerpubs#contribute). More info can be found on Metrdy's
 [TiterGuide](https://metrdy.com/titerguide) webpage.
 
-Building a bundle also needs the `pdftools` package, which the install above does not bring:
-`install.packages("pdftools")`. ACTA's leak scan reads the report PDF before a bundle may be
-published, and it will not pass a PDF it cannot read. A run with `titerpubs_export` off does
-not need it.
+`install.packages("pdftools")` is required for TiterPubs bundle creation.
 
 ## Components
 
@@ -250,11 +247,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.6.1")
+remotes::install_github("jatin199517/acta-public@v3.6.2")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.6.1 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.2 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
@@ -317,6 +314,7 @@ What each way of installing gives you:
 | a TeX engine, for the PDF report | yes — TinyTeX, and the LaTeX packages the report needs | **no** — run `tinytex::install_tinytex()` yourself. The `tinytex` R package is already there; the TeX engine it drives is not |
 | pandoc, for the PDF report | no — checks for it and prints the download link | **no** — get it from [pandoc.org](https://pandoc.org/installing.html) |
 | XQuartz on macOS, to start a run | no — checks for it and prints the download link | **no** — get it from [xquartz.org](https://www.xquartz.org) |
+| `pdftools`, for a TiterPubs bundle | **no** — `install.packages("pdftools")`. Only needed to build a bundle | **no** — `install.packages("pdftools")`. Only needed to build a bundle |
 | `Setup.R` itself | yes | not part of the package |
 | the desktop launchers | `ACTA App.command`, `ACTA App.bat` | not part of the package |
 | the Shiny app | launch it with `ACTA App.command` or `ACTA App.bat` | `acta_app()` — start R in your working folder and call it. `shiny::runApp()` on the app file will not work: it changes directory before reading the file, so the app would take the library as your working folder, and it refuses rather than doing that |
@@ -332,6 +330,7 @@ What each platform needs beyond R:
 | **TeX engine** — PDF report only | **Yes** — TinyTeX, plus the LaTeX packages the report needs | installed | installed | installed |
 | **pandoc** — PDF report only; `rmarkdown` shells out to it | No — `Setup.R` checks for it and prints the download link | **you install it** — your distro's package, or [pandoc.org](https://pandoc.org/installing.html) | **you install it** — [pandoc.org](https://pandoc.org/installing.html) | **you install it** — [pandoc.org](https://pandoc.org/installing.html) |
 | **XQuartz / X11** — `flowMeans` loads `tcltk`, so this is needed to start a run, not to load the library | No — `Setup.R` checks for it and prints the download link | usually already present; install your distro's X11 dev libraries if `tcltk` fails to load | **you install it** — [xquartz.org](https://www.xquartz.org) | not needed, `tcltk` ships with R |
+| **pdftools** — TiterPubs bundle only; the leak scan reads the report PDF before a bundle may be published | **No** — not installed by either route | **you install it** — `install.packages("pdftools")` | **you install it** — `install.packages("pdftools")` | **you install it** — `install.packages("pdftools")` |
 | **Perl** — used by `tlmgr` to fetch the report's LaTeX packages | No | system `perl` | system `perl` | not needed, TinyTeX ships its own |
 | **Compiler toolchain** — only if a package has no binary | No | `build-essential` + the `-dev` libraries the flow stack names | Xcode command line tools | Rtools |
 | **Setup launcher** | ships with the clone, not with the package | none — use `Rscript Setup.R` | none — use `Rscript Setup.R` | `Setup.bat` |
