@@ -455,6 +455,23 @@ local({
   chk("...and attaches every name in it",
       sum(grepl("library(.pkg, character.only = TRUE)", txt, fixed = TRUE)) >= 2L)
 
+  ## pdftools: INSTALLED BY Setup.R, NEVER ATTACHED BY THE ANALYSIS.
+  ##
+  ## Both halves are asserted because the failure mode is putting it in the WRONG list. In
+  ## `app` it is installed and never loaded, which is what a publisher needs. In
+  ## listOfLibrary it would be library()'d on every run -- poppler at load time, the fault that
+  ## made ACTA 3.0 unloadable without XQuartz -- and, since 3.6.0 made the pipeline refuse
+  ## rather than install, it would also STOP every run for anyone who lacks it, bundle or not.
+  setup <- file.path(vd, "Setup.R")
+  if (file.exists(setup)) {
+    stx <- paste(readLines(setup, warn = FALSE), collapse = "\n")
+    appv <- regmatches(stx, regexpr("app *<- *c\\(([^)]*)\\)", stx))
+    chk("Setup.R installs pdftools (it is in `app`)",
+        length(appv) == 1L && grepl("pdftools", appv, fixed = TRUE))
+  } else chk("Setup.R is present to check", FALSE)
+  chk("...and the analysis never ATTACHES it (not in listOfLibrary)",
+      !any(grepl("pdftools", lol, fixed = TRUE)))
+
   ## THE PIPELINE MUST NOT INSTALL ANYTHING. This assertion replaces its own opposite: the test
   ## used to REQUIRE install.packages(.pkg) and the BiocManager fallback, because that was the
   ## behaviour at the time. It is the behaviour the 3.6.0 security review asked for the removal

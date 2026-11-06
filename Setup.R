@@ -248,7 +248,16 @@ analysis <- analysis[nzchar(analysis)]
 ## a plain run therefore had a working engine, no report packages installed, and
 ## a suggested fix (tinytex::tlmgr_install) that needed a package they did not have. The 100 MB
 ## distribution is still opt-in; only this ~1 MB manager is unconditional.
-app <- c("shiny", "processx", "this.path", "rmarkdown", "openxlsx", "jsonlite", "readxl", "tinytex")
+## pdftools IS HERE AND NOT IN listOfLibrary, and the distinction is load-bearing.
+## `app` is installed but never attached; listOfLibrary is ATTACHED on every run by
+## library(.pkg, character.only = TRUE). pdftools links poppler, and making that a load-time
+## dependency is how ACTA 3.0 shipped unloadable on a Mac without XQuartz -- which is why it sits
+## in Suggests rather than Imports. Since 3.6.0 the pipeline also REFUSES rather than installing
+## what is missing, so a name in listOfLibrary stops every run for anyone who lacks it, bundle or
+## not. Here it is simply installed for the clone route, which is what a publisher needs and
+## costs a non-publisher nothing.
+app <- c("shiny", "processx", "this.path", "rmarkdown", "openxlsx", "jsonlite", "readxl",
+         "tinytex", "pdftools")
 
 cat(sprintf("analysis packages: %d\napp packages     : %d\n\n", length(analysis), length(app)))
 
