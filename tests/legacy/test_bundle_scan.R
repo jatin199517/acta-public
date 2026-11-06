@@ -42,6 +42,38 @@ for (p in c("home directory", "account name", "OneDrive library", "a POSIX home 
 
 ## ---- a clean bundle passes and survives ---------------------------------------------------------
 clean <- mkzip(list("notes.txt" = "CD4 BUV496 clone SK3, lot 5315516"))
+## THE EXTRACTION ROOT IS NOT A PATTERN, and this runs on every platform on purpose.
+##
+## actaBundleScan() used to strip its temp root from each entry name with
+## sub(paste0("^", root, "/?"), ...), i.e. as a REGEX. On Windows the root is
+## C:\\Users\\RUNNER~1\\AppData\\... where \\U, \\R, \\A and \\L are escapes, so the strip
+## matched nothing, the full local path became the "entry name", and it contains C:\\Users\\ --
+## a BLOCKING pattern. The gate refused every bundle a Windows operator built, naming its own
+## scratch directory as the leak. Invisible on macOS and Linux, where the root has no
+## backslashes and no metacharacters, so only the Windows runner could ever have caught it.
+##
+## DRIVES THE REAL FUNCTION, not a copy of its arithmetic: actaBundleScan() uses the path it is
+## given as the root when that path is a directory, and a backslash is a legal filename
+## character on POSIX -- so the Windows shape is reproducible wherever this suite runs.
+local({
+  ## The first name reproduces the Windows temp root EXACTLY, `C:\\Users\\` and all -- a colon
+  ## and a backslash are both legal in a POSIX filename, so the real failing input is
+  ## constructible here. An earlier version of this fixture used backslashes WITHOUT the
+  ## `C:\\Users\\` prefix and passed against the broken code: the strip failed exactly as it
+  ## does on Windows, but the leftover path tripped no pattern, so the gate proved nothing.
+  for (nm in c("C:\\Users\\RUNNER~1\\AppData\\Local\\Temp", "meta+b(race)[1]", "plain")) {
+    d <- file.path(tempdir(), paste0("rootchk_", basename(tempfile("")), "_", nm))
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    writeLines("nothing of interest here", file.path(d, "notes.txt"))
+    r <- scan_(d, quiet = TRUE)
+    chk(sprintf("a root containing %-24s yields no finding of its own",
+                sQuote(substr(nm, 1, 24))),
+        nrow(r) == 0L,
+        if (nrow(r)) paste(r$pattern[1], "in", substr(r$where[1], 1, 70)) else "")
+    unlink(d, recursive = TRUE)
+  }
+})
+
 chk("a clean bundle scans with no findings", nrow(scan_(clean, quiet = TRUE)) == 0L)
 invisible(assert(clean))
 chk("...and the gate leaves it on disk", file.exists(clean))

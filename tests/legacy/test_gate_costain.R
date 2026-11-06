@@ -91,11 +91,28 @@ for (bad in list(NULL, NA, NA_real_, numeric(0), "", -Inf, Inf, NaN, list(), lis
 e <- tryCatch({ gc_(fr, NULL, ch); "" }, error = function(e) conditionMessage(e))
 chk("...and the message says WHY there is no fallback",
     grepl("no data-driven", e, fixed = TRUE) && grepl("pp_costain_floor", e, fixed = TRUE), e)
+## flowMeans LOADS tcltk, WHICH NEEDS X11. The macOS CI runner has no XQuartz, so every
+## flowMeans call there dies with ".onLoad failed in loadNamespace('tcltk') -- X11 library is
+## missing". That is an environment fact, not a defect in the gate: ACTA's own pre-flight
+## reports the same thing, and the pipeline cannot run on such a machine either.
+##
+## SKIPPED LOUDLY, NEVER SILENTLY, and the skip is NARROW -- only the assertions that actually
+## need flowMeans stand down, the rest of the file still runs. ubuntu and windows both have X11
+## and run these for real, so the coverage is not lost, only relocated. If this banner ever
+## appears on a runner that is SUPPOSED to have X11, that is the bug, not the skip.
+.X11OK <- isTRUE(requireNamespace("tcltk", quietly = TRUE)) &&
+          !inherits(try(tcltk::tclVersion(), silent = TRUE), "try-error")
+if (!.X11OK)
+  cat("  [skip] no X11/XQuartz on this machine -- the flowMeans assertions below stand down.\n",
+      "        ubuntu and windows CI run them; see actaDependencyChecks()'s xquartz row.\n", sep = "")
+
 ## The contrast that justifies the whole design: a sibling given the SAME empty pp_res does not stop.
-sib <- tryCatch({ ACTA:::gate_flowmeans_costain(fr, NULL, ch); "returned a gate" },
-                error = function(e) "stopped")
-chk("...whereas gate_flowmeans_costain on the same empty pp_res still returns a gate",
-    identical(sib, "returned a gate"), sib)
+if (.X11OK) {
+  sib <- tryCatch({ ACTA:::gate_flowmeans_costain(fr, NULL, ch); "returned a gate" },
+                  error = function(e) "stopped")
+  chk("...whereas gate_flowmeans_costain on the same empty pp_res still returns a gate",
+      identical(sib, "returned a gate"), sib)
+}
 
 ## ---- 7. a channel that is not in the frame ------------------------------------------------------
 ## This is the one plugin that never touches exprs(fr), so without an explicit check a bad dim

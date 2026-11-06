@@ -239,10 +239,23 @@ actaBundleScan <- function(path, extra = character(), extra_regex = character(),
   files <- list.files(root, recursive = TRUE, full.names = TRUE, all.files = TRUE, no.. = TRUE)
   ## The PATH INSIDE THE ZIP is itself published -- a folder named after the operator leaks
   ## without any file having to be opened.
-  found <- .bsHits(sub(paste0("^", root, "/?"), "", files), pats, "[entry name]", rx)
+  ## THE ROOT IS A PATH, NOT A PATTERN, and treating it as one made this gate FAIL-ALWAYS ON
+  ## WINDOWS. `sub(paste0("^", root, "/?"), ...)` compiles the extraction directory as a regex.
+  ## On Windows that directory is `C:\Users\RUNNER~1\AppData\Local\Temp\...`, where \U, \R, \A
+  ## and \L are escape sequences -- so the prefix matched nothing, the FULL LOCAL PATH was used
+  ## as the published "entry name", and it contains `C:\Users\`, which is a BLOCKING pattern.
+  ## Every bundle a Windows operator built was therefore refused and deleted, naming a leak that
+  ## was the scanner's own scratch directory. Measured on the CI runner, on the first release
+  ## where the Windows pattern actually worked: before 3.6.0 it was quadrupled and dead, so the
+  ## two defects had been cancelling each other out.
+  ##
+  ## Same family as the standing note that a Windows path is not a regex and
+  ## grepl("\\\\", fixed = TRUE) never matches one.
+  .relOf <- function(p) sub("^[/\\\\]", "", substring(p, nchar(root) + 1L))
+  found <- .bsHits(vapply(files, .relOf, ""), pats, "[entry name]", rx)
 
   for (f in files) {
-    rel <- sub(paste0("^", root, "/?"), "", f)
+    rel <- .relOf(f)                         # NOT a regex -- see the note above
     ext <- tolower(tools::file_ext(f))
     found <- c(found, switch(ext,
       fcs  = .bsFcs(f, rel, pats, rx),
