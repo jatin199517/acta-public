@@ -233,6 +233,232 @@ gate_flowmeans_costain <- function(fr, pp_res, channels, K = 2, cluster = "neg",
   flowCore::rectangleGate(.gate = setNames(list(c(bound, Inf)), chnl), filterId = "flowmeans_costain")
 }
 
+## Custom openCyto gating plugin: openCyto's own mindensity cutpoint with a Costain-derived
+## floor, registered as method "gate_mindensity_costain". The density-valley counterpart to
+## gate_flowmeans_costain -- same fr/pp_res/channels contract, same pp_costain_floor
+## preprocessing, same c(bound, Inf) gate; only the way the unfloored boundary is found
+## differs. flowMeans clusters and reads a percentile off one cluster; mindensity takes the
+## minimum of the kernel density between the first two peaks, which sits where the data
+## actually separates rather than at a fixed percentile of the negative.
+##   Floor source: pp_res, supplied by the pp_costain_floor preprocessing method (a
+##   fluorescence VALUE, not a probability). ALWAYS attach preprocessing_method
+##   = pp_costain_floor.
+##
+## THE MISSING-pp_res CASE IS WORSE HERE THAN FOR FLOWMEANS, so it is worth being explicit
+## about. openCyto's mindensity has no way to report failure: on a UNIMODAL channel it finds
+## no valley and silently returns gate_range[1] -- min(x) unless gate_range says otherwise --
+## which is a gate that calls 100% of events positive. The Costain floor is what turns that
+## degenerate answer into the same static-gate-at-the-Costain-value that
+## gate_auto_costain_dip/gmm choose deliberately. With no pp_res the floor is -Inf, so an
+## unfloored row does not merely lose the floor: on a unimodal well it reports everything
+## positive. gate_flowmeans_costain unfloored still returns a real cluster boundary.
+##
+## Args, settable from the template gating_args and passed straight to
+## openCyto::gate_mindensity:
+##   gate_range  c(lo, hi) -- only accept a valley inside this range (the usual knob)
+##   min, max    truncate the data before peak finding
+##   peaks       supply peak locations instead of finding them
+##   adjust      density bandwidth multiplier (default 2, openCyto's own default); the one
+##               knob shared by its peak AND valley finders
+## `positive` is deliberately NOT accepted. The gate is ALWAYS c(bound, Inf) -- RIGHT =
+## positive, LEFT = negative -- and the side comes from the template `pop` column, as for
+## every other ACTA plugin. Honouring `positive` would silently mean the opposite of what the
+## sheet's `pop` says, and ignoring it silently is no better, so it is an error.
+gate_mindensity_costain <- function(fr, pp_res, channels, gate_range = NULL, min = NULL,
+                                    max = NULL, peaks = NULL, adjust = 2, ...) {
+  if ("positive" %in% ...names())
+    stop("gate_mindensity_costain: `positive` is not accepted -- the gate is always ",
+         "c(bound, Inf). Choose the side with the template `pop` column ('+' or '-').",
+         call. = FALSE)
+  chnl <- channels[1]
+  ## Drop non-finite events, as the other plugins do and openCyto here would not:
+  ## gate_mindensity reads exprs(fr)[, channel] straight into density(), which errors on them.
+  keep <- is.finite(exprs(fr)[, chnl])
+  if (!all(keep)) fr <- fr[keep, ]
+  g <- openCyto::gate_mindensity(fr, channel = chnl, positive = TRUE, gate_range = gate_range,
+                                 min = min, max = max, peaks = peaks, adjust = adjust)
+  ## base::max spelled out: `min` and `max` are formals here (openCyto's own names for the
+  ## truncation args, kept so the sheet reads like openCyto's documentation).
+  bound <- base::max(g@min[[chnl]], .resolve_costain_floor(pp_res))
+  flowCore::rectangleGate(.gate = setNames(list(c(bound, Inf)), chnl),
+                          filterId = "mindensity_costain")
+}
+
+## Custom openCyto gating plugins: THE LOWER OF TWO ESTIMATORS, FLOORED AT THE COSTAIN VALUE.
+## Registered as methods "gate_mind_fmeans_costain" (openCyto mindensity) and
+## "gate_mind2_fmeans_costain" (mindensity2). The boundary is
+##
+##     max( costain_floor , min( flowMeans bound , mindensity cut ) )
+##
+## and each term has a distinct job: the inner min() CHOOSES BETWEEN ESTIMATORS, the outer max()
+## is the floor. They are not interchangeable and the order is not arbitrary -- flooring first and
+## then taking the minimum would let the lower estimator pull the gate back under the floor, which
+## is the one thing the floor exists to prevent.
+##
+## WHY TAKE THE MINIMUM. The two estimators fail in opposite directions, which is what makes the
+## pair worth more than either alone, and both failures have been observed on one real
+## eight-reagent titration (experiment identifier deliberately not quoted -- this file ships):
+##   mindensity  cuts where the density actually separates, but it has no way to report failure.
+##               Handed a channel whose peak-finder is confused -- by a long negative unmixing
+##               tail, or by a genuinely unimodal well -- it returns a cut far from any real
+##               boundary, and on this experiment that produced BOTH a gate keeping 0 events and
+##               a gate keeping 100%.
+##   flowMeans   always returns a real cluster boundary, so it cannot degenerate the same way,
+##               but it is a quantile of the negative CLUSTER: when that cluster is broad the
+##               boundary drifts high and the positive fraction is understated.
+## THE TWO OPERATIONS GUARD OPPOSITE ERRORS, which is the whole design:
+##   min()   guards against a cut placed TOO HIGH. Both observed mindensity failures are of that
+##           kind -- pinned at the Costain percentile, or pushed past the data entirely so the
+##           gate keeps nothing -- and taking the lower of the two bounds hands the decision to
+##           flowMeans exactly where mindensity has over-reached. A LOWER bound is the MORE
+##           INCLUSIVE gate: more events are called positive, not fewer.
+##   max()   guards against a cut placed TOO LOW. A mindensity cut that has collapsed into the
+##           unmixing tail is below the flowMeans bound and would win the min(); the Costain
+##           floor catches it, because that collapsed cut is also below the panel's own
+##           background. The floor is what makes the min() safe to take.
+## Neither alone is sufficient, and the sandwich is per-WELL: with collapseDataForGating = FALSE
+## each sample gets its own min(), so one well of a titration can fall back to flowMeans while
+## its neighbours keep the density cut.
+##
+## Args, settable from the template gating_args:
+##   K, cluster, quantile      flowMeans half -- as gate_flowmeans_costain
+##   gate_range, min, max,     mindensity half -- passed straight to openCyto
+##   peaks, adjust
+## `positive` is deliberately NOT accepted, as for every other ACTA plugin: the gate is ALWAYS
+## c(bound, Inf) and the side comes from the template `pop` column.
+##
+## ALWAYS attach preprocessing_method = pp_costain_floor. With no pp_res the floor is -Inf and
+## the method degrades to a bare min() of two unguarded estimators -- which, per the paragraph
+## above, is the configuration in which a collapsed mindensity cut wins silently.
+.mind_fmeans_bound <- function(fr, pp_res, channels, K, cluster, quantile,
+                               gate_range, gate_range_floor, min, max, peaks, adjust,
+                               improved) {
+  chnl <- channels[1]
+  ## Drop non-finite events, as the other plugins do and openCyto here would not.
+  keep <- is.finite(exprs(fr)[, chnl])
+  if (!all(keep)) fr <- fr[keep, ]
+  flr <- .resolve_costain_floor(pp_res)
+  ## `gate_range_floor=TRUE` PINS THE SEARCH to the Costain boundary rather than only clamping to
+  ## it afterwards. The clamp on the last line can never move a cut UP onto a real second valley:
+  ## when mindensity picks a valley below the floor the clamp replaces it with the floor exactly,
+  ## so every such well reports the identical number and the shape of its own data is lost.
+  ## Handing the floor to `gate_range` makes mindensity choose among the valleys ABOVE it, and
+  ## openCyto falls back to `gate_range[1]` -- the floor -- when there is no valley there, which
+  ## is precisely the old answer. So TRUE can only change a well that HAD a usable valley above
+  ## the floor, and never returns something worse than the clamp would have.
+  ##
+  ## Only the LOWER bound comes from the floor: an explicit `gate_range` in the sheet keeps its
+  ## upper bound, and with none the upper bound is the data. Skipped when the floor is -Inf (no
+  ## Costain well -- pp_costain_floor's documented no-op) or when it sits at or above the whole
+  ## range, where there is no interval to search and the clamp below is already right.
+  ## It reaches mindensity ONLY; flowMeans has no equivalent argument, so `fm` is unchanged.
+  if (isTRUE(gate_range_floor)) {
+    .hi <- if (length(gate_range) >= 2L) base::max(gate_range) else base::max(exprs(fr)[, chnl])
+    if (is.finite(flr) && flr < .hi) gate_range <- c(flr, .hi)
+  }
+  fm <- .flowmeans_bound(exprs(fr)[, chnl], K, cluster, quantile)
+  ## Spelled out per branch rather than via do.call: gate_mindensity2 has NO `positive` formal
+  ## -- it is always c(cut, Inf) -- while gate_mindensity defaults to positive = TRUE and would
+  ## return the LEFT side if told otherwise, so the two calls are genuinely different.
+  md <- if (improved)
+          openCyto::gate_mindensity2(fr, channel = chnl, gate_range = gate_range,
+                                     min = min, max = max, peaks = peaks, adjust = adjust)
+        else
+          openCyto::gate_mindensity(fr, channel = chnl, positive = TRUE, gate_range = gate_range,
+                                    min = min, max = max, peaks = peaks, adjust = adjust)
+  ## base:: spelled out: `min` and `max` are FORMALS here (openCyto's own names for the
+  ## truncation args, kept so the sheet reads like openCyto's documentation), so the bare names
+  ## are those arguments and not the functions.
+  base::max(base::min(fm, md@min[[chnl]]), flr)
+}
+
+.mind_fmeans_check_positive <- function(nms, method) {
+  if ("positive" %in% nms)
+    stop(method, ": `positive` is not accepted -- the gate is always c(bound, Inf). ",
+         "Choose the side with the template `pop` column ('+' or '-').", call. = FALSE)
+}
+
+gate_mind_fmeans_costain <- function(fr, pp_res, channels, K = 2, cluster = "neg",
+                                     quantile = 0.99, gate_range = NULL,
+                                     gate_range_floor = FALSE, min = NULL,
+                                     max = NULL, peaks = NULL, adjust = 2, ...) {
+  .mind_fmeans_check_positive(...names(), "gate_mind_fmeans_costain")
+  bound <- .mind_fmeans_bound(fr, pp_res, channels, K, cluster, quantile,
+                              gate_range, gate_range_floor, min, max, peaks, adjust,
+                              improved = FALSE)
+  flowCore::rectangleGate(.gate = setNames(list(c(bound, Inf)), channels[1]),
+                          filterId = "mind_fmeans_costain")
+}
+
+gate_mind2_fmeans_costain <- function(fr, pp_res, channels, K = 2, cluster = "neg",
+                                      quantile = 0.99, gate_range = NULL,
+                                      gate_range_floor = FALSE, min = NULL,
+                                      max = NULL, peaks = NULL, adjust = 2, ...) {
+  .mind_fmeans_check_positive(...names(), "gate_mind2_fmeans_costain")
+  bound <- .mind_fmeans_bound(fr, pp_res, channels, K, cluster, quantile,
+                              gate_range, gate_range_floor, min, max, peaks, adjust,
+                              improved = TRUE)
+  flowCore::rectangleGate(.gate = setNames(list(c(bound, Inf)), channels[1]),
+                          filterId = "mind2_fmeans_costain")
+}
+
+## Custom openCyto gating plugin: THE COSTAIN FLOOR IS THE GATE. Registered as method
+## "gate_costain". The simplest member of the family -- it places the boundary at the Costain
+## value and applies that same boundary to every sample in the group, with no per-sample
+## clustering, density estimate or modality test of any kind.
+##
+## WHAT IT IS FOR. The other *_costain methods compute a boundary FROM THE STAINED DATA and then
+## refuse to let it fall below the co-stain: bound = max(data_driven_boundary, floor). That is the
+## right default when the positive and negative populations separate. It is the wrong one when
+## they do not -- a titration series that saturates, a marker that is dim at every dose, a channel
+## where the negative is wide and skewed. There the data-driven half has no real boundary to find
+## and whatever it returns is an artefact of the clustering, not of the biology. This method
+## removes that half entirely: the question it answers is "which events are brighter than the
+## panel without this antibody", and nothing else.
+##
+## IT IS NOT A RE-INTRODUCTION OF THE RETIRED gate_static (see the note below). gate_static took a
+## number typed into the sheet, which is exactly what openCyto's `boundary` already does. This
+## takes a number MEASURED from that group's own Costain well at `costain_quantile`, so it differs
+## per Dirname, per channel and per run, and no sheet could carry it in advance.
+##
+## A MISSING FLOOR IS FATAL HERE, WHERE IT IS MERELY WRONG ELSEWHERE. Its siblings degrade to the
+## un-floored method underneath them when pp_res is absent -- a bad gate, but a gate. This method
+## has nothing underneath it: the floor IS the boundary, so an absent one gives c(-Inf, Inf), a
+## gate that calls 100% of every sample positive and reports a Stain Index for it. There is no
+## defensible fallback, so it stops. The pre-flight (actaCostainArgIssues) should have caught the
+## missing preprocessing_method long before a frame reaches here; this is the second line.
+##
+##   Floor source: pp_res, from pp_costain_floor (a bare numeric) or pp_auto2_costain (a list
+##   carrying $floor). Both shapes are read, because pairing this with either is reasonable --
+##   pp_auto2_costain's static-vs-flowMeans decision is simply irrelevant to a method that is
+##   always static.
+##   ALWAYS attach preprocessing_method = pp_costain_floor, with costain_quantile in
+##   preprocessing_args.
+## No gating_args: there is nothing to tune. The percentile that sets the boundary is
+## pp_costain_floor's `costain_quantile`, and it lives there alone.
+## The gate is ALWAYS c(bound, Inf): RIGHT = positive, LEFT = negative (side via `pop`).
+gate_costain <- function(fr, pp_res, channels, ...) {
+  if ("positive" %in% ...names())
+    stop("gate_costain: `positive` is not accepted -- the gate is always c(bound, Inf). ",
+         "Choose the side with the template `pop` column ('+' or '-').", call. = FALSE)
+  chnl <- channels[1]
+  ## CHECKED EXPLICITLY, because this is the one plugin that never reads exprs(fr). The others
+  ## fail on `exprs(fr)[, chnl]` the moment a dim does not resolve; without this, a bad channel
+  ## would survive gate construction and surface later inside flowWorkspace, further from cause.
+  if (!chnl %in% colnames(fr))
+    stop(sprintf("gate_costain: channel '%s' is not in this flowFrame (have: %s).",
+                 chnl, paste(colnames(fr), collapse = ", ")), call. = FALSE)
+  ## Both pp_res shapes, read the way gate_auto2_costain reads them.
+  bound <- if (is.list(pp_res)) suppressWarnings(as.numeric(pp_res$floor)[1])
+           else suppressWarnings(as.numeric(pp_res)[1])
+  if (length(bound) < 1 || !is.finite(bound))
+    stop("gate_costain: no finite Costain floor was supplied. This method has no data-driven ",
+         "boundary to fall back on -- without the floor the gate would be c(-Inf, Inf) and call ",
+         "every event positive. Set preprocessing_method = pp_costain_floor and give it a ",
+         "costain_quantile.", call. = FALSE)
+  flowCore::rectangleGate(.gate = setNames(list(c(bound, Inf)), chnl), filterId = "costain")
+}
+
 ## NOTE: the former custom `gate_static` method was RETIRED -- openCyto's built-in
 ## `boundary` method makes the identical fixed rectangleGate (1D or 2D). In the sheet
 ## use gating_method = boundary with gating_args = "min=c(x,y), max=c(x,y)" (each vector
@@ -377,91 +603,14 @@ gate_auto2_costain <- function(fr, pp_res, channels, K = 2, cluster = "neg",
   flowCore::rectangleGate(.gate = setNames(list(c(bound, Inf)), chnl), filterId = "auto2_costain")
 }
 
-## ---- Manual (interactive) marker gating via flowGate ---------------------------------
-## `gate_manual` can't run *inside* gt_gating (headless, per-sample), and building the
-## +/- populations by hand fails because openCyto boolean filters can't reference a
-## "+"-named node. So instead we let openCyto build the +/- split itself: gate_manual is
-## registered as an openCyto plugin that returns a PRE-DRAWN gate from a cache, and the
-## template row keeps pop = "+/-" (openCyto then makes <alias>+ = inside and <alias>- =
-## its complement natively, exactly like the auto methods).
-##
-## Flow (handled in the script, per antibody):
-##   1. gt_gating the AUTO template (gate_manual row excluded) -> builds up to the parent.
-##   2. drawManualGates(): interactively draw on the parent (grouped by the row's groupBy),
-##      cache + persist.
-##   3. set .acta_manual_cache$gates <- <that cache>, then gt_gating the FULL template
-##      (gate_manual row included) -> openCyto skips existing nodes and builds <alias>+/-.
-##
-## Supported only on the LEAF marker row for now (no auto gate may depend on a manual one).
-
-## Per-antibody cache of drawn gates, read by the gate_manual plugin during gt_gating.
-## $gates maps EACH sample's flowFrame identifier() -> the gate for that sample: wells in
-## the same group share one gate object; per-sample (empty groupBy) each gets its own.
-.acta_manual_cache <- new.env(parent = emptyenv())
-.acta_manual_cache$gates <- NULL
-
-## openCyto gating plugin "gate_manual": returns the pre-drawn gate for the sample being
-## gated (keyed by identifier(fr)). Never interactive.
-gate_manual <- function(fr, pp_res, channels, ...) {
-  gates <- .acta_manual_cache$gates
-  if (is.null(gates))
-    stop("gate_manual: no drawn gates cached. drawManualGates() must run and set .acta_manual_cache$gates before gt_gating.")
-  sn <- flowCore::identifier(fr)
-  g  <- gates[[sn]]
-  if (is.null(g)) stop(sprintf("gate_manual: no cached gate for sample '%s'.", sn))
-  g
-}
-
-## Interactively draw the manual gate(s) with flowGate on `parent`, persist them, and
-## return the identifier()->gate cache consumed by the gate_manual plugin. Draws on a
-## throwaway node (removed after) purely to capture the flowGate-drawn gate object.
-##
-## Scope is driven by the marker row's `groupBy` column:
-##   groupBy = "" / NA            -> PER-SAMPLE: one gate drawn per well.
-##   groupBy = pData column(s)    -> ONE gate per distinct group value (":"-separated for
-##                                   multiple columns), drawn on the brightest well of the
-##                                   group (max StainQty) and shared by all its wells.
-##                                   groupBy = "Dirname" => one gate for the whole antibody.
-## dims: length-2 resolved channel names. Gates persist as .rds under gate_dir (keyed by
-## group label / sample identifier) and are reused on re-run unless redraw=TRUE. Interactive
-## session required only when a gate actually has to be drawn.
-drawManualGates <- function(gs, dims, parent, groupBy, gate_dir, redraw = FALSE) {
-  if (!requireNamespace("flowGate", quietly = TRUE))
-    stop("gate_manual needs the 'flowGate' package (BiocManager::install('flowGate')).")
-  dir.create(gate_dir, showWarnings = FALSE, recursive = TRUE)
-  dimsList <- as.list(as.character(dims))
-  ids <- vapply(seq_along(gs),
-                function(i) flowCore::identifier(gh_pop_get_data(gs[[i]], parent)), character(1))
-  pd  <- pData(gs)
-  groupBy <- if (length(groupBy) == 0 || is.na(groupBy)) "" else trimws(as.character(groupBy))
-  if (!nzchar(groupBy)) {
-    grpLabel <- ids                                   # per-sample: each well is its own group
-  } else {
-    cols <- trimws(strsplit(groupBy, ":")[[1]])
-    miss <- setdiff(cols, colnames(pd))
-    if (length(miss)) stop(sprintf("gate_manual groupBy references pData column(s) not found: %s", paste(miss, collapse = ", ")))
-    grpLabel <- apply(pd[, cols, drop = FALSE], 1, function(r) paste(r, collapse = ":"))
-  }
-  draw_one <- function(sample_idx, label) {           # draw -> capture gate -> remove tmp node
-    if (!interactive())
-      stop(sprintf("gate_manual needs an interactive session (Source in Positron/RStudio) to draw for '%s'.", label))
-    flowGate::gs_gate_interactive(gs, filterId = "__manual_tmp", sample = sample_idx,
-                                  dims = dimsList, subset = parent)
-    g <- gh_pop_get_gate(gs[[sample_idx]], "__manual_tmp")
-    flowWorkspace::gs_pop_remove(gs, "__manual_tmp")
-    g
-  }
-  cache <- setNames(vector("list", length(gs)), ids)
-  for (grp in unique(grpLabel)) {
-    idx   <- which(grpLabel == grp)
-    sv    <- suppressWarnings(as.numeric(pd$StainQty[idx]))
-    rep_i <- if (all(is.na(sv))) idx[1] else idx[which.max(sv)]   # draw on the brightest well of the group
-    f <- file.path(gate_dir, paste0(make.names(grp), "__manual.rds"))
-    g <- if (!redraw && file.exists(f)) readRDS(f) else { gg <- draw_one(rep_i, grp); saveRDS(gg, f); gg }
-    for (j in idx) cache[[ ids[j] ]] <- g
-  }
-  cache
-}
+## ---- Manual (interactive) marker gating: REMOVED in 3.6.0 ----------------------------
+## gate_manual(), drawManualGates() and the flowGate dependency are gone. The feature had
+## been inert since 3.0 -- drawManualGates() was never exported, so an installed run died at
+## the gating step with "object 'drawManualGates' not found" -- and flowGate's drawer launches
+## its own blocking Shiny app, which cannot run inside ACTA's. Both the app pre-flight and the
+## pipeline already REFUSE a template naming gate_manual, and those refusals stay: a workbook
+## carrying the method gets a clear error rather than a crash. What is removed is the dead code
+## that made the feature look available, and a Suggests entry nobody could use.
 
 ## Scatter channel names are NOT standardised, so they cannot be matched literally.
 ## FCS 3.0 and earlier REQUIRED $PnN to be "FS" for forward and "SS" for side scatter; no
@@ -1431,11 +1580,17 @@ addBiexpAxes <- function(p, xch = NULL, ych = NULL, trans = NULL, maxValue = NUL
 }
 
 
-annotate_changeParam_pdWrite<-function(fs, metadata){
+annotate_changeParam_pdWrite<-function(fs, metadata,
+                                      equip_make = NA_character_,
+                                      equip_model = NA_character_){
   list_of_frames <- list()
   newPData<-data.frame()
+  .fcsNames <- flowCore::sampleNames(fs)
   for(i in seq_along(fs)){
     fcs<-fs[[i]]
+    ## read.flowSet() names samples by BASENAME even when it was handed relative paths, so the
+    ## Dirname folder has to be put back on in the mutate below.
+    .fcsOriginalName <- .fcsNames[i]
     old<-fcs@description
     wellrow<-substr(fcs@description$`$WELLID`,1,1)
     wellcol<-substr(fcs@description$`$WELLID`,2,3)
@@ -1466,10 +1621,20 @@ annotate_changeParam_pdWrite<-function(fs, metadata){
     newPData<-metadata %>%
       dplyr::filter(`PlateID`==plate & isLayoutValue(`Row`, wellrow) & `Column`==wellcol) %>%
       mutate(newFileName=new_ff@description$FILENAME,
+             ## THE FILE THIS ROW WAS READ FROM, relative to Titration_FCS.
+             ##
+             ## `name` in the export is the CANONICAL name ACTA builds a line above
+             ## (ELN_plate_well_target_stain_qty_operator.fcs) -- it describes the well, not the
+             ## file, and it matches nothing on disk. For a run whose FCS are shipped alongside
+             ## the export, that left a reader with no way to open the file behind a row: zero of
+             ## eleven SI_stats rows matched a filename in Titration_FCS. Recorded as
+             ## <Dirname>/<file>.fcs so it is directly openable rather than needing the folder to
+             ## be inferred from another column.
+             fcs_file=file.path(Dirname, .fcsOriginalName),
              ## Per-well provenance off THIS file's keywords; travels via pData into stats
              ## and out to the export's Acquisition_date / Equipment columns.
              Acquisition_date=fcsAcquisitionDate(fcs),
-             Equipment=fcsEquipment(fcs)) %>%
+             Equipment=fcsEquipment(fcs, equip_make, equip_model)) %>%
       rbind(newPData)
   }
   
@@ -1503,17 +1668,46 @@ fcsKeyword <- function(ff, keyword) {
 ## The per-keyword warnings from fcsKeyword() are suppressed here on purpose -- a missing
 ## $CYTSN is a benign degradation, and warning once per FCS file would drown the run log.
 ## Only the both-absent case (where Equipment carries no information at all) warns.
-fcsEquipment <- function(ff) {
+## $CYT IS SUPPOSED TO NAME THE CYTOMETER, AND ONLY SOMETIMES DOES. A Cytek Aurora writes
+## "Aurora", its model. A Bio-Rad ZE5 writes its ACQUISITION SOFTWARE instead -- "EVEREST" on this
+## site's own files (confirmed: the OQ fixture sanitiser rewrites $CYTSN/$INST/$OP/$PROJ/$SRC but
+## never $CYT, so that value is instrument-written) -- while Bio-Rad documents "ZE5" for Everest
+## 2.0 and later and "YETI" for 1.4 and earlier, the Propel Labs name the ZE5 shipped under. A
+## BD/Diva file carries no $CYT at all. So the export used to publish a software name as the
+## equipment, and for BD nothing.
+##
+## Keyed UPPER-CASE, and an unmatched value passes through unchanged -- an instrument whose $CYT
+## already is its model needs no entry.
+ACTA_EQUIPMENT_MODEL <- c("EVEREST" = "ZE5", "YETI" = "ZE5", "ZE5" = "ZE5")
+
+## `make`/`model` are Info!Equipment_Make and Info!Equipment_Model. FILLED, THEY WIN OUTRIGHT: an
+## operator who declares the instrument beats a keyword, and it is the only route for a BD file
+## that writes no $CYT. Blank or absent, the keyword is used and mapped through the table above.
+## actaInfoValue() returns NA for a missing row, a blank cell and the literal "NA" alike, so an
+## older workbook without these rows behaves exactly like an unfilled one.
+##
+## $CYTSN IS KEPT EITHER WAY. The override names the CYTOMETER; the serial is a different keyword
+## and per-file provenance, and actaScrubEquipmentSerial() already strips it for a TiterPubs run.
+fcsEquipment <- function(ff, make = NA_character_, model = NA_character_) {
   cyt <- suppressWarnings(fcsKeyword(ff, "$CYT"))
   sn  <- suppressWarnings(fcsKeyword(ff, "$CYTSN"))
-  if (is.na(cyt) && is.na(sn)) {
-    warning(sprintf("fcsEquipment: neither $CYT nor $CYTSN in '%s'; Equipment is NA.",
+  .filled <- function(x) length(x) == 1L && !is.na(x) && nzchar(trimws(as.character(x)))
+  name <- if (.filled(make) || .filled(model))
+            paste(c(if (.filled(make))  trimws(as.character(make)),
+                    if (.filled(model)) trimws(as.character(model))), collapse = " ")
+          else if (!is.na(cyt)) {
+            m <- unname(ACTA_EQUIPMENT_MODEL[toupper(trimws(cyt))])
+            if (is.na(m)) cyt else m
+          } else NA_character_
+  if (is.na(name) && is.na(sn)) {
+    warning(sprintf(paste0("fcsEquipment: no $CYT or $CYTSN in '%s' and Info!Equipment_Make / ",
+                           "Equipment_Model are empty; Equipment is NA."),
                     tryCatch(flowCore::identifier(ff), error = function(e) "<unknown>")))
     return(NA_character_)
   }
-  if (is.na(sn))  return(cyt)
-  if (is.na(cyt)) return(sprintf("(%s)", sn))
-  sprintf("%s (%s)", cyt, sn)
+  if (is.na(sn))   return(name)
+  if (is.na(name)) return(sprintf("(%s)", sn))
+  sprintf("%s (%s)", name, sn)
 }
 
 ## Acquisition date of ONE flowFrame, read from its FCS `$DATE` keyword. Deliberately
@@ -1757,10 +1951,25 @@ which_plate<-function(fcs, default = 1L)
   ## directly under Titration_FCS, and the layout's PlateID is matched against this value -- so
   ## returning 0 for a flat tree would match no layout row, and every well would be silently
   ## dropped by the !is.na(Dirname) guards downstream. A single-plate flat run IS plate 1.
-  r<-case_when(grepl("PLATE_1", toupper(path)) ~ 1,
-               grepl("PLATE_2", toupper(path)) ~ 2,
-               grepl("PLATE_3", toupper(path)) ~ 3,
-               TRUE ~ as.numeric(default))
+  ## A TOKEN, NOT A SUBSTRING. This was `grepl("PLATE_2", toupper(path))`, which matched the YEAR
+  ## in an instrument file name: `EXP00000001 Plate_2026_11_03_19_32_OLS-AF.fcs` uppercases to
+  ## `PLATE_2026`, and its first seven characters ARE `PLATE_2`. Every file in a correctly-labelled
+  ## single-plate run then resolved to plate 2, matched no layout row, and the run died inside
+  ## annotate_changeParam_pdWrite() with base R's "attempt to select less than one element in
+  ## OneIndex" -- a message that names neither the file nor the well. Any year beginning with 2 did
+  ## it; `Plate_19xx` resolved correctly only by the same accident. And $FILENAME holds the
+  ## ABSOLUTE path, so a folder anywhere ABOVE the run poisoned every file under it -- which on a
+  ## synced drive is not the analyst's folder to rename.
+  ##
+  ## Whole path SEGMENTS compared for equality instead. That is the rule actaPlateExtras() already
+  ## uses to enumerate these same folders, and it is right because the token IS a directory:
+  ## Titration_FCS/PLATE_1/<antibody>/. A file called PLATE_2.fcs does not name a plate.
+  seg <- toupper(unlist(strsplit(as.character(path), "[/\\\\]")))
+  ## ALWAYS length 1. An FCS carrying no $WELLID-bearing header at all -- no $FILENAME -- handed
+  ## case_when() a zero-length condition and got a zero-length plate back, which reached the layout
+  ## filter and failed with the same OneIndex message by a completely different route.
+  r <- if ("PLATE_1" %in% seg) 1 else if ("PLATE_2" %in% seg) 2 else
+       if ("PLATE_3" %in% seg) 3 else as.numeric(default)
   return(r)
 }
 
@@ -2491,10 +2700,14 @@ pop.MeFI<-function(fr){
 ## the sheet has exactly two looks -- plain here, navy/blue everywhere else.
 ## `Combinatorial_group (n)` LEFT the block in 3.4.0 and so takes the navy theme; it is still
 ## exported, just no longer part of the operator-facing run.
+## `Test_Material_Status` sits immediately after `Test_Material` for the same reason it sits
+## beside it in Layout_Plate: the material and the state it was in are one fact read together,
+## and a reader who sees the donor material without knowing whether it was thawed has half of it.
 ACTA_EXPORT_LEAD_COLS <- c("Vendor", "Clone", "Alias", "Fl", "Cat_Num", "Lot_Num",
                            "Titer", "Titration_Status", "Well_volume_uL", "e6_cells_per_well",
-                           "Test_Material", "ELN_ID", "Fix_Perm", "Operator", "SOP",
-                           "Costain_Panel_Iteration", "ACTA_version")
+                           "Test_Material", "Test_Material_Status", "ELN_ID", "Fix_Perm",
+                           "Operator", "SOP", "Costain_Panel_Iteration", "ACTA_version",
+                           "time_taken_min")
 
 writeTitrationExport <- function(df, path, sheet = "TitrationExport",
                                  audit = NULL,
@@ -2808,6 +3021,163 @@ actaOpcScrub <- function(path) {
   invisible(isTRUE(ok))
 }
 
+## Argument NAMES out of a gating_template args cell, WITHOUT EVALUATING ANYTHING.
+##
+## The rule this obeys is the one tests/legacy/test_arg_safety.R exists for: no workbook cell is
+## ever evaluated. Only the `name =` tokens are read, and quoted values are blanked first so a
+## string that happens to contain "x=" is not mistaken for an argument name.
+.actaArgNames <- function(s) {
+  s <- as.character(s)[1]
+  if (is.na(s) || !nzchar(trimws(s))) return(character(0))
+  s <- gsub("'[^']*'", "''", s)
+  s <- gsub('"[^"]*"', '""', s)
+  m <- regmatches(s, gregexpr("(^|,)\\s*([A-Za-z.][A-Za-z0-9._]*)\\s*=", s))[[1]]
+  trimws(gsub("[,=]", "", m))
+}
+
+## Which arguments a preprocessing plugin accepts, and which it CANNOT DO WITHOUT.
+##
+## DERIVED FROM THE PLUGIN'S OWN FORMALS, never a hardcoded list. A list would have to be edited
+## every time an argument is added and the cost of forgetting is silent -- exactly the failure
+## this whole check exists to stop.
+##
+## REQUIRED means the formal's default is a bare NA, or there is no default at all. `NA` is the
+## signal pp_costain_floor() already uses to say there is no sensible default it can stand
+## behind: `costain_quantile = NA`, with 0.99 substituted inside the body. An argument with a
+## REAL default -- sat_threshold = 0.90 -- is genuinely optional and is not demanded here.
+## Returns NULL for a name that resolves to no function, so the caller can say so rather than
+## guessing at the arguments of a plugin it cannot see.
+.actaPpArgSpec <- function(ppname) {
+  f <- get0(ppname, mode = "function", ifnotfound = NULL)
+  if (is.null(f)) return(NULL)
+  fm <- formals(f)
+  ## The openCyto preprocessing contract supplies these six; everything else is the sheet's job.
+  user <- setdiff(names(fm), c("fs", "gs", "gm", "channels", "groupBy", "isCollapse", "..."))
+  isReq <- function(a) { d <- fm[[a]]
+    (is.symbol(d) && !nzchar(as.character(d))) || identical(d, NA) }
+  list(all = user, required = user[vapply(user, isReq, logical(1))])
+}
+
+## THE COSTAIN FLOOR REACHES THE GATE OR IT DOES NOT, AND THERE WAS NO CHECK FOR WHICH.
+##
+## Measured 2026-10-31 on OQ_Test1: a Reagent row reading `gate_flowmeans_costain` with
+## preprocessing_method left BLANK ran to completion, ok = TRUE, and put 50.7% of the co-stain
+## above the marker gate where the floored run puts 1.0%. Nothing stopped it. .resolve_costain_floor()
+## turns a missing pp_res into -Inf and max(bound, -Inf) is bound, so the method silently becomes
+## the un-floored one underneath it and still reports a plausible Stain Index table.
+##
+## The post-hoc QC does catch that particular case -- costain_positive went FAIL -- but only after
+## a full analysis, and only when a Costain well is present to measure. A pre-flight that stops in
+## seconds with the row named is what the rest of this file already does for every comparable
+## mistake.
+##
+## FOUR FINDINGS, and the severity of each is chosen the same way the layout checks choose theirs:
+##   FATAL  a *_costain gating method with no costain preprocessing_method. The floor is -Inf and
+##          the gate is silently the un-floored method.
+##   FATAL  a costain preprocessing_method missing a REQUIRED argument (see .actaPpArgSpec).
+##          costain_quantile is the one that matters: absent, the plugin substitutes 0.99 without
+##          saying so, and the gate rests on a percentile nobody in the lab chose.
+##   FATAL  an argument name the plugin does not accept. Every preprocessing plugin takes `...`,
+##          so a misspelt `costain_quantil=0.99` is swallowed in silence and the fallback is used.
+##          A typo here is never intentional.
+##   NOTE   costain preprocessing attached to a gating method that never reads pp_res. Harmless to
+##          the numbers, but it reads like a floored gate and is not one, so it is worth saying.
+##
+## SCOPE IS DELIBERATELY preprocessing_args. gating_args have the same shape of defect and are not
+## checked here: those go to openCyto's own methods as well as ACTA's, and this check refuses to
+## guess at the formals of a plugin it cannot resolve.
+actaCostainArgIssues <- function(gating_template) {
+  fatal <- character(0); notes <- character(0)
+  out <- function() list(fatal = fatal, notes = notes)
+  if (is.null(gating_template) || !is.data.frame(gating_template) || !nrow(gating_template))
+    return(out())
+  g <- gating_template
+  if (!"gating_method" %in% names(g)) return(out())
+  cel <- function(col, i) { if (!col %in% names(g)) return("")
+    v <- g[[col]][i]; if (is.null(v) || length(v) == 0 || is.na(v)) "" else trimws(as.character(v)) }
+  for (i in seq_len(nrow(g))) {
+    al <- cel("alias", i)
+    ## Commented-out reference rows are ignored by the whole pipeline, so they are ignored here.
+    if (nzchar(al) && startsWith(al, "#")) next
+    meth <- cel("gating_method", i); pp <- cel("preprocessing_method", i)
+    if (!nzchar(meth)) next
+    where <- sprintf("gating_template row %d (alias '%s')", i + 1L, if (nzchar(al)) al else "<blank>")
+    methCostain <- grepl("costain", meth, ignore.case = TRUE)
+    ppCostain   <- grepl("costain", pp,   ignore.case = TRUE)
+    if (methCostain && !ppCostain) {
+      fatal <- c(fatal, sprintf(paste0("  %s: gating_method '%s' is floored at the Costain value, but ",
+                                       "preprocessing_method is %s. Without it the floor is -Inf and the ",
+                                       "gate silently becomes the un-floored method. Set ",
+                                       "preprocessing_method = pp_costain_floor (or pp_auto2_costain for ",
+                                       "gate_auto2_costain)."),
+                                where, meth, if (nzchar(pp)) sprintf("'%s'", pp) else "blank"))
+      next
+    }
+    if (!ppCostain) next
+    spec <- .actaPpArgSpec(pp)
+    if (is.null(spec)) {
+      fatal <- c(fatal, sprintf(paste0("  %s: preprocessing_method '%s' names no known function, so it ",
+                                       "cannot be registered and the Costain floor would never be computed."),
+                                where, pp))
+      next
+    }
+    if (!methCostain)
+      notes <- c(notes, sprintf(paste0("  %s: preprocessing_method '%s' computes a Costain floor, but ",
+                                       "gating_method '%s' never reads it. The floor is discarded."),
+                                where, pp, meth))
+    have <- .actaArgNames(cel("preprocessing_args", i))
+    miss <- setdiff(spec$required, have)
+    if (length(miss))
+      fatal <- c(fatal, sprintf(paste0("  %s: preprocessing_args is missing %s for '%s'. It has no default ",
+                                       "the plugin can stand behind -- a value is substituted silently, so ",
+                                       "the gate would rest on a percentile nobody chose."),
+                                where, paste(sprintf("`%s`", miss), collapse = ", "), pp))
+    unk <- setdiff(have, spec$all)
+    if (length(unk))
+      fatal <- c(fatal, sprintf(paste0("  %s: preprocessing_args names %s, which '%s' does not accept. ",
+                                       "Every plugin takes `...`, so the value is swallowed in silence and ",
+                                       "the default is used instead. Accepted: %s."),
+                                where, paste(sprintf("`%s`", unk), collapse = ", "), pp,
+                                paste(spec$all, collapse = ", ")))
+  }
+  out()
+}
+
+## Does this gating template actually need a Costain well?
+##
+## The Costain requirement exists for one reason: the *_costain gating plugins build their
+## boundary on a floor that pp_costain_floor / pp_auto2_costain derive from that well. A template
+## naming none of them never asks for a floor, so requiring the well was ACTA enforcing a rule on
+## behalf of code that was not going to run.
+##
+## MATCHED ON THE SUBSTRING "costain", case-insensitively, over gating_method AND
+## preprocessing_method -- not against a list of the five method names. A list has to be edited
+## every time a plugin joins the family and the cost of forgetting is silent: the new method
+## would run with a -Inf floor and still produce numbers. A substring cannot miss a member of
+## the family, which is the direction that matters here.
+##
+## FAILS CLOSED. A template that is NULL, not a data frame, empty, or carries neither column
+## returns TRUE, keeping the old hard requirement. Relaxing on a template we could not read is
+## the one bug in here worth caring about, so every uncertain path answers "required".
+actaTemplateNeedsCostain <- function(gating_template) {
+  if (is.null(gating_template) || !is.data.frame(gating_template) || !nrow(gating_template))
+    return(TRUE)
+  ## Commented-out reference rows (alias starting '#') are ignored by the whole pipeline, so a
+  ## `#Reagent` example naming a *_costain method must not pin the requirement on -- the shipped
+  ## TEMPLATE carries several. The template reaching actaPrevalidate() is already filtered, but
+  ## doing it here too makes the answer independent of call order.
+  if ("alias" %in% names(gating_template)) {
+    a <- trimws(as.character(gating_template$alias))
+    gating_template <- gating_template[!is.na(a) & nzchar(a) & !startsWith(a, "#"), , drop = FALSE]
+    if (!nrow(gating_template)) return(TRUE)
+  }
+  cols <- intersect(c("gating_method", "preprocessing_method"), names(gating_template))
+  if (!length(cols)) return(TRUE)
+  any(vapply(cols, function(cn)
+    any(grepl("costain", as.character(gating_template[[cn]]), ignore.case = TRUE)),
+    logical(1)))
+}
+
 ## Validate the LAYOUT, per antibody group, BEFORE any FCS is read -- a layout mistake should
 ## surface in seconds with the offending wells named, not minutes later as something cryptic.
 ## Severity is matched to what each condition actually does downstream:
@@ -2818,23 +3188,29 @@ actaOpcScrub <- function(path) {
 ##          SI, which is ambiguous when two wells share a volume.
 ##          NOTE the check covers `Stain` wells ONLY -- Unstained and Costain are both
 ##          StainQty 0 by construction, so including them would flag every group.
-##  ERROR   no Costain well. This is the one that used to fail obscurely: costainPosition
-##          becomes NA, boundaryIndex becomes NA, and gs[[NA]] throws
-##          "The data to be assigned is missing sample: NA". It also makes pp_costain_floor
-##          hand back a -Inf floor, silently degrading a *_costain gate to un-floored flowMeans.
-##  ERROR   more than one Costain well. This was once a warning, on the grounds that the pp_*
-##          plugins pool all Costain events for the quantile and the script's channel lookup
-##          takes [1] -- but pooling means the floor the gate is built on belongs to no single
-##          well, so it is fatal alongside the zero case. The header said WARNING here long
-##          after the code stopped agreeing.
+##  ERROR   not exactly one Costain well -- BUT ONLY WHEN A GATE READS THE FLOOR, which is what
+##          `costain_required` says and actaTemplateNeedsCostain() decides. Zero makes
+##          pp_costain_floor hand back a -Inf floor, silently degrading a *_costain gate to the
+##          un-floored method underneath; more than one POOLS their events for the quantile, so
+##          the floor the gate is built on belongs to no single well. Both produce numbers and
+##          neither announces itself, which is why they are fatal rather than warnings.
+##          This was once unconditional, and it blocked a layout it had no stake in: a template
+##          gating on `boundary` + `gate_flowmeans` alone never asks for a floor, so the well it
+##          would have been computed from is just another control. The old header also justified
+##          the zero case with a downstream crash (costainPosition NA -> gs[[NA]]); that has not
+##          been reachable since boundaryIndex learnt to tolerate an NA costainPosition, so the
+##          silent -Inf floor is the whole of the reason now.
 ##  WARNING more than one Unstained well -- harmless, they are all dropped before gating.
-##  TOLERATED, silently: NO Unstained well. It is not required. Costain sets the gate floor and
-##          is; Unstained is dropped before gating and contributes nothing to the result, so a
-##          group without one is a legitimate layout, not an omission.
+##  TOLERATED, silently: NO Unstained well. It is dropped before gating and contributes nothing
+##          to the result, so a group without one is a legitimate layout, not an omission.
+##  TOLERATED, silently: ANY number of Costain wells when costain_required is FALSE -- including
+##          none, and including several. Nothing reads them, so ACTA has no opinion. Deliberately
+##          not even a note: the same layout becomes fatal the moment a Reagent row is switched
+##          to a *_costain method, which is the point at which it starts to matter.
 ##
 ## Groups whose Dirname is NA are ignored, matching how `antibody` is derived.
 validateLayoutGroups <- function(metadata, groups, digits = 6, stop_on_error = TRUE,
-                                 return_all = FALSE) {
+                                 return_all = FALSE, costain_required = TRUE) {
   ## Sliced per TITRATION, not per folder. `metadata$Dirname == ab` was right only while the two
   ## meant the same thing: handed a titration KEY it matches nothing, and every group came back
   ## empty as "0 Costain wells -- exactly one is required" naming an Alias. Handed a folder that
@@ -2858,11 +3234,13 @@ validateLayoutGroups <- function(metadata, groups, digits = 6, stop_on_error = T
       fatal <- c(fatal, sprintf("  %s: duplicate StainQty %s (wells %s)", where,
                                 paste(dup, collapse = ", "),
                                 paste(well[idx][!is.na(v) & v %in% dup], collapse = ", ")))
-    ## EXACTLY one Costain per group. Zero leaves the gate floor at -Inf (no floor at all, which
-    ## looks like a successful run); more than one silently POOLS their events into one floor, so
-    ## the number the gate is built on belongs to no single well. Both are now fatal.
+    ## EXACTLY one Costain per group, WHEN A GATE READS THE FLOOR. Zero leaves it at -Inf (no
+    ## floor at all, which looks like a successful run); more than one silently POOLS their
+    ## events into one floor, so the number the gate is built on belongs to no single well.
+    ## Both are fatal. When nothing reads the floor the count is not ACTA's business -- see the
+    ## header for why that case is silent rather than a note.
     nCo <- which(isLayoutValue(st, "Costain"))
-    if (length(nCo) != 1)
+    if (costain_required && length(nCo) != 1)
       fatal <- c(fatal, sprintf("  %s: %d Costain wells%s -- exactly one is required (it sets the gate floor)",
                                 where, length(nCo),
                                 if (length(nCo)) sprintf(" (%s)", paste(well[nCo], collapse = ", ")) else ""))
@@ -3237,11 +3615,29 @@ actaPrevalidateRecords <- function(metadata, gating_template, info, groups, fcs_
         else "gating_template has no alias / dims columns", GT)
   }
 
-  ## Layout-level checks (duplicate StainQty, exactly one Costain) folded into the same report.
+  ## Layout-level checks (duplicate StainQty, Costain count) folded into the same report.
   ## validateLayoutGroups() still emits its own warning() for the notes, so the console behaviour
   ## is unchanged; return_all only hands the same strings back for the record list.
-  lg <- validateLayoutGroups(metadata, groups, stop_on_error = FALSE, return_all = TRUE)
-  resolve("layout_groups", "Unique StainQty and exactly one Costain per group", lg$fatal, LP)
+  ##
+  ## WHETHER a Costain well is required is read off the gating template rather than assumed. The
+  ## check's TITLE moves with it: a record that says it checked for a Costain well when it did
+  ## not is worse than no record, because the pre-flight report is what an analyst reads to find
+  ## out what was verified.
+  ## The floor can go missing two ways: no Costain WELL (below) and no preprocessing METHOD or
+  ## argument to compute it from (here). Only the first had a check.
+  ca <- actaCostainArgIssues(gating_template)
+  resolve("costain_preprocessing", "Costain gating methods carry the preprocessing they need",
+          ca$fatal, GT)
+  for (n in ca$notes)
+    add("costain_preprocessing_unused", "Costain preprocessing is actually read", "warn", n, GT)
+
+  needCo <- actaTemplateNeedsCostain(gating_template)
+  lg <- validateLayoutGroups(metadata, groups, stop_on_error = FALSE, return_all = TRUE,
+                             costain_required = needCo)
+  resolve("layout_groups",
+          if (needCo) "Unique StainQty and exactly one Costain per group"
+          else "Unique StainQty per group (no gating method reads a Costain floor)",
+          lg$fatal, LP)
   for (n in lg$notes) add("unstained_multiple", "Unstained wells per group", "warn", n, LP)
 
   recs
@@ -4061,12 +4457,55 @@ actaRestorePData <- function(gs, fs, quiet = FALSE) {
   invisible(gs)
 }
 
+## TWO Info-sheet SHAPES, one accessor. The sheet began life WIDE -- one column per setting, one
+## value row -- which does not survive growth: every new setting is another column dragged off the
+## right-hand edge, and there is nowhere to write what a setting MEANS. ACFA's Info sheet is LONG
+## instead (Category | Variable | Value | Description), which groups related settings and carries
+## its own documentation. ACTA now reads both.
+##
+## Detection is on the COLUMN NAMES, not on the shape: a long sheet is the one with both a
+## `Variable` and a `Value` column. Counting rows or columns would be a guess -- a wide sheet with
+## two value rows and a long sheet with two settings are the same size.
+actaInfoIsLong <- function(info) {
+  if (is.null(info) || !is.data.frame(info) || !ncol(info)) return(FALSE)
+  bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", tolower(trimws(names(info)))))
+  all(c("variable", "value") %in% bare)
+}
+
+## Long -> wide, so everything downstream keeps working unchanged. Returns a ONE-ROW data frame
+## with a column per Variable, which is exactly the shape the wide sheet already had.
+##
+## Blank Variable cells are SKIPPED rather than becoming an empty column name: a long sheet is
+## written by hand and spacer rows between category blocks are the natural way to lay one out.
+## A repeated Variable keeps the FIRST non-blank value and warns -- silently taking the last would
+## make a copy-paste slip change a run's settings with nothing on screen to say so.
+actaInfoAsWide <- function(info) {
+  if (!actaInfoIsLong(info)) return(info)
+  bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", tolower(trimws(names(info)))))
+  var <- trimws(as.character(info[[which(bare == "variable")[1]]]))
+  val <- trimws(as.character(info[[which(bare == "value")[1]]]))
+  keep <- !is.na(var) & nzchar(var)
+  var <- var[keep]; val <- val[keep]
+  dup <- unique(var[duplicated(var)])
+  if (length(dup))
+    warning(sprintf("Info sheet repeats %d setting(s): %s. The first value of each is used.",
+                    length(dup), paste(dup, collapse = ", ")))
+  first <- !duplicated(var)
+  out <- as.data.frame(as.list(stats::setNames(val[first], var[first])),
+                       stringsAsFactors = FALSE, check.names = FALSE)
+  if (!nrow(out)) out <- out[1, , drop = FALSE]
+  out
+}
+
 ## One Info-sheet lookup, generalising the match-on-lowercased-name / first-non-blank-cell pattern
 ## that actaCompMode(), actaCompLabel() and the MM_R2_threshold read each spell out separately.
 ## Header annotations are tolerated: the sheet writes `miflowcyt_export (L)` and `dashboard_creation
-## (L)`, so a caller asking for "miflowcyt_export" must still find it.
+## (L)`, so a caller asking for "miflowcyt_export" must still find it. A LONG sheet is pivoted
+## first, so every existing caller reads either layout without knowing which it got.
 actaInfoValue <- function(info, field) {
   if (is.null(info) || !is.data.frame(info) || !nrow(info)) return(NA_character_)
+  if (actaInfoIsLong(info)) info <- actaInfoAsWide(info)
+  if (!nrow(info)) return(NA_character_)
   nm  <- tolower(trimws(names(info)))
   bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", nm))     # drop a trailing "(N)" / "(L)"
   hit <- match(tolower(trimws(field)), nm)
@@ -4398,7 +4837,16 @@ actaMiFlowCyt <- function(stats, info, gating_template = NULL, qcList = NULL, ga
   ## duplicating them: the sheet is the executable definition, and a prose copy would be a second
   ## source of truth that nothing keeps honest.
   analysis <- list(
-    data_files = if ("name" %in% names(stats))
+    ## THE PATHS AS SHIPPED, not ACTA's canonical labels.
+    ##
+    ## `name` is an internal label -- plate, well, target, stain type, quantity, operator -- and
+    ## it MATCHES NO FILE ON DISK: 0 of 11 rows matched by name in the reference bundle, 11 of 11
+    ## by fcs_file. A reader following 4.1 to find the data found nothing. `fcs_file` is the path
+    ## relative to Titration_FCS/, which is exactly what the bundle contains.
+    data_files = if ("fcs_file" %in% names(stats))
+                   data.frame(file = file.path("Titration_FCS", .mfcUniq(stats, "fcs_file")),
+                              stringsAsFactors = FALSE)
+                 else if ("name" %in% names(stats))
                    data.frame(file = .mfcUniq(stats, "name"), stringsAsFactors = FALSE)
                  else data.frame(file = character(0), stringsAsFactors = FALSE),
     compensation = comp,
@@ -4452,12 +4900,16 @@ actaMiFlowCyt <- function(stats, info, gating_template = NULL, qcList = NULL, ga
 ## Normalise the Info sheet's `compensation` cell to one of "csv" / "self" / "none".
 ## An absent sheet, absent column, blank cell or NA all mean "none" -- compensation is opt-in,
 ## so a workbook written before this column existed keeps working untouched.
+## READ THROUGH actaInfoValue(), NOT off the column names. This matched a COLUMN called
+## "compensation", which only exists on the WIDE sheet -- and every workbook ACTA ships is LONG
+## (Category | Variable | Value | Description), so the setting was invisible and every run fell
+## through to identity. OQ_Test2 asked for `csv`, ran uncompensated, and its pre-flight reported
+## "pass -- Info!compensation is blank": the exact silent-uncompensated outcome the warning below
+## exists to prevent, arriving by a route the warning could not see. actaDownsampleTo twenty lines
+## away was already long-aware; this was simply never migrated with it.
 actaCompMode <- function(info, quiet = FALSE) {
-  if (is.null(info) || !is.data.frame(info) || !nrow(info)) return("none")
-  hit <- match("compensation", tolower(trimws(names(info))))
-  if (is.na(hit)) return("none")
-  v <- trimws(as.character(info[[hit]][1]))
-  if (is.na(v) || !nzchar(v) || toupper(v) == "NA") return("none")
+  v <- actaInfoValue(info, "compensation")
+  if (is.na(v)) return("none")
   m <- tolower(v)
   if (!m %in% c("csv", "self")) {
     ## Named loudly on purpose: a typo like "CSV " or "spill" must not silently become "no
@@ -4476,16 +4928,14 @@ actaCompMode <- function(info, quiet = FALSE) {
 ## applied. The caption reports what the workbook asked for; what ACTA did with it is logged at
 ## run time by actaCompensate(). An empty cell shows as an em dash, matching how gateCaption()
 ## renders every other unset field.
+## CAPTION FORM, and only that. The em dash is a DISPLAY sentinel for a blank cell, matching how
+## gateCaption() renders every other unset field -- it is not the cell. Anything that needs the
+## cell itself calls actaInfoValue(info, "compensation"); handing this string to a consumer that
+## tests for blankness makes a blank cell look populated, which is how a literal U+2014 reached
+## the report's LaTeX as \texttt{---} and showed up as a stray glyph on the Compensation page.
 actaCompLabel <- function(info) {
-  raw  <- ""
-  if (!is.null(info) && is.data.frame(info) && nrow(info)) {
-    hit <- match("compensation", tolower(trimws(names(info))))
-    if (!is.na(hit)) {
-      v <- trimws(as.character(info[[hit]][1]))
-      if (!is.na(v) && nzchar(v) && toupper(v) != "NA") raw <- v
-    }
-  }
-  if (!nzchar(raw)) "\u2014" else raw
+  raw <- actaInfoValue(info, "compensation")
+  if (is.na(raw)) "\u2014" else raw
 }
 
 ## Pull one frame's acquisition-time spillover matrix. Keyword order is deliberate: the FCS3.1
@@ -4616,7 +5066,7 @@ actaCompensate <- function(fs, mode = "none", wd = getwd(), quiet = FALSE) {
 ## Every check carries a stable `id`. The statement is prose and will be reworded; the id is what
 ## the export column (QC_<id>) and the report table key on, so neither breaks when the wording does.
 ## HARMONISED VOCABULARY. Every QC column -- the roll-up and each QC_<id> -- reports one of
-## PASS / FAIL / SKIPPED and nothing else. This used to put the free-text reason in `verdict`, so
+## PASS / FAIL / SKIPPED / N/A and nothing else. This used to put the free-text reason in `verdict`, so
 ## a skipped check wrote a whole sentence ("No Costain SI, QC skipped") into a column whose
 ## siblings held a single word, and the report matrix inherited it as an unreadable cell. The
 ## reason is kept in `note`, which is where an explanation belongs.
@@ -4626,10 +5076,36 @@ actaCompensate <- function(fs, mode = "none", wd = getwd(), quiet = FALSE) {
 .actaQCSkip <- function(id, statement, why) list(id = id, statement = statement,
                                                 verdict = "SKIPPED", note = why, passed = NA)
 
+## NOT APPLICABLE -- a different thing from SKIPPED, and the difference is the whole point.
+## SKIPPED means "this check should have run and could not": something was missing that ought to
+## have been there, so it counts against the roll-up. N/A means "there is nothing here to check,
+## by design": the layout legitimately has no Costain well because no gating method reads the
+## Costain floor, which validateLayoutGroups() now permits. Rolling that up as FAIL would put a
+## permanent red verdict on a layout ACTA explicitly supports -- and a FAIL that everyone learns
+## to ignore is worse than no check at all.
+##
+## WHAT MAKES THIS SAFE is the pre-flight invariant: when ANY gating method reads the floor,
+## exactly one Costain well is still mandatory and the run stops without it. So by the time a
+## check sees no Costain well, it is because none was required. The two facts have to stay
+## joined -- if the pre-flight ever stops enforcing that, this quietly becomes a way to lose a
+## real failure, which is why tests/legacy/test_qc_rollup.R asserts both halves together.
+##
+## `applicable` is the field the roll-up reads, and this is the ONLY constructor that sets it
+## FALSE. One constructor setting both it and the verdict keeps them from drifting apart.
+.actaQCNotApplicable <- function(id, statement, why)
+  list(id = id, statement = statement, verdict = "N/A", note = why, passed = NA,
+       applicable = FALSE)
+
 ## Roll up one antibody's checks into a single PASS/FAIL for the titration export.
-## PASS only if EVERY check passed; a failed OR skipped check yields FAIL, since a check that never
-## ran is not evidence of quality.
+## PASS only if EVERY APPLICABLE check passed; a failed OR skipped check yields FAIL, since a
+## check that never ran is not evidence of quality. A check marked NOT APPLICABLE is excluded
+## rather than counted against the run -- see .actaQCNotApplicable() for why those are different.
+##
+## A set with NOTHING applicable in it still reads FAIL. That is the no-checks case wearing a
+## different hat, and the rule it keeps is the same one: an empty QC is not a pass.
 actaQCStatus <- function(checks) {
+  if (!length(checks)) return("FAIL")
+  checks <- Filter(function(c) !identical(c$applicable, FALSE), checks)
   if (!length(checks)) return("FAIL")
   ok <- vapply(checks, function(c) isTRUE(c$passed), logical(1))
   if (all(ok)) "PASS" else "FAIL"
@@ -4732,6 +5208,52 @@ actaQCPercentAbove <- function(gs, alias, threshold, statement, id = tolower(ali
   out
 }
 
+## THE CO-STAIN MUST NOT BE MOSTLY POSITIVE. The Costain well carries the panel WITHOUT the
+## titrated antibody, so at a correctly placed marker gate almost none of it is positive. More
+## than a few percent means the gate is cutting through the co-stain, and every Stain Index in
+## the group is measured against a boundary that is in the wrong place.
+##
+## IT IS A GATING-TEMPLATE CHECK. The two things it catches are a mis-set `costain_quantile`
+## (0.90 puts 10% of the Costain above the floor by construction) and a Reagent row using a
+## method that is not in the gate_*_costain family, so no floor is applied at all -- a plain
+## gate_flowmeans run read 46% here. FAIL means go and fix the gating_template.
+##
+## WHAT IT DOES NOT CATCH, said plainly so it is not filed as covering more than it does: with a
+## correctly floored gate at quantile 0.99 the figure is 1.00% BY CONSTRUCTION, whatever shape the
+## Costain has. A Costain that is genuinely bimodal still passes. That is an unmixing problem, not
+## a gating one, and it belongs to unmixing QC rather than here.
+##
+## THE 5% IS FIXED AND DELIBERATELY NOT TIED TO costain_quantile. Reading the threshold off the
+## quantile would make the test agree with itself whatever the quantile was -- which is precisely
+## the failure mode it exists to catch.
+ACTA_QC_COSTAIN_MAX_PCT <- 5
+
+actaQCCostainPositive <- function(si, threshold = ACTA_QC_COSTAIN_MAX_PCT) {
+  st <- sprintf("Co-stain is less than %g%% positive", threshold)
+  id <- "costain_positive"
+  if (is.null(si) || !nrow(si) || !all(c("StainType", "percent") %in% names(si)))
+    return(.actaQCSkip(id, st, "No per-sample percent table, QC skipped"))
+  co <- si[isLayoutValue(si$StainType, "Costain"), , drop = FALSE]
+  ## No Costain well at all -- not a skip. The pre-flight guarantees one exists whenever a
+  ## gating method reads the floor, so reaching here means none was required.
+  if (!nrow(co))
+    return(.actaQCNotApplicable(id, st, "No Costain well in this layout, and no gating method reads a Costain floor"))
+  ## `percent` is a FRACTION here, as it is everywhere upstream of the report.
+  pc <- suppressWarnings(as.numeric(co$percent)) * 100
+  pc <- pc[is.finite(pc)]
+  if (!length(pc)) return(.actaQCSkip(id, st, "Costain percent not finite, QC skipped"))
+  worst <- max(pc)
+  out <- .actaQCVerdict(id, st, worst < threshold)
+  if (!isTRUE(out$passed))
+    out$note <- sprintf(paste0("Costain is %.1f%% positive (threshold %g%%) in %d of %d well(s) -- ",
+                               "the marker gate is cutting through the co-stain. Check the ",
+                               "gating_template's Reagent row: it should use a gate_*_costain ",
+                               "method with preprocessing_method = pp_costain_floor, and a ",
+                               "costain_quantile near 0.99."),
+                        worst, threshold, sum(pc >= threshold), length(pc))
+  out
+}
+
 ## Every check for one GatingSet, in report order. APPEND HERE to add a QC.
 ## The Costain is the background control: every titration dose should stain ABOVE it. If it does
 ## not, the series never separated from background, and maxSI_StainQty lands on the Costain well --
@@ -4742,10 +5264,17 @@ actaQCCostainLowest <- function(si) {
   st <- "Costain SI is the lowest in the group"
   if (is.null(si) || !nrow(si) || !all(c("StainType", "SI") %in% names(si)))
     return(.actaQCSkip("costain_lowest", st, "No per-sample SI table, QC skipped"))
+  ## NO COSTAIN ROWS and NO FINITE COSTAIN SI are different failures and get different verdicts.
+  ## Testing only `!length(co)` after the finite filter conflated them, so a layout with no
+  ## Costain well and a Costain whose SI came back NaN both read "No Costain SI, QC skipped".
+  hasCo <- any(isLayoutValue(si$StainType, "Costain"))
   co <- suppressWarnings(as.numeric(si$SI[isLayoutValue(si$StainType, "Costain")]))
   sa <- suppressWarnings(as.numeric(si$SI[isLayoutValue(si$StainType, "Stain")]))
   co <- co[is.finite(co)]; sa <- sa[is.finite(sa)]
-  if (!length(co)) return(.actaQCSkip("costain_lowest", st, "No Costain SI, QC skipped"))
+  if (!hasCo)
+    return(.actaQCNotApplicable("costain_lowest", st,
+                                "No Costain well in this layout, and no gating method reads a Costain floor"))
+  if (!length(co)) return(.actaQCSkip("costain_lowest", st, "Costain SI not finite, QC skipped"))
   if (!length(sa)) return(.actaQCSkip("costain_lowest", st, "No Stain SI to compare, QC skipped"))
   out <- .actaQCVerdict("costain_lowest", st, min(co) <= min(sa))
   ## A note only on FAIL, as `live` and `min_events` already do. This was the ONE check that failed
@@ -4825,6 +5354,7 @@ actaQCChecks <- function(gs, si = NULL) {
     actaQCPercentAbove(gs, "Live",         50, "More than 50% Live cells",      id = "live"),
     actaQCPercentAbove(gs, "Single_cells", 80, "More than 80% single cells",    id = "single_cells"),
     actaQCCostainLowest(si),
+    actaQCCostainPositive(si),
     actaQCMinEvents(gs, 100, si)
   )
 }
@@ -4885,13 +5415,38 @@ actaMichaelisMenten <- function(volume, si) {
     ## The self-start derives its guess from a Lineweaver-Burk style linearisation, which falls
     ## over on a series that turns over. Retry from explicit data-driven starts, bounded via the
     ## "port" algorithm so neither parameter can go negative on the way.
-    b0 <- max(y, na.rm = TRUE) * 1.2
-    k0 <- stats::median(v[v > 0], na.rm = TRUE)
-    if (!is.finite(b0) || b0 <= 0 || !is.finite(k0) || k0 <= 0) {
+    ## A LADDER OF STARTS, not one guess.
+    ##
+    ## The single start this used -- 1.2 x the highest SI, and the median dose as Km -- is a poor
+    ## Km estimate for a series that saturates early, and "port" then stops at "false convergence
+    ## (8)" without reaching the optimum. Measured, not theorised: on 200 series within +-3% of
+    ## the shipped Strep-PE data it failed 42 times, while the optimum existed in every case.
+    ## A report of exactly this failure came in from outside, and a single run on the unperturbed
+    ## data had looked fine -- the fault is intermittent in the input, not absent.
+    ##
+    ## Km is by definition the dose at half-maximal signal, so the FIRST candidate reads that off
+    ## the data instead of guessing the median. The rest are spread around it, and the first start
+    ## that converges wins; they cost microseconds and only run when the self-start has failed.
+    b0 <- max(y, na.rm = TRUE)
+    pos <- v[v > 0]
+    if (!is.finite(b0) || b0 <= 0 || !length(pos)) {
       out$note <- "no usable starting values"; return(out)
     }
-    fit <- try(stats::nls(y ~ Vmax * v / (Km + v), start = list(Vmax = b0, Km = k0),
-                          algorithm = "port", lower = c(Vmax = 0, Km = 1e-9)), silent = TRUE)
+    ## Lowest dose whose SI is at least half the maximum -- the empirical Km.
+    half <- v[is.finite(y) & y >= b0 / 2 & v > 0]
+    kHalf <- if (length(half)) min(half) else stats::median(pos, na.rm = TRUE)
+    starts <- list(c(b0 * 1.05, kHalf),
+                   c(b0 * 1.2,  stats::median(pos, na.rm = TRUE)),
+                   c(b0,        kHalf / 3),
+                   c(b0 * 1.5,  kHalf * 3),
+                   c(b0,        min(pos, na.rm = TRUE)),
+                   c(b0 * 2,    stats::quantile(pos, 0.25, names = FALSE, na.rm = TRUE)))
+    for (st in starts) {
+      if (!all(is.finite(st)) || any(st <= 0)) next
+      fit <- try(stats::nls(y ~ Vmax * v / (Km + v), start = list(Vmax = st[1], Km = st[2]),
+                            algorithm = "port", lower = c(Vmax = 0, Km = 1e-9)), silent = TRUE)
+      if (!inherits(fit, "try-error")) break
+    }
   }
   if (inherits(fit, "try-error")) { out$note <- .actaMichaelisMentenWhy(v, y); return(out) }
 
@@ -5719,8 +6274,54 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
                       if (isTRUE(plots) && dir.exists(d) &&
                           isTRUE(any(file.mtime(list.files(d, full.names = TRUE)) >= .wall0)))
                         d else NA_character_ },
-    env           = env
+    env           = env,
+    ## THE THREE TIMES, and they are three because the render wraps the analysis rather than
+    ## following it: with report = TRUE the .Rmd sources the pipeline script. analysis_min is
+    ## measured inside the script (ACTA_T0, stamped on the export as time_taken_min);
+    ## total_min is this function's own wall clock; report_min is what is left over.
+    ## Taken from the script, NOT recomputed here. ACTA_T0 is the analysis START, so measuring
+    ## from it at this point would return the total and call it the analysis -- the two differ by
+    ## exactly the render this field exists to exclude.
+    analysis_min  = { v <- pick("ACTA_ANALYSIS_MIN")
+                      if (is.null(v) || !length(v)) NA_real_ else as.numeric(v[1]) },
+    total_min     = round(as.numeric(difftime(Sys.time(), .wall0, units = "mins")), 1)
   )
+  ## report_min is a DIFFERENCE, so it is only meaningful when both ends were measured, and it is
+  ## clamped at zero: the two clocks start microseconds apart and a -0.0 would read as a defect.
+  out$report_min <- if (is.na(out$analysis_min)) NA_real_ else
+                      max(0, round(out$total_min - out$analysis_min, 1))
+
+  ## ---- TiterPubs bundles, built LAST ----------------------------------------------------------
+  ## Here and not in the pipeline script, because the script runs INSIDE the report render when
+  ## report = TRUE: at its final statement the figures are on disk but the run is not over. By
+  ## this point every artefact either exists or never will, which is the only moment a bundle can
+  ## be assembled honestly.
+  ##
+  ## Wrapped in tryCatch because a submission bundle is a CONVENIENCE, not a result. A run whose
+  ## analysis, export, plots and report all succeeded must not be reported as failed because a
+  ## template could not be filled -- the numbers on disk are unaffected either way.
+  .tp <- pick("ACTA_TITERPUBS")
+  if (!is.null(.tp) && is.list(.tp)) {
+    .tpl <- actaTiterPubsTemplate(code_dir)
+    if (is.na(.tpl)) {
+      warning("Info!titerpubs_export is TRUE but no TiterPubs_template_v*.xlsx was found beside ",
+              "the instructions template; no bundle written.", call. = FALSE)
+    } else {
+      out$titerpubs_bundles <- tryCatch(
+        actaTiterPubsBundle(stats = .tp$stats, info = .tp$info, outputs_dir = version_dir,
+                            run_dir = version_dir, template = .tpl, tp = .tp$tp,
+                            gating = .tp$gating, keys = .tp$keys, panels = .tp$panels),
+        error = function(e) {
+          ## RECORDED ON THE RETURN, not only warned. The run is still a success -- that is the
+          ## deliberate choice above -- but a bundle that failed its LEAK SCAN is a different
+          ## kind of event from a template that could not be filled, and warning() alone puts it
+          ## somewhere a reader scrolls past. $titerpubs_error makes it checkable by a caller and
+          ## printable by anyone who wants to know whether a submission is ready.
+          out$titerpubs_error <<- conditionMessage(e)
+          warning(sprintf("TiterPubs bundle failed: %s", conditionMessage(e)), call. = FALSE)
+          NULL })
+    }
+  }
   out
 }
 
@@ -6213,13 +6814,25 @@ actaScanExports <- function(dir, dashboard_html = NA_character_) {
 ## curve that turns over cannot be represented by one, in which case Vmax is pushed above every
 ## observed SI and 9*Km lands outside the doses actually tested. Handing that back as a one-click
 ## titer would recommend a concentration nobody measured.
+## `stats` MUST BE THE PER-WELL TABLE, not the per-reagent export sheet.
+##
+## The range check needs every dose the reagent was titrated at. Handed the TitrationExport sheet
+## -- one row per reagent, holding only its max-SI well -- min(vols) and max(vols) collapse to
+## that single dose, and the check becomes "v90 must equal the max-SI dose". The app did exactly
+## that, so the 90%Vmax option was withheld from every reagent whose optimum fell anywhere else,
+## with the self-refuting message "0.302 uL is outside the tested range (5-5 uL)".
 actaTiterOptions <- function(mmFits, stats, r2_threshold = 0.9) {
   if (is.null(mmFits) || !nrow(mmFits)) return(list())
   key <- if ("Dirname" %in% names(mmFits)) "Dirname" else names(mmFits)[1]
   lapply(seq_len(nrow(mmFits)), function(i) {
     ab   <- as.character(mmFits[[key]][i])
+    ## THE TESTED RANGE IS THE NON-ZERO DOSES. Every titration includes an unstained and a
+    ## costain well at StainQty 0, and counting those makes the lower bound 0 -- so a 90%Vmax of
+    ## 0.0004 uL, forty times below the lowest dose anybody actually pipetted, sat inside "the
+    ## tested range" and was offered as a recommendation. Zero is not a dose that was tested; it
+    ## is the absence of one.
     vols <- suppressWarnings(as.numeric(stats$StainQty[stats$Dirname == ab]))
-    vols <- vols[is.finite(vols)]
+    vols <- vols[is.finite(vols) & vols > 0]
     maxV <- suppressWarnings(as.numeric(stats$maxSI_StainQty[stats$Dirname == ab][1]))
     r2   <- suppressWarnings(as.numeric(mmFits$MM_R2[i]))
     v90  <- suppressWarnings(as.numeric(mmFits$MM_90pct_Vmax[i]))
@@ -7286,8 +7899,13 @@ actaDependencyChecks <- function(version_dir, app_pkgs = c("shiny", "processx", 
           sprintf("%d missing: %s  --  %s", length(miss), paste(miss, collapse = ", "), hint),
           version_dir)
   }
+  ## THE HINT HAD TO CHANGE WITH THE BEHAVIOUR. It said "the script self-installs from CRAN then
+  ## Bioconductor on first run", which stopped being true when the pipeline was changed to REFUSE
+  ## rather than install unpinned into the library about to perform the analysis. A pre-flight
+  ## that tells you someone else will fix it, when nobody will, is worse than one that says
+  ## nothing: this is the screen a new user reads before their first run.
   chkSet("pkgs_script", "R packages the analysis needs", scriptPkgs,
-         "the script self-installs from CRAN then Bioconductor on first run")
+         'install.packages("BiocManager") then BiocManager::install(c(<the names above>)) -- the run refuses rather than installing them for you')
   chkSet("pkgs_app", "R packages the app needs", app_pkgs,
          'install.packages(c("shiny","processx","rmarkdown"))')
 
@@ -7313,6 +7931,29 @@ actaDependencyChecks <- function(version_dir, app_pkgs = c("shiny", "processx", 
         paste("not found -- clear \u201cGenerate report\u201d and the export is still written.",
               "To enable it: tinytex::install_tinytex(), or MacTeX from https://www.tug.org/mactex/"),
         "https://www.tug.org/mactex/")
+
+  ## --- pdftools: only needed to PUBLISH, hence warn -----------------------------------------
+  ##
+  ## WARN, NOT FAIL, AND IT IS IN Suggests ON PURPOSE. pdftools links poppler; making it a
+  ## load-time dependency is how ACTA 3.0 shipped unloadable on a Mac without XQuartz, so it
+  ## stays optional and this row is the place a user finds out they need it.
+  ##
+  ## WHY IT MATTERS ENOUGH TO CHECK AT ALL. The bundle leak scan reads the report PDF before a
+  ## TiterPubs bundle may be published, and the report is the one bundled artefact with no scrub
+  ## pass of its own. Without pdftools that reader cannot run, and the gate is fail-closed by
+  ## design, so the bundle is REFUSED AND DELETED -- correct, but baffling at the end of a run
+  ## that otherwise worked. `install_github()` does not install Suggests, so the default public
+  ## install does not have it, and nothing told anyone until the bundle vanished.
+  if (requireNamespace("pdftools", quietly = TRUE))
+    add("pdftools", "pdftools (to publish a TiterPubs bundle)", "pass", NA_character_,
+        NA_character_)
+  else
+    add("pdftools", "pdftools (to publish a TiterPubs bundle)", "warn",
+        paste("not installed -- only needed when Info!titerpubs_export = TRUE.",
+              "The bundle's leak scan reads the report PDF and refuses a bundle it cannot read,",
+              'so a run with the toggle on would build a bundle and then delete it.',
+              'To enable publishing: install.packages("pdftools")'),
+        NA_character_)
 
   ## --- LaTeX PACKAGES, not just the engine -------------------------------------------------
   ## Only when an engine exists: with no TeX at all the warning above is the whole story.
@@ -7631,6 +8272,26 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
   want("stats_rows", "Per-well statistics: row count", if (is.null(res$stats)) 0L else nrow(res$stats), "stats_rows")
   want("stats_cols", "Per-well statistics: column count", if (is.null(res$stats)) 0L else ncol(res$stats), "stats_cols")
   want("n_groups",   "Antibody groups analysed", length(res$antibody), "n_groups")
+
+  ## COMPENSATION MODE, ACTUALLY ASSERTED. expected.json has carried a `compensation` field since
+  ## OQ_Test2 was written and NOTHING EVER COMPARED IT -- so the case whose own why_this_case says
+  ## it exercises "the csv compensation path end-to-end" ran uncompensated while its baseline said
+  ## "csv", and the OQ reported PASS. Three other checks were blind to the same thing (the reader,
+  ## the pre-flight and the unit gate), which is precisely why the baseline has to be a comparison
+  ## and not a comment. Read off the run's OWN environment: compMode is the value actaCompensate()
+  ## was handed, not a re-derivation that could agree with the sheet while the run disagreed.
+  if (!is.null(exp) && !is.null(exp$compensation)) {
+    gotMode <- if (!is.null(res$env) && exists("compMode", envir = res$env, inherits = FALSE))
+                 as.character(get("compMode", envir = res$env))[1] else NA_character_
+    wantMode <- tolower(trimws(as.character(exp$compensation)[1]))
+    if (!wantMode %in% c("csv", "self")) wantMode <- "none"
+    add("compensation", "Compensation mode applied",
+        if (identical(gotMode, wantMode)) "pass" else "fail",
+        sprintf("expected %s, got %s%s", wantMode,
+                if (is.na(gotMode)) "NA (compMode not found in the run environment)" else gotMode,
+                if (!is.na(gotMode) && identical(gotMode, "none") && !identical(wantMode, "none"))
+                  " -- THE RUN WAS UNCOMPENSATED" else ""))
+  }
   if (!is.null(exp) && !is.null(exp$group))
     add("group", "Group name", if (identical(as.character(res$antibody), as.character(exp$group))) "pass" else "fail",
         ## Both sides collapsed: `group` may be an ARRAY for a multi-group case, and an
@@ -8449,11 +9110,10 @@ actaCompCsvCandidates <- function(dir) {
 ## no csv does not read as a failure when an override already supplies one.
 actaCompensationRecords <- function(info, wd, fcs_root = NA_character_, override = NA_character_,
                                     antibody = character(0)) {
-  raw  <- if (is.null(info) || !nrow(info)) NA_character_ else {
-    hit <- match("compensation", tolower(trimws(names(info))))
-    if (is.na(hit)) NA_character_ else trimws(as.character(info[[hit]][1]))
-  }
-  blank <- is.na(raw) || !nzchar(raw) || toupper(raw) == "NA"
+  ## Long OR wide -- see actaCompMode(). Reading the column names directly made this pre-flight
+  ## report "pass -- Info!compensation is blank" for a sheet that plainly said csv.
+  raw   <- actaInfoValue(info, "compensation")
+  blank <- is.na(raw)
   mode  <- if (blank) "" else tolower(raw)
   L <- "Compensation"
 

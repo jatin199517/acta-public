@@ -1,0 +1,560 @@
+## Master panel inventory lookup: where a costain panel's catalogue and vendor come from.
+##
+## A titration workbook already names the panel a reagent was costained in
+## (Layout_Plate!Costain_Panel_Iteration). A lab that keeps a panel inventory already records what
+## is IN that panel -- antigen, fluorochrome, vendor, catalogue, clone. Joining the two means the
+## run can report the costain panel's reagents without anybody retyping them into the layout, and
+## the retyping is where the errors were.
+##
+## PROVENANCE, NOT QC. This distinguishes ACTA from ACFA, where the same lookup gates a result
+## because the panel feeds patient data. Here a mismatch is REPORTED in the table and changes
+## nothing else: no gate fails, no number moves, no artefact is withheld. An inventory that is out
+## of date is a documentation problem, and failing a titration over one would be the wrong trade.
+##
+## Info!master_panel_inventory_path points at the workbook. Blank, missing, or unreadable all mean
+## "no inventory": the table is skipped and the run is otherwise identical.
+
+## The inventory's own column names, as the shipped template writes them. Matched case- and
+## space-insensitively so a lab that renamed a header slightly still resolves.
+ACTA_PI_COLS <- c(antigen = "Antigen", fluorochrome = "Fluorochrome",
+                  fl_alias = "Fluorochrome_Alias", marker_alias = "Marker_Alias",
+                  vendor = "Vendor", catalog = "Catalog", clone = "Clone",
+                  isotype = "Species / Isotype", type = "Type",
+                  iteration = "Panel Iteration")
+
+## Zero-width characters are endemic in hand-maintained inventories -- the real one carries a
+## U+200B on the end of "Streptavidin", which is invisible in Excel and makes every exact match
+## fail. Stripped on read, once, so nothing downstream has to know.
+.piNorm <- function(x) {
+  x <- as.character(x)
+  x <- gsub("[​-‍﻿­]", "", x)
+  x <- gsub(" ", " ", x)
+  trimws(gsub("[[:space:]]+", " ", x))
+}
+
+## WHERE THE INVENTORY LIVES. An explicit Info path wins; otherwise the shipped example template
+## is used, so the feature demonstrates itself on a fresh install instead of silently doing
+## nothing. Relative paths resolve against the run folder, which is how every other path in the
+## workbook behaves.
+## WHERE A PATH CAME FROM DECIDES WHAT AN UNMATCHED ITERATION MEANS, so every branch below says
+## so. "info" and "run_folder" are AUTHORITATIVE -- somebody chose that file for this run, so an
+## iteration missing from it is a real discrepancy worth reporting. "example" is a FALLBACK
+## nobody chose, and an iteration missing from it says nothing at all about the lab's inventory.
+## Collapsing the two is what made a real run report its real panel as unknown; see the
+## unknown_iteration / example_only split in actaPanelIterationTable().
+.piSrc <- function(path, src) { attr(path, "acta_inventory_source") <- src; path }
+
+actaPanelInventoryPath <- function(info = NULL, version_dir = NULL, code_dir = NULL) {
+  p <- if (is.null(info)) NA_character_ else actaInfoValue(info, "master_panel_inventory_path")
+  if (!is.na(p) && nzchar(p)) {
+    if (!grepl("^(/|[A-Za-z]:)", p) && !is.null(version_dir)) {
+      cand <- file.path(version_dir, p)
+      if (file.exists(cand)) return(.piSrc(normalizePath(cand, winslash = "/"), "info"))
+    }
+    if (file.exists(p)) return(.piSrc(normalizePath(p, winslash = "/"), "info"))
+    warning(sprintf("Info!master_panel_inventory_path points at '%s', which does not exist; the panel inventory table is skipped.", p),
+            call. = FALSE)
+    return(NA_character_)
+  }
+  ## AN INVENTORY SITTING IN THE RUN FOLDER WINS over the shipped example. This is what makes a
+  ## TiterPubs bundle self-describing: the bundle carries the panel it used, so a reader who
+  ## re-runs it resolves the same reagents instead of being silently matched against whatever
+  ## example happens to ship with their ACTA install -- or, with the iteration scrubbed to
+  ## "Iteration1", against nothing at all.
+  if (!is.null(version_dir) && dir.exists(version_dir)) {
+    loc <- list.files(version_dir, pattern = "Master_Panel_Inventory.*[.]xlsx$", full.names = TRUE)
+    loc <- loc[!grepl("^([~][$]|[.]_)", basename(loc))]
+    if (length(loc)) return(.piSrc(normalizePath(loc[1], winslash = "/"), "run_folder"))
+  }
+  ## A LAB-WIDE DEFAULT, so finding the inventory does not depend on every workbook carrying an
+  ## absolute path. A real run is why: its Info sheet was the legacy 9-column layout, which has no
+  ## master_panel_inventory_path column at all, so the report told the operator to set a row that
+  ## their workbook cannot hold -- while the lab's inventory did contain the panel all along.
+  ## Migrating every old workbook is a bandaid; one default is not.
+  ##
+  ## The ENV VAR WINS over the option: the option is the persistent setting (a line in .Rprofile),
+  ## the variable is the one-off override for a single run or a CI job.
+  ## TRIMMED: a cell or env var holding only spaces is not a setting, and treating it as one
+  ## produced a warning quoting '   ' at the operator.
+  labDefault <- trimws(Sys.getenv("ACTA_MASTER_PANEL_INVENTORY", unset = ""))
+  if (!nzchar(labDefault)) {
+    o <- getOption("acta.master_panel_inventory", default = NULL)
+    labDefault <- if (is.null(o)) "" else trimws(as.character(o)[1])
+  }
+  if (nzchar(labDefault)) {
+    ## file.exists() IS TRUE FOR A DIRECTORY. Without the dir.exists() guard a path pointing at a
+    ## folder was accepted and tagged "lab default", and the failure surfaced later as a readxl
+    ## complaint about 'raw = FALSE' -- a confusing error a long way from its cause.
+    if (file.exists(labDefault) && !dir.exists(labDefault))
+      return(.piSrc(normalizePath(labDefault, winslash = "/"), "lab_default"))
+    if (dir.exists(labDefault))
+      warning(sprintf(paste0("The lab default panel inventory ('%s') is a folder, not a workbook, ",
+                             "so it was skipped."), labDefault), call. = FALSE)
+    else
+    ## Said out loud rather than quietly falling through to the demo: a default that is set and
+    ## wrong is a configuration error, and the whole point of this branch is to stop the demo
+    ## standing in for the lab's inventory without anyone noticing.
+      warning(sprintf(paste0("The lab default panel inventory ('%s') does not exist, so it was skipped. ",
+                           "Set ACTA_MASTER_PANEL_INVENTORY or options(acta.master_panel_inventory=) ",
+                           "to a readable file."), labDefault), call. = FALSE)
+  }
+  ## The shipped example, found the same way the TiterPubs template is.
+  pat <- "^TEMPLATE_Master_Panel_Inventory\\.xlsx$"
+  cand <- character(0)
+  if (!is.null(code_dir) && nzchar(code_dir))
+    cand <- c(cand, file.path(code_dir, "Template"), file.path(dirname(code_dir), "Template"))
+  inst <- tryCatch(system.file("pipeline", "Template", package = "ACTA"), error = function(e) "")
+  if (nzchar(inst)) cand <- c(cand, inst)
+  for (d in cand) {
+    if (!dir.exists(d)) next
+    f <- list.files(d, pattern = pat, full.names = TRUE)
+    if (length(f)) return(.piSrc(normalizePath(f[1], winslash = "/"), "example"))
+  }
+  NA_character_
+}
+
+## The inventory as a tidy frame, or NULL. Never errors: a malformed inventory is a reason to skip
+## one report table, not to lose a run that is otherwise complete.
+actaPanelInventory <- function(path) {
+  if (is.null(path) || is.na(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+  d <- tryCatch(as.data.frame(suppressMessages(
+         readxl::read_excel(path, sheet = 1, col_types = "text"))),
+       error = function(e) { warning(sprintf("panel inventory '%s' could not be read: %s",
+                                             basename(path), conditionMessage(e)), call. = FALSE)
+                             NULL })
+  if (is.null(d) || !nrow(d)) return(NULL)
+  key <- function(x) tolower(gsub("[^a-z0-9]", "", tolower(.piNorm(x))))
+  have <- key(names(d))
+  out <- list()
+  for (nm in names(ACTA_PI_COLS)) {
+    j <- match(key(ACTA_PI_COLS[[nm]]), have)
+    out[[nm]] <- if (is.na(j)) rep(NA_character_, nrow(d)) else .piNorm(d[[j]])
+  }
+  out <- as.data.frame(out, stringsAsFactors = FALSE)
+  out <- out[!is.na(out$iteration) & nzchar(out$iteration), , drop = FALSE]
+  ## SET AFTER THE SUBSET, NOT BEFORE. `[.data.frame` keeps names and row.names and drops
+  ## everything else, so attaching these any earlier loses them silently and every caption goes
+  ## back to not naming its file.
+  attr(out, "acta_inventory_path") <- as.character(path)
+  src <- attr(path, "acta_inventory_source")
+  attr(out, "acta_inventory_source") <- if (is.null(src)) "unknown" else src
+  out
+}
+
+## The reagents of ONE panel iteration.
+actaPanelReagents <- function(inv, iteration) {
+  if (is.null(inv) || !nrow(inv) || is.na(iteration) || !nzchar(.piNorm(iteration))) return(NULL)
+  hit <- tolower(inv$iteration) == tolower(.piNorm(iteration))
+  if (!any(hit)) return(inv[0, , drop = FALSE])
+  inv[hit, , drop = FALSE]
+}
+
+## Does a panel reagent correspond to one of the run's measured markers?
+##
+## Three ways a name can agree, tried in order, because a panel inventory and an FCS header are
+## written by different people for different reasons:
+##   antigen       "CD14" in the panel is "CD14" in $PnS
+##   marker alias  the inventory's own shorthand, which is what a layout usually copies
+##   fluorochrome  "BUV615" in the panel is the "BUV615-A" detector -- the match that catches a
+##                 panel whose antigen naming differs but whose colour is unambiguous
+## A detector suffix (-A/-H/-W) is dropped before comparing; nothing else is normalised away,
+## because a looser match would start reporting agreement that is not there.
+## PUNCTUATION AND SPACING ARE NOT INFORMATION HERE. The inventory writes "BV421" where the
+## cytometer writes "BV 421-A", and "Alexa Fluor 532" where another file might say
+## "AlexaFluor532". Comparing on letters and digits alone makes those agree without making
+## anything else agree.
+.piSquash <- function(x) gsub("[^a-z0-9]", "", tolower(as.character(x)))
+
+.piMatches <- function(reagent, markers, channels) {
+  stripped <- sub("-(A|H|W)$", "", c(markers, channels))
+  pool_raw <- unique(stats::na.omit(c(markers, channels, stripped)))
+  pool <- .piSquash(pool_raw)
+
+  ## Antigen and the inventory's own alias are compared whole: "CD14" is CD14 or it is not.
+  for (c0 in unique(stats::na.omit(c(reagent$antigen, reagent$marker_alias))))
+    if (nzchar(c0) && .piSquash(c0) %in% pool) return(c0)
+
+  fl <- reagent$fluorochrome
+  if (is.na(fl) || !nzchar(fl)) return(NA_character_)
+  flq <- .piSquash(fl)
+  if (flq %in% pool) return(fl)
+
+  ## A detector often carries a PREFIX the panel does not: the viability channel is
+  ## "FVD eFluor 780-A" for a reagent the inventory calls "eFluor 780". A suffix match catches
+  ## that, and the four-character floor is what stops it being reckless -- without it the
+  ## two-letter "PE" would match "PE-Cy5" and "PE-CF594", reporting a tandem as its own parent
+  ## dye. At four characters the shortest real fluorochrome names ("BV421", "BUV496") still
+  ## resolve while nothing short enough to collide does.
+  if (nchar(flq) >= 4L) {
+    hit <- which(endsWith(pool, flq))
+    if (length(hit)) return(fl)
+  }
+  NA_character_
+}
+
+## THE TABLE THAT GOES BESIDE REPORT ITEM 2.4.
+##
+## One row per reagent in the declared panel iteration, each marked matched or no match against
+## the markers and channels this run actually measured. Matched rows carry the catalogue and
+## vendor, which is the point of the whole exercise: a costain panel's provenance, recorded
+## without anyone typing it into the layout.
+##
+## Returns a list so the caller can distinguish "no inventory configured" from "the declared
+## iteration is not in the inventory" -- the second is worth saying out loud, the first is not.
+##
+## AN UNMATCHED ITERATION IS ONLY NEWS IF SOMEBODY CHOSE THE FILE. When the inventory is the
+## shipped example -- a fallback reached because the workbook names no inventory and none sits in
+## the run folder -- its three demo panels are not the lab's inventory and the honest answer is
+## "none configured", not "your panel is unknown". Reported as example_only for exactly that.
+##
+## This cost a real diagnosis: a run declaring an iteration the demo does not hold was matched
+## file, and the report said the iteration "is not in the master panel inventory" while the real
+## inventory held it all along. The caption was true of the file consulted and false of the file
+## meant -- which is why every branch below now names the file.
+actaPanelIterationTable <- function(inv, iteration, markers, channels) {
+  if (is.na(iteration) || !nzchar(.piNorm(iteration)))
+    return(list(status = "none", iteration = NA_character_, table = NULL))
+  iteration <- .piNorm(iteration)
+  if (is.null(inv))
+    return(list(status = "no_inventory", iteration = iteration, table = NULL))
+  src  <- attr(inv, "acta_inventory_source")
+  file <- basename(as.character(attr(inv, "acta_inventory_path")))
+  if (!length(file) || is.na(file) || !nzchar(file)) file <- NA_character_
+  rg <- actaPanelReagents(inv, iteration)
+  if (is.null(rg) || !nrow(rg))
+    return(list(status = if (identical(src, "example")) "example_only" else "unknown_iteration",
+                iteration = iteration, table = NULL, source = src, file = file))
+
+  markers  <- unique(.piNorm(stats::na.omit(markers)))
+  channels <- unique(.piNorm(stats::na.omit(channels)))
+  hits <- vapply(seq_len(nrow(rg)), function(i) .piMatches(rg[i, ], markers, channels), "")
+  tab <- data.frame(
+    Antigen     = rg$antigen,
+    Fluorochrome = rg$fluorochrome,
+    Matched_to  = ifelse(is.na(hits), NA_character_, hits),
+    Verdict     = ifelse(is.na(hits), "no match", "matched"),
+    ## Catalogue and vendor are shown for MATCHED rows only. An unmatched row's catalogue is not
+    ## evidence about this run -- printing it would invite it to be read as one.
+    Catalog     = ifelse(is.na(hits), NA_character_, rg$catalog),
+    Vendor      = ifelse(is.na(hits), NA_character_, rg$vendor),
+    Clone       = ifelse(is.na(hits), NA_character_, rg$clone),
+    Type        = rg$type,
+    stringsAsFactors = FALSE)
+  tab <- tab[order(tab$Verdict != "matched", tab$Antigen), , drop = FALSE]
+  list(status = "ok", iteration = iteration, table = tab, source = src, file = file,
+       n_matched = sum(tab$Verdict == "matched"), n_total = nrow(tab))
+}
+
+## The caption, written once and used by BOTH the report table and the TiterPubs figure, so the
+## two cannot drift into describing the same thing differently.
+actaPanelIterationCaption <- function(res) {
+  if (is.null(res) || identical(res$status, "none")) return(NA_character_)
+  ## NAME THE FILE, ALWAYS. "not in the master panel inventory" sent somebody to check an
+  ## inventory that was never opened; "not in <file>" would have ended it in one glance.
+  f <- if (is.null(res$file) || is.na(res$file)) "the master panel inventory" else sprintf("'%s'", res$file)
+  switch(res$status,
+    no_inventory      = sprintf("Costain panel iteration '%s' -- no master panel inventory configured, so its reagents could not be resolved. Set Info!master_panel_inventory_path to resolve them.", res$iteration),
+    ## NAMES BOTH WAYS TO FIX IT. The Info row is useless advice to a legacy wide workbook, which
+    ## has no such column -- which is what made this caption unactionable on a real run.
+    example_only      = sprintf(paste0("Costain panel iteration '%s' -- no master panel inventory is configured for this run, so its reagents could not be resolved. ",
+                                       "Only the shipped example (%s) was available, and it holds demonstration panels, not this lab's. ",
+                                       "Set Info!master_panel_inventory_path, or point ACTA at the lab's inventory once with ",
+                                       "options(acta.master_panel_inventory=) or the ACTA_MASTER_PANEL_INVENTORY environment variable."),
+                                res$iteration, f),
+    unknown_iteration = sprintf("Costain panel iteration '%s' is not in %s, so its reagents could not be resolved.", res$iteration, f),
+    ## The REAGENTS IN SCOPE are named when there is more than one panel on the plate. Without
+    ## them two tables captioned only by iteration name look like two views of the same thing,
+    ## and a reader cannot tell which titration each one belongs to.
+    ## The SOURCE FILE is named here too. This table is provenance, and provenance that does not
+    ## say where it came from is half a record -- a reader comparing two runs needs to know
+    ## whether they consulted the same inventory.
+    ok                = sprintf("Costain panel '%s' from %s: %d of %d reagents matched.%s",
+                                res$iteration, f, res$n_matched, res$n_total,
+                                ## The reagent list is long -- eight of them on a routine plate --
+                                ## and only earns its space when the plate carries MORE THAN ONE
+                                ## panel, where two tables captioned alike are otherwise
+                                ## indistinguishable. The caller sets `reagents` only then.
+                                if (length(res$reagents))
+                                  sprintf(" Titrated here: %s.", paste(res$reagents, collapse = ", ")) else ""),
+    NA_character_)
+}
+
+
+## Strip the instrument SERIAL from an Equipment string, keeping the model.
+##
+## ACTA writes Equipment as "<model> (<serial>)" -- "Aurora (SN0000)" -- because the serial is the
+## thing that tells two identical cytometers apart in a validated environment. It is also an asset
+## identifier, and a public titration repository has no use for it: the MODEL is what makes a
+## result interpretable, the serial only says which room it happened in.
+##
+## Applied when Info!titerpubs_export is TRUE, at the point the stats table is built, so the
+## export, the report and the bundle all carry the same scrubbed value. Scrubbing only the bundle
+## copy would leave the serial in the PDF inside it, which is the one place nobody would look.
+actaScrubEquipmentSerial <- function(x) {
+  v <- as.character(x)
+  out <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", v))
+  ## A value with no parenthetical is returned unchanged rather than blanked -- not every site
+  ## records a serial, and an empty Equipment column is worse than one without a serial.
+  ifelse(is.na(v) | !nzchar(trimws(v)), v, ifelse(nzchar(out), out, v))
+}
+
+## ---- Info!scrub_confidential -----------------------------------------------------------------
+## OFF BY DEFAULT, and only consulted when titerpubs_export is TRUE. Without it the submission
+## carries everything the run recorded, which is the right default: a lab that has cleared a
+## dataset for release should not have its identifiers silently rewritten.
+##
+## THE REPLACEMENTS ARE FIXED STRINGS, NOT REDACTIONS. "JD" and the fixture ELN are obviously
+## placeholder-shaped, so a reader can tell at a glance that a field was substituted rather than
+## wondering whether "JD" is somebody's actual initials. Blanking instead would make the export
+## look incomplete and lose the fact that there WAS an operator.
+##
+## Test_Material is deliberately NOT here (user's call, 2026-10-13): it describes what was stained
+## and a reader needs it, so a site that cannot publish its sample labels should edit them in the
+## layout rather than have ACTA guess a substitute.
+ACTA_SCRUB_CONFIDENTIAL <- c(
+  Operator                = "JD",
+  ELN_ID                  = "EXP26000001",
+  ELN_Name                = "ELN")
+
+## INFO-SHEET fields scrubbed alongside the layout ones. Separate vector because these live on a
+## different sheet and reach different artefacts: the Info sheet is copied VERBATIM into the
+## bundle's instructions workbook and into the export's Info audit sheet, so a submitter address
+## left here is published twice more than the submission itself needs. The TiterPubs maintainer
+## asked for it to be kept out of both (2026-10-22).
+##
+## It stays ON the Info sheet so one workbook still configures the whole run; scrub_confidential
+## is what decides whether the real address leaves the building. The placeholder is a working
+## address shape rather than a blank, so the filled template still validates against their form.
+ACTA_SCRUB_INFO <- c(
+  Submitter_Email         = "johndoe@anonymouscompany.com")
+
+## SITE RULES FOR Test_Material, AND THEY ARE NOT SHIPPED.
+##
+## Test_Material is free text a lab writes for itself, and the strings it holds are exactly the
+## ones a public submission should not carry -- internal product codes, donor identifiers, mixture
+## notation. A site that publishes needs to map its own vocabulary onto plain language, and the
+## mapping is SITE-SPECIFIC: the codes in it identify the organisation as surely as its name does.
+##
+## So ACTA ships NO RULES. The default below is empty, a public install renames nothing, and the
+## patterns live in the operator's own R profile:
+##
+##   options(acta.test_material_rules = list(
+##     c(pattern = "<site regex>", replacement = "Human PBMCs"), ...))
+##
+## FIRST MATCH WINS, in the order given, because real materials hit more than one rule -- a mix of
+## primary cells and a drug product matches both a "primary cells" rule and a "product" rule, and
+## the order is the site's decision about which identity to publish. Documented rather than
+## sorted by specificity, because "most specific" is not well defined for free text.
+##
+## Applied only when scrub_confidential is on: these exist for publication, and a local run should
+## keep the operator's own words.
+ACTA_TEST_MATERIAL_RULES <- list()
+
+actaTestMaterialRules <- function() {
+  o <- getOption("acta.test_material_rules", default = NULL)
+  if (is.null(o) || !length(o)) return(ACTA_TEST_MATERIAL_RULES)
+  o
+}
+
+## MARKERS THAT MUST NEVER REACH A PUBLIC BUNDLE.
+##
+## Some reagents in a costain panel are not publishable at all -- an engineered-receptor detection
+## reagent identifies the construct, and through it the programme, no matter how the run is
+## scrubbed. Renaming cannot fix that: the panel composition is the disclosure.
+##
+## SHIPPED EMPTY, like the Test_Material rules and for the same reason -- the patterns name the
+## site's own constructs. Set in the operator's profile:
+##
+##   options(acta.bundle_blocked_markers = c("<construct regex>", ...))
+##
+## Matched against the panel AS ACQUIRED ($PnS in the FCS), not against the layout: the layout
+## names only the reagent being titrated, so a blocked marker sitting in the costain panel is
+## invisible there. The FCS is what actually went to the instrument.
+ACTA_BUNDLE_BLOCKED_MARKERS <- character(0)
+
+actaBundleBlockedMarkers <- function() {
+  o <- getOption("acta.bundle_blocked_markers", default = NULL)
+  if (is.null(o) || !length(o)) return(ACTA_BUNDLE_BLOCKED_MARKERS)
+  as.character(o)
+}
+
+## Every $PnS in a set of FCS files. Read from the HEADER so this costs nothing and can run
+## before any data is loaded -- the whole point is to stop before the analysis, not after it.
+actaFcsMarkerNames <- function(files, max_files = 50L) {
+  if (!length(files)) return(character(0))
+  if (length(files) > max_files) files <- files[seq_len(max_files)]
+  out <- unlist(lapply(files, function(f) {
+    k <- tryCatch(flowCore::read.FCSheader(f)[[1]], error = function(e) NULL)
+    if (is.null(k)) return(character(0))
+    v <- unlist(k[grepl("^\\$P[0-9]+S$", names(k))])
+    trimws(as.character(v))
+  }))
+  unique(out[nzchar(out) & !is.na(out)])
+}
+
+## HARD STOP, not a warning and not a silent skip.
+##
+## A warning scrolls past and the bundle still gets written; skipping the bundle quietly leaves
+## an operator who asked for one wondering where it went. Neither is the right answer when the
+## cost of being wrong is publishing a construct. The run stops and says which marker and which
+## pattern, so the choice -- drop the reagent, or turn titerpubs_export off -- is the operator's
+## and is made deliberately.
+actaAssertBundleAllowed <- function(files, enabled, patterns = actaBundleBlockedMarkers()) {
+  if (!isTRUE(enabled)) return(invisible(NULL))
+  ## PDFTOOLS IS LOAD-BEARING FOR A BUNDLE, AND ONLY FOR A BUNDLE. The leak scan fails closed on a
+  ## PDF it cannot read -- correctly, because the report is the one bundle artefact with no scrub
+  ## pass of its own -- so without pdftools EVERY bundle would be built, judged unreadable, deleted
+  ## and reported as a leak. Measured on a real 30-file bundle: 1 blocking finding, bundle deleted,
+  ## 100% of the time. Caught HERE instead, where the run stops before any output is written and
+  ## the message says what to install.
+  ##
+  ## NOT MOVED TO Imports. pdftools needs poppler, and making a heavy system dependency
+  ## load-bearing at package-load time is exactly how ACTA 3.0 shipped unloadable on any Mac
+  ## without XQuartz -- see .flowmeans_bound(), which uses flowMeans:: for that reason. Someone who
+  ## never exports a bundle must not need poppler to run a titration.
+  if (!requireNamespace("pdftools", quietly = TRUE))
+    stop(paste0("titerpubs_export = TRUE, but the 'pdftools' package is not installed. The bundle's ",
+                "leak scan reads the report PDF, and a bundle whose PDF cannot be read must not be ",
+                "published -- so the run stopped before writing any output. Install it with ",
+                "install.packages(\"pdftools\"), or set Info!titerpubs_export = FALSE to analyse ",
+                "this run locally."), call. = FALSE)
+  if (!length(patterns)) return(invisible(NULL))
+  mk <- actaFcsMarkerNames(files)
+  if (!length(mk)) return(invisible(NULL))
+  hits <- unlist(lapply(patterns, function(p) {
+    m <- tryCatch(mk[grepl(p, mk, perl = TRUE, ignore.case = TRUE)], error = function(e) character(0))
+    if (length(m)) sprintf("%s (matched '%s')", paste(m, collapse = ", "), p) else character(0)
+  }))
+  if (!length(hits)) return(invisible(NULL))
+  stop(sprintf(paste0("titerpubs_export = TRUE, but this panel carries a marker that must not be ",
+                      "published: %s. The bundle was NOT built and the run stopped before any ",
+                      "output was written. Either remove the reagent from the panel, or set ",
+                      "Info!titerpubs_export = FALSE to analyse it locally."),
+               paste(hits, collapse = "; ")), call. = FALSE)
+}
+
+## Map one Test_Material string through the site rules. Returns it unchanged when nothing matches,
+## so an unrecognised material is published as written rather than silently blanked -- a reader
+## can see it was not mapped, which is the honest failure.
+actaMapTestMaterial <- function(x, rules = actaTestMaterialRules()) {
+  if (!length(rules)) return(x)
+  out <- as.character(x)
+  for (i in seq_along(out)) {
+    v <- out[i]
+    if (is.na(v) || !nzchar(trimws(v))) next
+    for (r in rules) {
+      pat <- r[["pattern"]]; rep <- r[["replacement"]]
+      if (is.null(pat) || is.null(rep)) next
+      if (isTRUE(tryCatch(grepl(pat, v, perl = TRUE, ignore.case = TRUE), error = function(e) FALSE))) {
+        out[i] <- rep; break
+      }
+    }
+  }
+  out
+}
+
+## Replace the scrubbed Info fields in place. Returns the sheet unchanged when the scrub is off,
+## and names what it replaced, because a silent substitution in a submission is worse than none.
+actaApplyInfoScrub <- function(info, quiet = FALSE) {
+  if (is.null(info) || !is.data.frame(info) || !nrow(info)) return(info)
+  long <- actaInfoIsLong(info)
+  hit <- character(0)
+  for (k in names(ACTA_SCRUB_INFO)) {
+    repl <- ACTA_SCRUB_INFO[[k]]
+    if (long) {
+      j <- which(tolower(trimws(as.character(info$Variable))) == tolower(k))
+      if (!length(j)) next
+      was <- trimws(as.character(info$Value[j[1]]))
+      ## A BLANK IS FILLED, NOT SKIPPED. The scrubbed state of this field is the placeholder, and
+      ## a submission with an empty Email fails the maintainer's form -- a legacy workbook that
+      ## never carried the row would otherwise produce exactly that.
+      if (identical(was, repl)) next
+      info$Value[j[1]] <- repl; hit <- c(hit, k)
+    } else {
+      nm <- tolower(trimws(names(info)))
+      j <- which(nm == tolower(k) | trimws(sub("\\s*\\([^()]*\\)\\s*$", "", nm)) == tolower(k))
+      if (!length(j)) next
+      was <- trimws(as.character(info[[j[1]]][1]))
+      if (identical(was, repl)) next
+      info[[j[1]]][1] <- repl; hit <- c(hit, k)
+    }
+  }
+  if (length(hit) && !isTRUE(quiet))
+    message(sprintf("[ACTA] scrub_confidential: Info sheet %s replaced", paste(hit, collapse = ", ")))
+  info
+}
+
+## Costain_Panel_Iteration is handled separately because it is NUMBERED, not constant: a plate can
+## carry several panels, and collapsing them all to one label would merge distinct panels into one
+## in the report and in the submission. Distinct values become Iteration1, Iteration2, ... in order
+## of appearance.
+ACTA_SCRUB_ITERATION_PREFIX <- "Iteration"
+
+## The same three FCS keywords, which carry the operator and the programme independently of the
+## layout. Scrubbed into the BUNDLE'S COPIES only -- the run's own FCS are never rewritten.
+ACTA_SCRUB_FCS_KEYWORDS <- c(
+  "$OP"   = "JD",
+  "$PROJ" = "Titration",
+  "$INST" = "Anon")
+
+## Is the scrub switched on? TRUE only when BOTH flags are set: scrub_confidential alone means
+## nothing, because there is no submission to scrub for.
+actaScrubConfidential <- function(info) {
+  on <- function(k) toupper(trimws(actaInfoValue(info, k) %||% "")) %in% c("TRUE", "T", "YES", "1")
+  isTRUE(on("titerpubs_export")) && isTRUE(on("scrub_confidential"))
+}
+
+## Apply the column replacements to a stats/export frame. Columns that are absent are skipped
+## rather than created: a workbook that predates a column should not gain one from a scrub.
+actaApplyScrub <- function(df, quiet = FALSE) {
+  if (is.null(df) || !is.data.frame(df) || !nrow(df)) return(df)
+  hit <- character(0)
+  for (cn in names(ACTA_SCRUB_CONFIDENTIAL)) {
+    if (!cn %in% names(df)) next
+    was <- unique(stats::na.omit(as.character(df[[cn]])))
+    if (!length(was)) next
+    df[[cn]] <- ACTA_SCRUB_CONFIDENTIAL[[cn]]
+    hit <- c(hit, sprintf("%s (%d value(s))", cn, length(was)))
+  }
+
+  ## THE PANEL ITERATION IS RENAMED, AND THE OLD NAME IS KEPT.
+  ##
+  ## The iteration is the key into the master panel inventory, so replacing it before the lookup
+  ## runs means the lookup finds nothing and the costain panel's reagents -- catalogue and vendor,
+  ## none of it confidential -- vanish from both the report and the submission. Measured: the
+  ## report said "'Iteration1' is not in the master panel inventory" and the bundle's Panel
+  ## iteration sheet came out empty.
+  ##
+  ## So the ORIGINAL is carried on the frame as an attribute. The lookup uses it; everything
+  ## printed uses the placeholder. The panel's composition is published, the panel's internal name
+  ## is not -- which is the point of the switch.
+  map <- character(0)
+  if ("Costain_Panel_Iteration" %in% names(df)) {
+    v <- trimws(as.character(df$Costain_Panel_Iteration))
+    orig <- unique(v[!is.na(v) & nzchar(v)])
+    if (length(orig)) {
+      lab <- paste0(ACTA_SCRUB_ITERATION_PREFIX, seq_along(orig))
+      map <- stats::setNames(orig, lab)              # placeholder -> original
+      df$Costain_Panel_Iteration <- ifelse(is.na(v) | !nzchar(v), NA_character_,
+                                           lab[match(v, orig)])
+      hit <- c(hit, sprintf("Costain_Panel_Iteration (%d panel(s) -> %s)",
+                            length(orig), paste(lab, collapse = ", ")))
+    }
+  }
+  ## Site Test_Material mapping, applied with the rest of the scrub. Reported like every other
+  ## substitution: a published material label that silently changed is worse than one that did not.
+  if ("Test_Material" %in% names(df) && length(actaTestMaterialRules())) {
+    was <- as.character(df$Test_Material)
+    now <- actaMapTestMaterial(was)
+    if (!identical(was, now)) {
+      df$Test_Material <- now
+      hit <- c(hit, sprintf("Test_Material (%s)",
+                            paste(sprintf("'%s' -> '%s'", unique(was[was != now]),
+                                          unique(now[was != now])), collapse = ", ")))
+    }
+  }
+  attr(df, "acta_iteration_map") <- map
+  if (length(hit) && !isTRUE(quiet))
+    message(sprintf("[ACTA] scrub_confidential: replaced %s", paste(hit, collapse = ", ")))
+  df
+}

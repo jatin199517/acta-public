@@ -1270,5 +1270,123 @@ local({
   if (length(stale)) for (f in stale) cat("          stale:", basename(f), "\n")
 })
 
+## ---------------------------------------------------------------------------------------------
+## THE MICHAELIS-MENTEN FIT MUST NOT BE FRAGILE IN THE INPUT.
+##
+## A single run on the shipped Strep-PE data converges, which is exactly why this went unnoticed:
+## perturb those stain indices by a few percent -- less than the spread between two independent
+## implementations of the stain index -- and the old single-start retry failed 42 times in 200
+## with "false convergence (8)", while the least-squares optimum existed every time. An outside
+## report of that failure was initially dismissed here on the strength of one passing run.
+##
+## So the assertion is over a DISTRIBUTION of nearby inputs, not one. Reduce the start ladder in
+## actaMichaelisMenten() back to its single start and this fails.
+cat("\n=== Michaelis-Menten fit is robust to small changes in the input ===\n")
+.mmv <- c(0, 0.009766, 0.019531, 0.039062, 0.078125, 0.15625, 0.3125, 0.625, 1.25, 2.5, 5)
+.mmy <- c(1.482, 1.509, 2.279, 12.407, 11.493, 13.020, 13.646, 13.009, 15.094, 14.428, 16.373)
+
+.base <- h$actaMichaelisMenten(.mmv, .mmy)
+chk("the shipped series still fits", isTRUE(.base$ok))
+chk(sprintf("...to the same optimum (Vmax %.3f, Km %.5f)", .base$Vmax %||% NA, .base$Km %||% NA),
+    isTRUE(.base$ok) && abs(.base$Vmax - 15.3941) < 1e-2 && abs(.base$Km - 0.03356) < 1e-4)
+
+set.seed(1)
+.n <- 100L
+.ok <- vapply(seq_len(.n), function(i)
+  isTRUE(h$actaMichaelisMenten(.mmv, .mmy * (1 + runif(length(.mmy), -0.03, 0.03)))$ok), TRUE)
+chk(sprintf("every one of %d series within +-3%% also fits (%d succeeded)", .n, sum(.ok)),
+    all(.ok))
+
+## A series that genuinely cannot be fitted must still be refused -- the ladder must not invent
+## a fit for noise.
+chk("a flat series is still refused or fits with no explanatory power", {
+  f <- h$actaMichaelisMenten(.mmv, rep(5, length(.mmv)))
+  !isTRUE(f$ok) || !is.finite(f$r2) || f$r2 <= 0.05 })
+
+chk("fewer than three doses is still refused",
+    !isTRUE(h$actaMichaelisMenten(c(0, 1), c(1, 2))$ok))
+
+## ---------------------------------------------------------------------------------------------
+## THE 90%Vmax RANGE CHECK, REACHED ON PURPOSE.
+##
+## Everything above feeds actaTiterOptions() the demo's real fit, whose R2 of 0.879 fails the 0.90
+## threshold -- so the R2 branch returns first and the range branch has never once executed in
+## this suite. Two shipped bugs lived behind it:
+##
+##   * the app passed the TitrationExport sheet (one max-SI row per reagent), so the "tested
+##     range" collapsed to a single dose and the option was withheld from every reagent whose
+##     optimum fell elsewhere, saying "0.302 uL is outside the tested range (5-5 uL)";
+##   * the range counted the StainQty-0 unstained/costain wells, so a 90%Vmax of 0.0004 uL --
+##     far below the lowest dose actually pipetted -- passed as "in range".
+##
+## R2 is therefore pinned above the threshold here, so the range check is the thing under test.
+cat("\n=== 90%Vmax range check (R2 pinned so the range branch runs) ===\n")
+.wells <- data.frame(Dirname = "Strep_PE", maxSI_StainQty = 5,
+                     StainQty = c(0, 0.009766, 0.019531, 0.039062, 0.078125, 0.15625,
+                                  0.3125, 0.625, 1.25, 2.5, 5))
+.perReagent <- data.frame(Dirname = "Strep_PE", StainQty = 5, maxSI_StainQty = 5)
+.fit <- function(v90, r2 = 0.95)
+  data.frame(Dirname = "Strep_PE", MM_R2 = r2, MM_90pct_Vmax = v90, MM_note = NA)
+.opt <- function(fit, st) h$actaTiterOptions(fit, st, 0.9)[[1]]$vmax90
+
+.o <- .opt(.fit(0.302), .wells)
+chk("in-range v90 is offered", isTRUE(.o$enabled))
+
+.o <- .opt(.fit(0.0004), .wells)
+chk("v90 below the lowest REAL dose is refused (StainQty 0 is not a tested dose)",
+    isFALSE(.o$enabled) && grepl("outside the tested range", .o$reason %||% ""))
+
+.o <- .opt(.fit(99), .wells)
+chk("v90 above the highest dose is refused", isFALSE(.o$enabled))
+
+## The regression itself: handed the per-reagent sheet the range is a single point, so a
+## perfectly good v90 would be rejected. Guards the app's choice of table.
+.o <- .opt(.fit(0.302), .perReagent)
+chk("a one-row table collapses the range -- the app must NOT pass one",
+    isFALSE(.o$enabled) && grepl("5", .o$reason %||% ""))
+
+.o <- .opt(.fit(0.302, r2 = 0.5), .wells)
+chk("a poor fit is still refused on R2, before any range test",
+    isFALSE(.o$enabled) && grepl("fit quality", .o$reason %||% ""))
+
+cat("=== the dependency pre-flight reports pdftools ===\n")
+## WHY THIS ROW HAS TO EXIST. pdftools is in Suggests -- deliberately, because it links poppler
+## and making it load-time is how ACTA 3.0 shipped unloadable without XQuartz -- so
+## install_github() does not bring it. The bundle leak scan reads the report PDF and is
+## fail-closed, so a user with titerpubs_export = TRUE and no pdftools gets a bundle BUILT AND
+## THEN DELETED at the end of a long run, with nothing earlier having mentioned it. This is the
+## screen that is supposed to mention it.
+.dep <- h$actaDependencyChecks(vd)
+.ids <- vapply(.dep, function(r) r$id, "")
+chk("the pre-flight has a pdftools row at all", "pdftools" %in% .ids)
+.pdf <- .dep[[match("pdftools", .ids)]]
+chk("...and it PASSES when pdftools is installed",
+    !requireNamespace("pdftools", quietly = TRUE) || .pdf$status == "pass")
+
+## THE ABSENT BRANCH, which is the one that matters and the one no machine here exercises --
+## pdftools is installed on this laptop and on CI. Shadowing requireNamespace in a child of the
+## function's own environment makes the lookup find the stub, so the branch runs for real
+## instead of being asserted by reading it.
+.f <- h$actaDependencyChecks
+.e <- new.env(parent = environment(.f))
+.e$requireNamespace <- function(package, ...) {
+  if (identical(package, "pdftools")) return(FALSE)
+  base::requireNamespace(package, ...)
+}
+environment(.f) <- .e
+.dep2 <- .f(vd)
+.p2 <- .dep2[[match("pdftools", vapply(.dep2, function(r) r$id, ""))]]
+chk("...and WARNS, not fails, when it is missing", identical(.p2$status, "warn"))
+chk("...naming the toggle that needs it and the command that installs it",
+    grepl("titerpubs_export", .p2$detail, fixed = TRUE) &&
+      grepl('install.packages("pdftools")', .p2$detail, fixed = TRUE))
+chk("...and says the bundle would be refused, not silently unscanned",
+    grepl("refuses|delete", .p2$detail, ignore.case = TRUE))
+
+## The script-package hint must not promise an install that no longer happens.
+.sp <- .dep[[match("pkgs_script", .ids)]]
+chk("the package hint does not claim the script self-installs",
+    !grepl("self-install", paste(.sp$detail, collapse = " "), ignore.case = TRUE))
+
 cat(if (ok) "\nALL APP-SUPPORT TESTS PASS\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0 else 1)

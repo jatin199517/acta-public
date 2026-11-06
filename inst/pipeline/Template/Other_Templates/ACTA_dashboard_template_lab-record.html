@@ -344,6 +344,16 @@ function applyTab(i){
 function markCustom(){ if(activeTab!==null){ activeTab=null; buildTabs(); } }
 
 function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+/* L-1: A LINK TARGET MUST BE RELATIVE. encodeURI() leaves ":" alone and esc() does not touch
+   the scheme, so a file named `javascript:alert(1).png` sitting directly in the dashboard's
+   own folder produced href="javascript:alert(1).png", which runs on click. relTo() yields a
+   bare filename for exactly that case. Any scheme at all is refused -- the dashboard only ever
+   links to files beside itself, so there is nothing legitimate to lose. */
+function safeHref(p){
+  const s = String(p==null?"":p);
+  return /^[a-z][a-z0-9+.-]*:/i.test(s) ? "#" : esc(encodeURI(s));
+}
 function fileName(p){return p? String(p).split("/").pop():"";}
 function statusClass(s){
   // A CLASS NAME, NEVER DATA. This used to be `(s||"").replace(/\s+/g,"")` and its result was
@@ -402,7 +412,7 @@ function buildHead(){
     // uppercases U+00B5 MICRO SIGN to U+039C GREEK CAPITAL MU, so a "(uL)" header silently
     // renders as "(ML)" -- millilitres, a 1000x error in a header describing a stain volume.
     const cls = (stickyCls(c) + (c.unit ? " unit" : "")).trim();
-    return `<th class="${cls}" data-k="${c.k}">${esc(c.label)}${arrow}</th>`;
+    return `<th class="${cls}" data-k="${esc(c.k)}">${esc(c.label)}${arrow}</th>`;
   }).join("");
   document.querySelectorAll("#head th").forEach(th=>{
     th.onclick=()=>{const k=th.dataset.k; if(k===sortKey){sortDir*=-1;}else{sortKey=k;sortDir=1;} render();};
@@ -414,11 +424,11 @@ function buildFilters(){
     if(c.filter==="select"){
       const sel=filters[c.k]||[];
       const opts=distinct(c.k).map(v=>
-        `<label><input type="checkbox" class="cfx" data-k="${c.k}" value="${esc(v)}" ${sel.includes(v)?"checked":""}> ${esc(v)}</label>`).join("");
-      return `<td class="${sc.trim()}"><details class="fdrop"><summary id="sum_${c.k}">${esc(summaryText(c.k))}</summary><div class="menu">${opts||'<span class="muted">none</span>'}</div></details></td>`;
+        `<label><input type="checkbox" class="cfx" data-k="${esc(c.k)}" value="${esc(v)}" ${sel.includes(v)?"checked":""}> ${esc(v)}</label>`).join("");
+      return `<td class="${sc.trim()}"><details class="fdrop"><summary id="sum_${esc(c.k)}">${esc(summaryText(c.k))}</summary><div class="menu">${opts||'<span class="muted">none</span>'}</div></details></td>`;
     }
     if(c.filter==="text"){
-      return `<td class="${sc.trim()}"><input class="cf" data-k="${c.k}" value="${esc(filters[c.k]||"")}" placeholder="filter…"></td>`;
+      return `<td class="${sc.trim()}"><input class="cf" data-k="${esc(c.k)}" value="${esc(filters[c.k]||"")}" placeholder="filter…"></td>`;
     }
     return `<td class="${sc.trim()}"></td>`;
   }).join("");
@@ -443,12 +453,12 @@ function cellHtml(row,c){
   if(c.figs){
     const arr=[].concat(row[c.figs]||[]);   // tolerate scalar OR array (JSON may unbox single-element lists)
     if(!arr.length) return `<span class="file disabled">—</span>`;
-    return arr.map(p=>`<a class="file" href="${esc(encodeURI(p))}" target="_blank" rel="noopener" title="${esc(p)}">${figLabel(p)}</a>`).join("<br>");
+    return arr.map(p=>`<a class="file" href="${safeHref(p)}" target="_blank" rel="noopener" title="${esc(p)}">${figLabel(p)}</a>`).join("<br>");
   }
   if(c.folder){
     const dirs=parentDirs(row);
     if(!dirs.length) return `<span class="file disabled">—</span>`;
-    return dirs.map(d=>`<a class="file" href="${esc(encodeURI(d))}" target="_blank" rel="noopener" title="${esc(d)}"><span class="tag">Open ↗</span></a>`).join(" ");
+    return dirs.map(d=>`<a class="file" href="${safeHref(d)}" target="_blank" rel="noopener" title="${esc(d)}"><span class="tag">Open ↗</span></a>`).join(" ");
   }
   const v=row[c.k];
   if(c.status) return `<span class="status ${statusClass(v)}">${esc(v)}</span>`;

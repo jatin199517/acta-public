@@ -164,7 +164,13 @@ unlink(tmp)
 
 cat("=== no false positives on the real workbooks ===\n")
 suppressMessages(library(readxl))
-for (wb in Sys.glob(c(file.path(vd, "*Instructions*.xlsx"), file.path(vd, "Template", "*.xlsx"),
+## INSTRUCTIONS WORKBOOKS ONLY. Template/ was a bare *.xlsx glob until the TiterPubs submission
+## template moved in beside TEMPLATE_Ab_Titration_Instructions.xlsx, at which point this loop read
+## a workbook that has no gating_template sheet and the whole file died on "Sheet not found".
+## Preflight validates ACTA instruction workbooks by definition, so the glob now says so rather
+## than meaning "whatever xlsx happens to be in that folder".
+for (wb in Sys.glob(c(file.path(vd, "*Instructions*.xlsx"),
+                      file.path(vd, "Template", "*Instructions*.xlsx"),
                       file.path(actaTestCaseRoot(), "*", "*Instructions*.xlsx")))) {
   g <- suppressMessages(as.data.frame(read_excel(wb, sheet = "gating_template", col_types = "text")))
   chk(sprintf("%s: no pop rejected", basename(wb)),
@@ -371,11 +377,15 @@ local({
   for (x in hits) cat("         ", x, "\n")
 })
 
-## COSTAIN IS REQUIRED PER GROUP, UNSTAINED IS NOT. Costain sets the gate floor, so zero leaves
-## it at -Inf -- no floor at all, which looks like a successful run -- and more than one pools
-## events so the floor belongs to no single well. Unstained is dropped before gating and
-## contributes nothing to the result, so a group without one is a legitimate layout. Pinned here
-## because the difference is invisible in the output: a run with no floor still produces numbers.
+## COSTAIN IS REQUIRED PER GROUP *WHEN A GATE READS THE FLOOR*, UNSTAINED NEVER IS. Zero Costain
+## leaves the floor at -Inf -- no floor at all, which looks like a successful run -- and more than
+## one pools events so the floor belongs to no single well. Unstained is dropped before gating and
+## contributes nothing, so a group without one is a legitimate layout. Pinned here because the
+## difference is invisible in the output: a run with no floor still produces numbers.
+##
+## THE DEFAULT IS STILL "REQUIRED", and these cases assert it by calling without the argument --
+## so a caller that has not been taught about gating methods keeps the strict behaviour. The
+## conditional half is asserted in the section below this one.
 cat("\n=== Costain required per group, Unstained optional ===\n")
 local({
   mk <- function(types, qty) data.frame(
@@ -403,6 +413,240 @@ local({
   f <- res(c("Stain","Stain","costain","unstained"), c(1,2,0,0))
   chk("StainType matching is case-insensitive (lower-case costain/unstained recognised)",
       f$fatal == 0L && f$warn == 0L)
+})
+
+## ---- the Costain rule is conditional on the gating template ---------------------------------
+## WHY THIS IS A GATE AND NOT A COMMENT: the relaxation is only correct while "needs a floor" and
+## "names a *_costain method" mean the same thing. If actaTemplateNeedsCostain() ever answers
+## FALSE for a template that does read the floor, ACTA stops requiring the well that method is
+## built on and the run still produces numbers -- the exact silent-wrong-answer shape this file
+## exists for. So every member of the family is named individually rather than trusting the
+## substring to keep covering them.
+cat("\n=== the Costain requirement follows the gating template ===\n")
+local({
+  needs <- h$actaTemplateNeedsCostain
+  gt <- function(meth, pp = NA_character_, alias = "Reagent")
+    data.frame(alias = alias, gating_method = meth, preprocessing_method = pp,
+               stringsAsFactors = FALSE)
+  ## Every registered member of the family, by name. A new plugin that this misses would be
+  ## gated with no floor and report a plausible Stain Index.
+  for (m in c("gate_flowmeans_costain", "gate_mindensity_costain", "gate_auto_costain_dip",
+              "gate_auto_costain_gmm", "gate_auto2_costain"))
+    chk(sprintf("%s requires a Costain well", m), isTRUE(needs(gt(m))))
+  chk("a preprocessing_method alone is enough (pp_costain_floor under a plain method)",
+      isTRUE(needs(gt("gate_flowmeans", "pp_costain_floor"))))
+  chk("...and pp_auto2_costain likewise", isTRUE(needs(gt("gate_flowmeans", "pp_auto2_costain"))))
+  chk("matching is case-insensitive", isTRUE(needs(gt("GATE_FLOWMEANS_COSTAIN"))))
+  ## THE RELAXING CASE. A whole ordinary template: scatter, singlets, viability, marker.
+  plain <- data.frame(alias = c("Cells", "Single_cells", "Live", "Reagent"),
+                      gating_method = c("boundary", "singletGate", "gate_flowclust_2d",
+                                        "gate_flowmeans"),
+                      preprocessing_method = NA_character_, stringsAsFactors = FALSE)
+  chk("a template with no *_costain method needs no Costain well", isFALSE(needs(plain)))
+  ## A commented-out example must not pin the requirement on -- the shipped TEMPLATE carries
+  ## several #Reagent rows naming costain methods, and the app passes the RAW sheet.
+  withhash <- rbind(plain, data.frame(alias = "#Reagent", gating_method = "gate_mindensity_costain",
+                                      preprocessing_method = "pp_costain_floor"))
+  chk("a commented-out #Reagent example does NOT pin the requirement on", isFALSE(needs(withhash)))
+  chk("...but the same row uncommented does",
+      isTRUE(needs(rbind(plain, data.frame(alias = "Reagent2",
+                                           gating_method = "gate_mindensity_costain",
+                                           preprocessing_method = "pp_costain_floor")))))
+  ## FAILS CLOSED. Each of these is a template we cannot read; none may relax the rule.
+  chk("NULL template fails closed (still required)", isTRUE(needs(NULL)))
+  chk("a zero-row template fails closed", isTRUE(needs(plain[0, , drop = FALSE])))
+  chk("a template with neither method column fails closed",
+      isTRUE(needs(data.frame(alias = "Reagent", dims = "FITC-A", stringsAsFactors = FALSE))))
+  chk("a non-data-frame fails closed", isTRUE(needs(list(gating_method = "gate_flowmeans"))))
+  chk("a template whose rows are ALL commented out fails closed",
+      isTRUE(needs(data.frame(alias = c("#a", "#b"), gating_method = "gate_flowmeans",
+                              stringsAsFactors = FALSE))))
+})
+
+## And the layout check must actually honour the flag -- the helper being right is half of it.
+local({
+  mk <- function(types, qty) data.frame(
+    Dirname = "X", Alias = "X", PlateID = 1,
+    Row = LETTERS[seq_along(types)], Column = 1,
+    StainType = types, StainQty = qty, stringsAsFactors = FALSE)
+  res <- function(types, qty, req) {
+    n <- character(0)
+    r <- withCallingHandlers(
+      h$validateLayoutGroups(mk(types, qty), "X", stop_on_error = FALSE, return_all = TRUE,
+                             costain_required = req),
+      warning = function(w) { n <<- c(n, conditionMessage(w)); invokeRestart("muffleWarning") })
+    list(fatal = length(r$fatal), warn = length(n))
+  }
+  none <- c("Stain","Stain","Stain");            noneq <- c(1,2,3)
+  two  <- c("Stain","Stain","Costain","Costain"); twoq <- c(1,2,0,0)
+  chk("costain_required=FALSE: no Costain well is accepted silently",
+      { a <- res(none, noneq, FALSE); a$fatal == 0L && a$warn == 0L })
+  chk("costain_required=FALSE: two Costain wells are accepted silently",
+      { b <- res(two, twoq, FALSE); b$fatal == 0L && b$warn == 0L })
+  chk("costain_required=TRUE still fails on zero", res(none, noneq, TRUE)$fatal == 1L)
+  chk("costain_required=TRUE still fails on two",  res(two,  twoq, TRUE)$fatal == 1L)
+  ## The relaxation must not take the OTHER layout rules with it.
+  chk("duplicate StainQty is still fatal with costain_required=FALSE",
+      res(c("Stain","Stain","Stain"), c(1,1,3), FALSE)$fatal == 1L)
+  chk("...and two Unstained wells still warn",
+      res(c("Stain","Unstained","Unstained"), c(1,0,0), FALSE)$warn == 1L)
+})
+
+## End to end through the pre-flight the script and the app both call, because that is the only
+## path a real run takes. Includes the DISCRIMINATING case: relaxing must not leak into a
+## template that does read the floor.
+local({
+  md <- function(types, qty) data.frame(
+    Dirname = "X", Alias = "X", Row = LETTERS[seq_along(types)], Column = 1, PlateID = 1,
+    StainType = types, StainQty = qty, Fix = "N", Perm = "N", ELN_Name = "n", ELN_ID = "i",
+    Operator = "o", Markername = "CD3", stringsAsFactors = FALSE)
+  rec <- function(types, qty, meth, pp = NA_character_) {
+    gt <- data.frame(alias = c("Cells", "Reagent"), pop = c("+", "+/-"), parent = "root",
+                     dims = c("FSC-A,SSC-A", "CD3,FSC-A"),
+                     gating_method = c("boundary", meth),
+                     preprocessing_method = c(NA_character_, pp), stringsAsFactors = FALSE)
+    r <- h$actaPrevalidateRecords(md(types, qty), gt, NULL, "X", tempfile(),
+                                  marker_col = "Markername")
+    Filter(function(x) x$id == "layout_groups", r)[[1]]
+  }
+  noco <- c("Stain","Stain","Stain"); q <- c(1,2,3)
+  a <- rec(noco, q, "gate_flowmeans")
+  chk("pre-flight PASSES a Costain-free layout under a plain template", a$status == "pass")
+  ## The label may still SAY "Costain" -- it explains why none was required. What it must not do
+  ## is claim the check was made, which is what an analyst reads it as.
+  chk("...and its label does not claim a Costain check it did not make",
+      !grepl("exactly one Costain", a$label, fixed = TRUE) &&
+        grepl("no gating method reads a Costain floor", a$label, fixed = TRUE))
+  b <- rec(noco, q, "gate_mindensity_costain", "pp_costain_floor")
+  chk("pre-flight still FAILS the same layout under a *_costain template", b$status == "fail")
+  chk("...and the label says what was required", grepl("Costain", b$label, fixed = TRUE))
+  cc <- rec(c("Stain","Stain","Costain"), c(1,2,0), "gate_mindensity_costain", "pp_costain_floor")
+  chk("...and passes once the Costain well is present", cc$status == "pass")
+})
+
+## ---- the Costain floor must actually be computable ---------------------------------------------
+## MEASURED, not hypothetical. On 2026-10-31 a Reagent row reading `gate_flowmeans_costain` with
+## preprocessing_method left blank ran OQ_Test1 to completion with ok = TRUE and put 50.7% of the
+## co-stain above the marker gate, where the floored run puts 1.0%. max(bound, -Inf) is bound, so
+## the method silently became the un-floored one underneath it and still produced a Stain Index
+## table that looks entirely normal. These assertions are what stop that reaching a plate again.
+cat("\n=== the Costain floor is computable, or the run stops ===\n")
+local({
+  f  <- h$actaCostainArgIssues
+  mk <- function(meth, pp = NA_character_, args = NA_character_, alias = "Reagent")
+    data.frame(alias = alias, gating_method = meth, preprocessing_method = pp,
+               preprocessing_args = args, stringsAsFactors = FALSE)
+  nf <- function(...) length(f(mk(...))$fatal)
+  nn <- function(...) length(f(mk(...))$notes)
+
+  ## NO CHURN ON SHIPPED CONTENT. If this ever fails, the check has become stricter than the
+  ## workbooks ACTA itself ships -- which would make every OQ case fail its own pre-flight.
+  for (wb in c("inst/pipeline/Template/TEMPLATE_Ab_Titration_Instructions.xlsx",
+               "inst/extdata/oq_small/OQ_Test1/OQ_Test1_Ab_Titration_Instructions.xlsx",
+               "inst/extdata/oq_small/OQ_Test2/OQ_Test2_Ab_Titration_Instructions.xlsx",
+               "inst/extdata/oq_small/OQ_Test3/OQ_Test3_Ab_Titration_Instructions.xlsx")) {
+    pth <- file.path(ACTA_REPO_ROOT, wb)
+    if (!file.exists(pth)) { cat("  [skip] not in this layout:", basename(wb), "\n"); next }
+    gt <- suppressMessages(readxl::read_excel(pth, sheet = "gating_template", col_types = "text"))
+    chk(sprintf("shipped %s passes unchanged", basename(dirname(pth))), length(f(gt)$fatal) == 0L)
+  }
+
+  ## THE DEFECT ITSELF.
+  chk("a *_costain method with NO preprocessing_method is fatal",
+      nf("gate_flowmeans_costain") == 1L)
+  chk("...and the message names the row, the method and the fix", {
+    m <- f(mk("gate_flowmeans_costain"))$fatal[[1]]
+    grepl("row 2", m) && grepl("gate_flowmeans_costain", m, fixed = TRUE) &&
+      grepl("pp_costain_floor", m, fixed = TRUE) && grepl("-Inf", m, fixed = TRUE) })
+  chk("...for every member of the family", all(vapply(
+    c("gate_flowmeans_costain", "gate_mindensity_costain", "gate_auto_costain_dip",
+      "gate_auto_costain_gmm", "gate_auto2_costain"), function(m) nf(m) == 1L, logical(1))))
+  chk("a *_costain method with a NON-costain preprocessing_method is fatal",
+      nf("gate_flowmeans_costain", "pp_something_else", "x=1") == 1L)
+
+  ## REQUIRED vs OPTIONAL, derived from the plugin's formals rather than a list.
+  spec <- get(".actaPpArgSpec", envir = h)
+  chk("costain_quantile is REQUIRED (its formal default is a bare NA)",
+      "costain_quantile" %in% spec("pp_costain_floor")$required)
+  chk("sat_threshold is NOT required (it has a real default)",
+      !("sat_threshold" %in% spec("pp_auto2_costain")$required) &&
+        "sat_threshold" %in% spec("pp_auto2_costain")$all)
+  chk("an unresolvable plugin name yields no spec", is.null(spec("pp_not_a_function")))
+
+  chk("pp_costain_floor without costain_quantile is fatal",
+      nf("gate_flowmeans_costain", "pp_costain_floor", "") == 1L)
+  chk("pp_auto2_costain without costain_quantile is fatal",
+      nf("gate_auto2_costain", "pp_auto2_costain", "sat_threshold=0.90, dip_pval=0.05") == 1L)
+  ## The discriminating case: optional args must NOT be demanded, or every shipped row fails.
+  chk("...but omitting the args that DO have defaults is fine",
+      nf("gate_auto2_costain", "pp_auto2_costain", "costain_quantile=0.99") == 0L)
+  chk("a complete row is clean",
+      nf("gate_flowmeans_costain", "pp_costain_floor", "costain_quantile=0.99") == 0L)
+
+  ## A TYPO IS NEVER INTENTIONAL. Every plugin takes `...`, so this is swallowed in silence.
+  chk("an argument name the plugin does not accept is fatal", {
+    r <- f(mk("gate_flowmeans_costain", "pp_costain_floor", "costain_quantil=0.99"))$fatal
+    length(r) == 2L && any(grepl("does not accept", r)) })
+  chk("...and the message lists what IS accepted",
+      any(grepl("costain_quantile", f(mk("gate_flowmeans_costain", "pp_costain_floor",
+                                         "costain_quantil=0.99"))$fatal, fixed = TRUE)))
+  chk("a preprocessing_method naming no function is fatal, and SAYS so", {
+    r <- f(mk("gate_flowmeans_costain", "pp_costain_flooor", "costain_quantile=0.99"))$fatal
+    ## Counting fatals is not enough here: delete the branch and every argument reads as
+    ## unknown instead, so the count stays 1 while the diagnosis becomes nonsense.
+    length(r) == 1L && grepl("names no known function", r[[1]], fixed = TRUE) })
+
+  ## A floor computed and thrown away is a note, not a failure -- the numbers are unaffected.
+  chk("costain preprocessing on a method that ignores it is a NOTE",
+      nf("gate_flowmeans", "pp_costain_floor", "costain_quantile=0.99") == 0L &&
+        nn("gate_flowmeans", "pp_costain_floor", "costain_quantile=0.99") == 1L)
+
+  ## Rows the pipeline ignores, this must ignore too.
+  chk("commented-out #rows are ignored",
+      nf("gate_flowmeans_costain", alias = "#Reagent") == 0L)
+  chk("a row with no gating_method is ignored", nf("") == 0L)
+  chk("an absent gating_method column is not an error",
+      length(f(data.frame(alias = "Reagent", stringsAsFactors = FALSE))$fatal) == 0L)
+  chk("NULL / empty templates are not this check's business",
+      length(f(NULL)$fatal) == 0L && length(f(mk("x")[0, , drop = FALSE])$fatal) == 0L)
+
+  ## NO WORKBOOK CELL IS EVER EVALUATED -- the rule test_arg_safety.R owns. Reading argument
+  ## NAMES must not force the values, or a pre-flight becomes the very execution path that file
+  ## was written to close.
+  nm <- get(".actaArgNames", envir = h)
+  boom <- "costain_quantile=stop('the pre-flight evaluated a workbook cell')"
+  chk("argument names are read without evaluating the values",
+      identical(tryCatch(nm(boom), error = function(e) "EVALUATED"), "costain_quantile"))
+  chk("...and the whole check survives such a cell",
+      length(f(mk("gate_flowmeans_costain", "pp_costain_floor", boom))$fatal) == 0L)
+  ## The comma matters: `(^|,)` already rejects an inner `=` with no comma before it, so a probe
+  ## without one passes even with the quote-blanking deleted.
+  chk("a quoted value containing ', name=' is not mistaken for an argument name",
+      identical(nm("costain_quantile=0.99, cluster='x, y=z'"), c("costain_quantile", "cluster")))
+  chk("...and the same inside double quotes",
+      identical(nm('costain_quantile=0.99, cluster="x, y=z"'), c("costain_quantile", "cluster")))
+})
+
+## And it has to reach the operator through the same pre-flight the script and app call.
+local({
+  md <- data.frame(Dirname = "X", Alias = "X", Row = c("A","B","C"), Column = 1, PlateID = 1,
+                   StainType = c("Stain","Stain","Costain"), StainQty = c(1,2,0),
+                   Fix = "N", Perm = "N", ELN_Name = "n", ELN_ID = "i", Operator = "o",
+                   Markername = "CD3", stringsAsFactors = FALSE)
+  rec <- function(pp, args) {
+    gt <- data.frame(alias = c("Cells","Reagent"), pop = c("+","+/-"), parent = "root",
+                     dims = c("FSC-A,SSC-A","CD3,FSC-A"),
+                     gating_method = c("boundary","gate_flowmeans_costain"),
+                     preprocessing_method = c(NA_character_, pp),
+                     preprocessing_args = c(NA_character_, args), stringsAsFactors = FALSE)
+    r <- h$actaPrevalidateRecords(md, gt, NULL, "X", tempfile(), marker_col = "Markername")
+    Filter(function(x) x$id == "costain_preprocessing", r)[[1]]
+  }
+  chk("the pre-flight FAILS a costain row with no preprocessing_method",
+      rec(NA_character_, NA_character_)$status == "fail")
+  chk("the pre-flight FAILS a costain row with no costain_quantile",
+      rec("pp_costain_floor", "")$status == "fail")
+  chk("...and PASSES a complete one", rec("pp_costain_floor", "costain_quantile=0.99")$status == "pass")
 })
 
 cat(if (ok) "\nALL PRE-FLIGHT TESTS PASS\n" else "\nFAILURES ABOVE\n")

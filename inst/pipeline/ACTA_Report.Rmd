@@ -162,19 +162,24 @@ listOfLibrary<-c("flowMeans","this.path","lubridate","dplyr","tidyr","readxl","o
 ## version record this loop's whole purpose is to make reproducible. walk() over a character
 ## vector is a for loop; the honest version of the install manifest does not need a package to
 ## read itself.
-for (.pkg in listOfLibrary) {
-  if (!requireNamespace(.pkg, quietly = TRUE)) {
-    message("Trying CRAN for: ", .pkg)
-    tryCatch(install.packages(.pkg), error = function(e) NULL)
-  }
-  if (!requireNamespace(.pkg, quietly = TRUE)) {
-    message("CRAN failed for: ", .pkg, ". Trying Bioconductor...")
-    tryCatch(BiocManager::install(.pkg, ask = FALSE, update = FALSE),
-             error = function(e) NULL)
-  }
-  library(.pkg, character.only = TRUE)
+## REFUSES RATHER THAN INSTALLING -- see the long note at the head of ACTA_Script.R. This copy
+## matters for a second reason: it runs INSIDE the knit, so an install here happens while the
+## report is being produced, and anything it pulled in would be attached to the session that
+## renders the regulated artefact. The pipeline stops before this point if a package is missing,
+## so reaching this message means the report was knitted on its own.
+.have <- vapply(listOfLibrary, requireNamespace, logical(1), quietly = TRUE)
+if (any(!.have)) {
+  .miss <- listOfLibrary[!.have]
+  stop(sprintf(paste0(
+    "The ACTA report cannot be rendered: %d required package(s) are not installed.\n  %s\n\n",
+    "Install them, then re-render:\n",
+    "  install.packages(\"BiocManager\")\n",
+    "  BiocManager::install(c(%s))"),
+    length(.miss), paste(.miss, collapse = ", "),
+    paste(sprintf("\"%s\"", .miss), collapse = ", ")), call. = FALSE)
 }
-rm(.pkg)
+for (.pkg in listOfLibrary) library(.pkg, character.only = TRUE)
+rm(.pkg, .have)
 ## Resolve THIS report's own folder. The previous getActiveDocumentContext() call pointed
 ## at whatever file had FOCUS in the editor, so knitting with another version folder's file
 ## selected silently ran the report against THAT folder's scripts. knitr already sets the
@@ -314,6 +319,43 @@ if (!exists("panelList") || !length(panelList)) {
 }
 ```
 
+```{r PanelIteration, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## THE COSTAIN PANEL, RESOLVED FROM THE LAB'S MASTER PANEL INVENTORY.
+##
+## The panels above are what the instrument recorded. This is what the panel was DECLARED to be:
+## Layout_Plate!Costain_Panel_Iteration looked up in the inventory, so a costain panel's
+## catalogue and vendor are reported without being retyped into the layout.
+##
+## PROVENANCE ONLY, and the caption says so on every page it appears. A reagent marked "no match"
+## is a documentation discrepancy -- the inventory and the panel that ran have drifted -- and it
+## is deliberately NOT a QC failure: nothing here gates a result, moves a number or withholds an
+## artefact. Silence when no iteration is declared, which is the common case.
+if (exists("panelIterationInfo") && !is.null(panelIterationInfo) && length(panelIterationInfo)) {
+  for (nm in names(panelIterationInfo)) {
+    r <- panelIterationInfo[[nm]]
+    cap <- actaPanelIterationCaption(r)
+    if (is.na(cap)) next
+    if (is.null(r$table)) {
+      ## Said, not skipped: an unresolved iteration is exactly the thing somebody needs to see.
+      cat(sprintf("\\textit{\\small %s}\n\n\\vspace{6pt}\n\n", texEsc(cap)))
+      next
+    }
+    d <- r$table
+    d[] <- lapply(d, function(x) ifelse(is.na(x), "\u2014", as.character(x)))
+    ## THE CAPTION IS ESCAPED BY HAND. kable(escape = TRUE) escapes the CELLS and passes the
+    ## caption straight into \caption{}, so a panel iteration named "acta_demo_tcell_1" put a bare
+    ## underscore into LaTeX and the render died on "I've inserted a begin-math/end-math symbol".
+    ## Panel names come from a lab's inventory and underscores in them are the norm, not the
+    ## exception.
+    cat(knitr::kable(d, format = "latex", booktabs = TRUE, longtable = TRUE, row.names = FALSE,
+                     caption = texEsc(cap),
+                     col.names = c("Antigen", "Fluorochrome", "Matched to", "Verdict",
+                                   "Catalogue", "Vendor", "Clone", "Type")))
+    cat("\n\n\\vspace{10pt}\n\n")
+  }
+}
+```
+
 ```{=tex}
 \clearpage
 ```
@@ -385,8 +427,14 @@ if (ds$n_files)
 ```{r Compensation, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
 ## States what was actually applied, and for a csv shows the matrix itself -- so the report is the
 ## evidence that compensation happened, not just an assertion that it was configured. compMode is
-## the resolved mode ('csv' / 'self' / 'none'); compLabel is the workbook cell verbatim.
-ci <- actaCompReport(compMode, getwd(), raw = if (exists("compLabel")) compLabel else NA_character_)
+## the resolved mode ('csv' / 'self' / 'none').
+## THE CELL, NOT compLabel. compLabel is the CAPTION form and renders a blank cell as an em dash,
+## so the `*(blank)*` branch below could never fire -- a blank cell printed as \texttt{---}, which
+## is the stray character the TiterPubs maintainer found on the Compensation page. actaInfoValue()
+## returns the cell or NA, which is what `raw` is documented to be.
+ci <- actaCompReport(compMode, getwd(),
+                     raw = if (exists("infoSheet")) actaInfoValue(infoSheet, "compensation")
+                           else NA_character_)
 ## ESCAPED, AND NOT LEFT IN A MARKDOWN CODE SPAN. Info!compensation is free text from the workbook
 ## and reaches pandoc through a results='asis' chunk, where a backslash starts a LaTeX command --
 ## a cell of  csv` \input{/etc/passwd} `  had its backtick close the span and the rest ran, pulling
@@ -452,8 +500,17 @@ if (!exists("actaTransEff") || !length(grp)) {
 
 ## 4.4 Gating Details
 
-```{r GatingPlot, fig.width=12, fig.height=8, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.height="0.88\\textheight", out.extra="keepaspectratio", fig.align="center"}
-plot(gs)
+```{r GatingPlot, fig.width=10, fig.height=6, fig.pos="H", echo=FALSE, warning=FALSE, message=FALSE, out.width="\\textwidth", out.extra="keepaspectratio", fig.align="center", results='asis'}
+## WAS plot(gs) -- flowWorkspace's Rgraphviz hierarchy, which is unreadable past a dozen nodes,
+## cannot be styled to match the rest of the report, and rendered only the LAST antibody group's
+## tree because `gs` is reassigned on every pass of the script's main loop. The scheme is now
+## captured per group (see plotList_gatingScheme) and every one of them is printed, so a run with
+## three reagents documents three gating schemes instead of silently showing one.
+## ONE TREE, because one gating_template drives every group in the run -- that shared hierarchy
+## is what makes the Stain Indices comparable between reagents. Printing one per reagent repeated
+## the same picture with a single node renamed.
+.g <- if (exists("plotList_gatingScheme")) Filter(Negate(is.null), plotList_gatingScheme) else list()
+if (length(.g)) print(.g[[1]]$plot) else cat("No gating scheme was captured by this run.\n\n")
 ```
 
 ```{=tex}
@@ -482,7 +539,7 @@ cat(paste("In `gating_template`, mark `stats_export` as TRUE to make sure that p
           "are exported.\n\n"))
 ```
 
-## 4.5 Analysis software (not a MiFlowCyt 1.0 item)
+## 4.5 Analysis software
 
 ```{r MfcSoftware, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
 ## MiFlowCyt 1.0 has NO software item -- section 4 ends at 4.4.4 -- so this is labelled an
@@ -556,9 +613,12 @@ if (!exists("PlateMapList") || !length(PlateMapList)) {
 
 ```{r QCChecks, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
 ## Renders whatever actaQCChecks() produced per antibody -- add a check in ACTA_Functions.R and it
-## appears here with no edit to this file. Every verdict is one of PASS (green), FAIL (red) or
-## SKIPPED (italic, uncoloured -- it is neither). Skipped is NOT passed: the
-## per-antibody roll-up in the titration export (QC_Status) counts it as FAIL.
+## appears here with no edit to this file. Every verdict is one of PASS (green), FAIL (red),
+## SKIPPED or N/A (both italic and uncoloured -- neither is a pass or a fail). SKIPPED is a check
+## that should have run and could not, and the per-antibody roll-up in the titration export
+## (QC_Status) counts it as FAIL. N/A is a check with nothing to test -- the Costain checks on a
+## layout with no Costain well, which is legitimate when no gating method reads the Costain
+## floor -- and the roll-up EXCLUDES it rather than failing the run. See .actaQCNotApplicable().
 ## Nothing in this section can stop the render: the checks were already computed in the script.
 ## Braces are required: a brace-less function body ends at the newline, so `else` on the next
 ## line is a parse error inside a knitr chunk.
@@ -722,7 +782,58 @@ for (q in seq_along(antibody)) {
 \clearpage
 ```
 
-# 6 Session Information
+# 6 Info
+
+```{r InfoTable, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+## The instructions workbook's Info sheet as THIS RUN used it: one row per script-level variable,
+## grouped by Category, built by actaInfoReport(). Modelled on URSULA's section 8 (ACFA).
+##
+## THE SOURCE COLUMN IS WHY THIS SECTION EXISTS. The values are already in the workbook and in the
+## export's Info audit sheet; what neither of them says is whether a value is the one somebody
+## chose. "shipped example" against master_panel_inventory_path is the case that prompted it --
+## a run reported its real costain panel as unknown because the inventory had quietly fallen back
+## to the demo file, and nothing on the page said so.
+##
+## Every cell is escaped: Value and Description are free text from a workbook, and section 4.5
+## already learned what an unescaped workbook string does to a LaTeX render.
+if (exists("infoReportTable") && !is.null(infoReportTable) && nrow(infoReportTable)) {
+  d <- infoReportTable
+  d$Value[is.na(d$Value)] <- "(not set)"
+  show <- data.frame(
+    Variable = vapply(d$Variable, texEsc, ""),
+    Value    = vapply(d$Value,    texEsc, ""),
+    Source   = vapply(d$Source,   texEsc, ""),
+    stringsAsFactors = FALSE)
+  kb <- kableExtra::column_spec(
+          kableExtra::column_spec(
+            kableExtra::column_spec(
+              kableExtra::kable_styling(
+                knitr::kable(show, format = "latex", booktabs = TRUE, longtable = TRUE,
+                             row.names = FALSE, escape = FALSE,
+                             col.names = c("Variable", "Value", "Source"),
+                             caption = "Info sheet: script-level settings of this run"),
+                font_size = 8,
+                latex_options = c("hold_position", "repeat_header")),
+              1, width = "5.5cm"),
+            2, width = "7.5cm"),
+          3, width = "3cm")
+  ## pack_rows draws the Category bands. rle() rather than unique(): a Category that appears in two
+  ## separate blocks of the sheet should get two bands, in sheet order, not one merged band that
+  ## silently reorders the rows under it.
+  r <- rle(d$Category); end <- cumsum(r$lengths)
+  for (k in seq_along(r$values))
+    kb <- kableExtra::pack_rows(kb, texEsc(r$values[k]), end[k] - r$lengths[k] + 1L, end[k])
+  cat(kb)
+} else {
+  cat("The instructions workbook carried no Info sheet settings to report.\n\n")
+}
+```
+
+```{=tex}
+\clearpage
+```
+
+# 7 Session Information
 
 ```{r provenance, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
 cat("**Script version:** ACTA v", ScriptVersion, "\n\n", sep = "")

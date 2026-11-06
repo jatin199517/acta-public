@@ -1,7 +1,10 @@
+## DECLARED, NOT INHERITED. Setting the repo explicitly removes the case where a run resolves
+## package names against whatever mirror the session happened to be configured with.
 options(repos = c(CRAN = "https://cloud.r-project.org"))
-if(!requireNamespace("BiocManager")){
-  install.packages("BiocManager", quietly=TRUE)
-}
+## BiocManager is in `listOfLibrary` and is therefore reported by the refusal below like any
+## other missing package. It used to be installed here instead -- silently, before the manifest
+## was even read -- which made the one package the Bioconductor half depends on the one package
+## that was never declared missing.
 ##BiocManager::install("flowMeans")
 ##remotes::install_github("RGLab/ggcyto")
 ## Attached packages, and ONLY the ones actually called. Setup.R parses this vector out
@@ -18,19 +21,39 @@ listOfLibrary<-c("flowMeans","this.path","lubridate","dplyr","tidyr","readxl","o
 ## version record this loop's whole purpose is to make reproducible. walk() over a character
 ## vector is a for loop; the honest version of the install manifest does not need a package to
 ## read itself.
-for (.pkg in listOfLibrary) {
-  if (!requireNamespace(.pkg, quietly = TRUE)) {
-    message("Trying CRAN for: ", .pkg)
-    tryCatch(install.packages(.pkg), error = function(e) NULL)
-  }
-  if (!requireNamespace(.pkg, quietly = TRUE)) {
-    message("CRAN failed for: ", .pkg, ". Trying Bioconductor...")
-    tryCatch(BiocManager::install(.pkg, ask = FALSE, update = FALSE),
-             error = function(e) NULL)
-  }
-  library(.pkg, character.only = TRUE)
+## REFUSES, RATHER THAN INSTALLING INTO THE LIBRARY THAT IS ABOUT TO DO THE ANALYSIS.
+##
+## This used to resolve each missing name against CRAN and then Bioconductor, UNPINNED, and
+## attach whatever arrived -- mid-run, in the session that then produces the numbers. Three
+## things were wrong with that, and the third is the one that matters here:
+##   1. the analysis environment could differ between two runs of the same data, which is the
+##      opposite of what the per-run package_versions record exists to establish;
+##   2. a gate could reach the network and mutate the library on every push -- it did, and it
+##      cost 20 of test_app_package.R's 20 seconds until CI declared the names itself;
+##   3. an unpinned install chosen BY the analysis, DURING the analysis, is a supply-chain
+##      decision made with nobody watching, in a tool whose output informs regulated work.
+##
+## Stopping is not merely safer, it is more honest: "you are missing X" is a fact, where "I
+## installed some version of X for you" is a change nobody asked for. The message names every
+## missing package at once -- not the first one, which would make this a loop of re-runs -- and
+## gives a command that works for the CRAN and Bioconductor halves alike, because
+## BiocManager::install() handles both.
+.have <- vapply(listOfLibrary, requireNamespace, logical(1), quietly = TRUE)
+if (any(!.have)) {
+  .miss <- listOfLibrary[!.have]
+  stop(sprintf(paste0(
+    "ACTA cannot run: %d required package(s) are not installed.\n  %s\n\n",
+    "Install them, then re-run:\n",
+    "  install.packages(\"BiocManager\")\n",
+    "  BiocManager::install(c(%s))\n\n",
+    "Nothing was installed for you on purpose -- an unpinned install into the library that is ",
+    "about to perform the analysis is not a decision this script should make. ",
+    "actaDependencyChecks() reports the same list before a run."),
+    length(.miss), paste(.miss, collapse = ", "),
+    paste(sprintf("\"%s\"", .miss), collapse = ", ")), call. = FALSE)
 }
-rm(.pkg)
+for (.pkg in listOfLibrary) library(.pkg, character.only = TRUE)
+rm(.pkg, .have)
 
 ## Robust working-directory set for RStudio *and* Positron / VS Code. IMPORTANT: in
 ## Positron you must SOURCE the file -- running code line-by-line in the console gives
@@ -185,6 +208,32 @@ infoSheet<-if ("Info" %in% excel_sheets(metadata_file_path))
 ## Info headers are annotated the same way Layout_Plate's are (`dashboard_creation (L)`), so they
 ## get the same strip -- otherwise a reader keyed on `compensation` would miss `compensation (T)`.
 if (!is.null(infoSheet)) names(infoSheet)<-actaStripHeaderAnnotation(names(infoSheet))
+
+## ---- Info!scrub_confidential, applied to the LAYOUT before anything is derived from it --------
+## Operator, ELN_ID, ELN_Name and Costain_Panel_Iteration are replaced with fixed placeholders.
+##
+## DONE HERE, NOT ON `stats`. Scrubbing stats was the first attempt and it left the real notebook
+## ID in every FILENAME: the plot names and the export name come from elnByGroup and BIDfile,
+## which are built from this sheet and never consulted stats. The bundle came out named
+## EXP26000001_ACTA_TiterPubs.zip with twelve plots inside called ..._EXP00000001_... -- the
+## scrubbed name advertising that the contents were scrubbed, while they were not. Scrubbing the
+## layout first means every derived thing -- group keys, file names, pData, stats, the report --
+## inherits one consistent set of identifiers.
+##
+## The workbook ON DISK is untouched; only this in-memory copy changes. The copy that goes into
+## the bundle is scrubbed separately, by .tpScrubWorkbook().
+ACTA_ITER_MAP <- character(0)
+if (actaScrubConfidential(infoSheet)) {
+  metadata_file <- actaApplyScrub(metadata_file)
+  ## The Info sheet too: Submitter_Email rides it verbatim into the bundle's instructions copy and
+  ## the export's Info audit sheet. Scrubbed HERE, before anything reads infoSheet, so every
+  ## downstream artefact inherits the placeholder rather than each one needing its own redaction.
+  infoSheet <- actaApplyInfoScrub(infoSheet)
+  ## placeholder -> original panel name. The inventory lookup needs the original; everything
+  ## printed uses the placeholder. See actaApplyScrub().
+  ACTA_ITER_MAP <- attr(metadata_file, "acta_iteration_map") %||% character(0)
+  message("[ACTA] scrub_confidential = TRUE: identifiers replaced before any output is named.")
+}
 ## "csv" | "self" | "none" -- see actaCompensate(). Resolved ONCE for the whole run, because a
 ## titration compares wells to each other and compensating them differently would invalidate
 ## every cross-well comparison the report makes.
@@ -212,6 +261,11 @@ if (!is.na(actaDownsampleTo))
 ## Re-set at the top of EVERY antibody iteration, not just here: seeding once would make each
 ## group's gates depend on how many groups ran before it, so adding an antibody would silently
 ## move the gates of the ones after it.
+## THE ANALYSIS CLOCK. Started here rather than in run_acta() because run_acta's own wall clock
+## measures the analysis AND the report render -- with report = TRUE the .Rmd sources this script,
+## so the render wraps the analysis rather than following it. This is the only point that can say
+## how long the analysis itself took.
+ACTA_T0 <- Sys.time()
 ACTA_SEED <- 123
 set.seed(ACTA_SEED)
 
@@ -284,6 +338,14 @@ tryCatch(register_plugins(fun=gate_flowmeans, methodName="gate_flowmeans"),
          error=function(e) message("gate_flowmeans registration skipped: ", conditionMessage(e)))
 tryCatch(register_plugins(fun=gate_flowmeans_costain, methodName="gate_flowmeans_costain"),
          error=function(e) message("gate_flowmeans_costain registration skipped: ", conditionMessage(e)))
+tryCatch(register_plugins(fun=gate_mindensity_costain, methodName="gate_mindensity_costain"),
+         error=function(e) message("gate_mindensity_costain registration skipped: ", conditionMessage(e)))
+tryCatch(register_plugins(fun=gate_mind_fmeans_costain, methodName="gate_mind_fmeans_costain"),
+         error=function(e) message("gate_mind_fmeans_costain registration skipped: ", conditionMessage(e)))
+tryCatch(register_plugins(fun=gate_mind2_fmeans_costain, methodName="gate_mind2_fmeans_costain"),
+         error=function(e) message("gate_mind2_fmeans_costain registration skipped: ", conditionMessage(e)))
+tryCatch(register_plugins(fun=gate_costain, methodName="gate_costain"),
+         error=function(e) message("gate_costain registration skipped: ", conditionMessage(e)))
 tryCatch(register_plugins(fun=gate_auto_costain_dip, methodName="gate_auto_costain_dip"),
          error=function(e) message("gate_auto_costain_dip registration skipped: ", conditionMessage(e)))
 tryCatch(register_plugins(fun=gate_auto_costain_gmm, methodName="gate_auto_costain_gmm"),
@@ -299,10 +361,6 @@ tryCatch(register_plugins(fun=pp_costain_floor, methodName="pp_costain_floor", t
 ## static-vs-flowMeans decision (any sample >sat_threshold % positive -> static).
 tryCatch(register_plugins(fun=pp_auto2_costain, methodName="pp_auto2_costain", type="preprocessing"),
          error=function(e) message("pp_auto2_costain registration skipped: ", conditionMessage(e)))
-## gate_manual: returns the interactively pre-drawn gate from .acta_manual_cache (drawn
-## by drawManualGates() before pass-2 gt_gating). pop="+/-" -> openCyto builds <alias>+/-.
-tryCatch(register_plugins(fun=gate_manual, methodName="gate_manual"),
-         error=function(e) message("gate_manual registration skipped: ", conditionMessage(e)))
 ## Identify the per-antibody marker gate row (alias "Reagent"/"Antibody", case-
 ## insensitive). Its x/first dim is filled PER ANTIBODY from the layout `Dim` column
 ## (resolved to a channel via `boundary`); any dim authored in the sheet for that row
@@ -372,8 +430,16 @@ actaPrevalidate(metadata_file, gating_template, infoSheet, actaGroups,
 ## Biexp maxValue read from the instrument ($PnR), ONCE for the whole run and applied to every
 ## group -- see resolveInstrumentMaxValue(). Any disagreement between files is a hard error,
 ## because a per-group transform would make Stain Indices incomparable within one experiment.
-actaMaxValue <- resolveInstrumentMaxValue(
-  list.files(path, pattern = "\\.fcs$", recursive = TRUE, full.names = TRUE))
+## BEFORE ANYTHING IS READ OR WRITTEN: if this run is destined for a public bundle, check the
+## panel as acquired for markers the site has declared unpublishable. Here rather than at bundle
+## time so the run stops in seconds instead of after a full analysis -- and so nothing is written
+## that would then have to be deleted.
+.actaFcsAll <- list.files(path, pattern = "\\.fcs$", recursive = TRUE, full.names = TRUE)
+actaAssertBundleAllowed(
+  .actaFcsAll,
+  enabled = toupper(trimws(actaInfoValue(infoSheet, "titerpubs_export") %||% "")) %in%
+            c("TRUE", "T", "YES", "Y", "1"))
+actaMaxValue <- resolveInstrumentMaxValue(.actaFcsAll)
 message(sprintf("ACTA: biexp maxValue = %s from $PnR (%.2f decades)",
                 format(actaMaxValue, scientific = FALSE), log10(actaMaxValue)))
 ## One transformer for the whole run: used both to transform the GatingSet and to build the
@@ -399,39 +465,19 @@ actaTransEff <- c(list(maxValue = actaMaxValue), modifyList(actaTransEff, actaTr
 ## Marker gating and its Costain floor are fully defined in the gating_template sheet
 ## (Reagent/Antibody row + pp_costain_floor, costain_quantile in preprocessing_args).
 
-## --- gate_manual (interactive marker gating) setup ------------------------------------
-## If the marker row's method is `gate_manual`, the marker gate is DRAWN interactively
-## with flowGate (rectangle/polygon) AFTER the auto template builds its parent, via a
-## two-pass gt_gating (drawManualGates() + the gate_manual plugin). Scope is driven by the
-## marker row's `groupBy` column:
-##   groupBy = a column (e.g. Dirname) = ONE gate per group value (Dirname => per antibody).
-##   groupBy = EMPTY                   = PER-SAMPLE, one gate per well (warned about below).
-## Drawn gates persist under gate_dir and are reused on re-run unless manualGateRedraw=TRUE.
-manualGateRedraw <- FALSE
-gate_dir <- file.path(getwd(), "Manual_Gates")
+## --- gate_manual: REFUSED, and that is the whole implementation ----------------------
+## The feature is GONE as of 3.6.0 along with the flowGate dependency -- see the note where
+## gate_manual() used to live in ACTA_Functions.R. It had been inert since 3.0 and could never
+## have run from the app, from CI or under Rscript, because flowGate's drawer launches its own
+## blocking Shiny app and requires interactive().
+##
+## THE REFUSAL STAYS. A workbook that names gate_manual must get a clear error naming the cell,
+## not a crash deep in gating -- and the app pre-flight and the workbook help_notes say the same
+## thing. Those three have to agree; for six weeks they did not, and the script was the one
+## claiming it worked.
 markerIsManual <- tolower(trimws(reagentMethod)) == "gate_manual"
-## STOPS HERE, DELIBERATELY, AND SAYS WHY. Everything below is intact and is kept as the starting
-## point for a revival, but it cannot run: drawManualGates() is NOT EXPORTED, and since 3.0 an
-## installed run loads ACTA with library() rather than sourcing a sibling ACTA_Function*.R -- so
-## the call at the gating step died with "object 'drawManualGates' not found", which tells the
-## operator nothing. gate_manual also requires interactive(), so it can never run from the app,
-## from CI, or under Rscript.
-## The app refuses the same configuration in pre-flight with the same wording, and the workbook's
-## help_notes says NOT IMPLEMENTED. Those three have to agree; for six weeks they did not, and the
-## script was the one claiming it worked.
 if (markerIsManual)
-  stop("gate_manual is NOT IMPLEMENTED in this version of ACTA. Drawing gates by hand needs an interactive gating UI that ACTA does not have -- flowGate's drawer launches its own blocking Shiny app, which cannot run inside this one. Planned for a future release; use an automated method.", call. = FALSE)
-manualGroupBy <- ""
-if (markerIsManual) {
-  manualGroupBy <- trimws(as.character(gating_template$groupBy[markerGateRowIdx]))
-  if (length(manualGroupBy) != 1 || is.na(manualGroupBy)) manualGroupBy <- ""
-  if (!nzchar(manualGroupBy)) {   # empty groupBy -> per-sample
-    nTot <- nrow(dplyr::filter(metadata_file, !is.na(Dirname) & Dirname %in% actaGroups$dirname & !isLayoutValue(StainType, "Unstained")))
-    warning(sprintf(paste0("gate_manual with EMPTY groupBy = PER-SAMPLE: you will draw an individual gate for every ",
-                           "population -- %d samples total across the dataset. To draw ONE gate per group instead, ",
-                           "put a grouping column (e.g. 'Dirname') in the marker row's groupBy column."), nTot))
-  }
-}
+  stop("gate_manual is NOT IMPLEMENTED in this version of ACTA. Drawing gates by hand needs an interactive gating UI that ACTA does not have. Use an automated gating method instead.", call. = FALSE)
 
 stats<-data.frame()
 ## Concatenated per-event marker values for ConcatPlot, one entry per antibody group. Collected in
@@ -443,6 +489,7 @@ concatData<-list()
 ## millions of rows for a picture that looks identical. Seeded, so the plot is reproducible.
 CONCAT_MAX_PER_WELL <- 20000L
 plotList_hist<-list()
+plotList_gatingScheme<-list()
 plotList_pseudo<-list()
 list_message<-list()
 ## One named list of gate-layout plots per antibody (one entry per gating_template
@@ -585,7 +632,10 @@ for(q in seq_along(antibody)){
   ## description and pData would come back N-deep, breaking the one-row-per-sample assumption that
   ## everything downstream rests on. Scoped to the titration, each well matches exactly one row
   ## again, which is what it always did for a single-marker folder -- so this is a no-op there.
-  fs<-annotate_changeParam_pdWrite(fsImported, metadata_file[.abRows, , drop = FALSE])
+  ## Info!Equipment_Make / Equipment_Model override $CYT when filled -- see fcsEquipment().
+  fs<-annotate_changeParam_pdWrite(fsImported, metadata_file[.abRows, , drop = FALSE],
+                                   equip_make  = actaInfoValue(infoSheet, "Equipment_Make"),
+                                   equip_model = actaInfoValue(infoSheet, "Equipment_Model"))
   fs<-fs[!isLayoutValue(pData(fs)$StainType, "Unstained")] ## Removes unstained sample (case-insensitive).
   ### Transformation
   notChannels<-c("AF-A","Time","INFO")
@@ -674,15 +724,8 @@ for(q in seq_along(antibody)){
       yDim <- if (is.na(yDim) || !nzchar(yDim)) "" else trimws(strsplit(yDim, ",")[[1]][1])
       gt_this$dims[mr] <- if (nzchar(yDim)) paste(markerChannel, yDim, sep = ", ") else markerChannel
     }
-    if (markerIsManual) {
-      ## Manual marker: capture parent + resolved dims for the interactive draw. The row
-      ## stays in the FULL template (gate_manual plugin returns the drawn gate in pass 2).
-      markerParent <- gt_this$parent[markerGateRowIdx]
-      markerDimsCh <- resolveDimsToChannels(gt_this$dims[markerGateRowIdx], boundary)
-    }
   }
-  ## PASS 1: auto template (exclude the manual marker row) -> builds up to the parent.
-  gt_auto <- if (markerIsManual) gt_this[-markerGateRowIdx, , drop = FALSE] else gt_this
+  gt_auto <- gt_this
   ## PRE-FLIGHT: every `dims` token must name a marker or a channel THIS data has. openCyto would
   ## otherwise discover it deep into gating -- after the layout plots are on disk -- see
   ## actaUnresolvedDims(). Fail here, before anything is written.
@@ -697,20 +740,6 @@ for(q in seq_along(antibody)){
   write.csv(gt_auto, acta_gt_csv, row.names = FALSE, na = "")
   gt_gating(gatingTemplate(acta_gt_csv), gs)
   recompute(gs) ## Recomputes statistics
-  ## PASS 2 (manual only): draw the marker gate interactively, then re-run the FULL
-  ## template -- openCyto skips the existing auto nodes and builds <alias>+/- from the
-  ## drawn gate returned by the gate_manual plugin.
-  if (markerIsManual) {
-    ## groupBy drives scope: a column (e.g. Dirname) -> one gate per group value; empty ->
-    ## per-sample. drawManualGates() picks the brightest well per group to draw on.
-    .acta_manual_cache$gates <- drawManualGates(gs, dims = markerDimsCh, parent = markerParent,
-                                                groupBy = manualGroupBy, gate_dir = gate_dir,
-                                                redraw = manualGateRedraw)
-    acta_gt_full_csv <- tempfile(fileext = ".csv")
-    write.csv(gt_this, acta_gt_full_csv, row.names = FALSE, na = "")
-    gt_gating(gatingTemplate(acta_gt_full_csv), gs)
-    recompute(gs)
-  }
 
   ## A gate_quad_* row leaves its four populations named after the CHANNELS
   ## ("BUV496-A+Alexa Fluor 532-A-"). Rename them to the dims (marker) names -- see
@@ -1177,6 +1206,21 @@ for(q in seq_along(antibody)){
   ## page and is gone.
   plotList_hist[[q]]<-p_hist
   plotList_pseudo[[q]]<-p_pseudo
+  ## THE GATING SCHEME, built HERE because `gs` is per antibody group and this loop is the only
+  ## place it is the right one. The report used to call plot(gs) in section 4.4, which rendered
+  ## whatever group the loop finished on and could not be saved as a file at all. Captured per
+  ## group instead, so the report shows each tree and the PNG lands in Plots/ with the other
+  ## figures -- which is also how it reaches the TiterPubs bundle.
+  ## Plot AND canvas size together: the size is a function of the tree, and a ggplot built from
+  ## several per-layer data frames carries no $data to recover it from afterwards.
+  plotList_gatingScheme[[q]]<-tryCatch({
+      ## gating_template supplies the METHOD behind each node, which is what the node colours
+      ## encode -- two populations with the same name mean different things if one was drawn by
+      ## flowMeans and the other by hand.
+      .p <- actaGatingSchemePlot(gs, title="Gating scheme", gating_template=gating_template)
+      if (is.null(.p)) NULL else list(plot=.p, size=actaGatingSchemeSize(gs))
+    }, error=function(e) { message("[ACTA] gating scheme plot skipped for ", antibody[q], ": ",
+                                   conditionMessage(e)); NULL })
   ## ---- ConcatPlot data ------------------------------------------------------------------------
   ## FlowJo-style concatenation: every well of this group stacked into one frame, marker intensity
   ## against the stain quantity. Values come from the PARENT population of the marker gate, so the
@@ -1398,9 +1442,9 @@ SatPlot<-stats |>
   ## Foot of the vline, and the LEFT end of the hline. x/y = -Inf pins each to its panel edge, which
   ## is scale-independent -- necessary because facet_wrap(scales="free_y") gives every panel its own
   ## y range.
-  geom_text(data = satLab, aes(x = xpos, y = -Inf, label = "x@saturation"), inherit.aes = FALSE,
+  geom_text(data = satLab, aes(x = xpos, y = -Inf, label = "x@max"), inherit.aes = FALSE,
             angle = 90, hjust = -0.05, vjust = -0.4, size = 2.6, color = "grey20") +
-  geom_text(data = satLab, aes(x = -Inf, y = maxSat, label = "saturation"), inherit.aes = FALSE,
+  geom_text(data = satLab, aes(x = -Inf, y = maxSat, label = "max"), inherit.aes = FALSE,
             hjust = -0.06, vjust = -0.5, size = 2.6, color = "grey20") +
   geom_jitter(width = 0, alpha = 0.8, size = 5, stroke = 1, shape = 23,height = 0) +  # Enhanced settings
   ##facet_wrap(~ paste0(Target, " ", Fl, " (", GatingMethod, ")"), scales = "free_y", ncol=3) +
@@ -1863,6 +1907,52 @@ exportLeadCols <- ACTA_EXPORT_LEAD_COLS
 ## workbook written before 3.4.0 simply does not have it, and the operator-facing block is a fixed
 ## schema. Absent becomes NA here rather than a column that silently disappears from the export.
 if (!"Costain_Panel_Iteration" %in% names(stats)) stats$Costain_Panel_Iteration <- NA_character_
+## Same contract for Test_Material_Status, a Layout_Plate column since 3.6.0. An older workbook
+## does not have it, and the TiterPubs mapper falls back to Info!Fresh_or_Frozen when this is NA,
+## so an archived run publishes exactly what it published before.
+if (!"Test_Material_Status" %in% names(stats)) stats$Test_Material_Status <- NA_character_
+
+## ---- Date_Analysis: WHEN THIS ANALYSIS RAN, which is not when the data were acquired ----------
+## TiterPubs asks for "Month/Year of analysis" and ACTA was answering it from Acquisition_date --
+## the month the cytometer ran. For a re-analysis of archived data that is the wrong month and
+## often the wrong year, and the maintainer spotted it in the first bundle we sent.
+##
+## SAME SHAPE AS Acquisition_date deliberately: a Date, one value per row, so the export, the
+## dashboard and the TiterPubs mapper can treat the two columns identically and neither needs a
+## special case. The clock is the analysis clock, not the render clock -- the report may be
+## rendered later, or not at all, and re-rendering it must not change when the analysis happened.
+##
+## SET HERE because this is the point at which every statistic exists: gating, stats, QC and the
+## MM fits are all behind us and the export is written a few lines below. A row that carries this
+## date is a row whose analysis completed -- if anything above had failed, the script would have
+## stopped before reaching it.
+##
+## Sys.time() HERE, not ACTA_T0. ACTA_T0 is when the analysis STARTED; the asked-for value is when
+## it finished. The two differ by minutes on a small plate and by a calendar day on an overnight
+## run, which is exactly the case a date stamp has to get right.
+stats$Date_Analysis <- as.Date(Sys.time())
+
+## ---- TiterPubs scrub: the instrument serial, and only when the run opts in --------------------
+## Info!titerpubs_export = TRUE means this run's artefacts are destined for a public repository
+## under CC BY 4.0, so "Aurora (SN0000)" becomes "Aurora" everywhere downstream -- export, report
+## and bundle alike. Done HERE, before any of them is written, because scrubbing the bundle alone
+## would leave the serial in the report PDF packed inside it.
+##
+## DELIBERATELY NARROW. This is the one identifier ACTA removes on its own authority; everything
+## else a site considers proprietary is the site's call, made under its own data-sharing rules.
+## ACTA is not in a position to guess what somebody else's compliance team cares about.
+if (toupper(trimws(actaInfoValue(infoSheet, "titerpubs_export") %||% "")) %in%
+      c("TRUE","T","YES","1") && "Equipment" %in% names(stats)) {
+  .before <- unique(stats$Equipment)
+  stats$Equipment <- actaScrubEquipmentSerial(stats$Equipment)
+  .after <- unique(stats$Equipment)
+  if (!identical(.before, .after))
+    message(sprintf("[ACTA] titerpubs_export: instrument serial removed from Equipment (%s -> %s).",
+                    paste(.before, collapse=", "), paste(.after, collapse=", ")))
+}
+
+## stats inherits the layout's scrubbed identifiers through pData, so there is nothing to repeat
+## here -- see the scrub applied to metadata_file above, before anything was named.
 statsForExport<-stats |> dplyr::filter(SI==maxSI) |>
   mutate(ACTA_version=ScriptVersion,
          Fix_Perm=fixPermLabel(Fix, Perm, ids=name),
@@ -1898,8 +1988,10 @@ statsForExport<-stats |> dplyr::filter(SI==maxSI) |>
       data.frame(Titration = .ab, as.data.frame(actaQCColumns(qcList[[.ab]]), check.names = FALSE),
                  check.names = FALSE, stringsAsFactors = FALSE))),
     by = "Titration") |>
+  ## Date_Analysis sits beside Acquisition_date because the pair is only meaningful read
+  ## together: "acquired then, analysed now".
   relocate(any_of(c(exportLeadCols, "Combinatorial (L)", "QC_Status", "Panel", "label",
-                    "Acquisition_date", "Equipment", "Fix", "Perm"))) |>
+                    "Acquisition_date", "Date_Analysis", "Equipment", "Fix", "Perm"))) |>
   relocate(dplyr::starts_with("QC_"), .after = any_of("QC_Status")) |>
   ## StainUnit next to the quantity it qualifies. It is meaningless on its own, and `stats` column
   ## order comes from the merge/join chain rather than from Layout_Plate, so the two arrived five
@@ -1955,6 +2047,109 @@ actaMfc <- actaMiFlowCyt(
                                               actaEventsRead else integer(0)))
 
 exportName<-paste0(str_replace_all(str_replace_all(lubridate::today(),"-",""),"^(\\d{2})",""),"_",BIDfile,"_TitrationExport_",ScriptVersion,".xlsx")
+## MOVED AHEAD OF THE EXPORT. The panel used to be resolved near the end of the script, after
+## writeTitrationExport() had already run -- which was fine while the only consumer was the
+## report, and wrong the moment the export needed a Panel_Inventory sheet. Nothing here depends
+## on anything written later: panelList and actaGroups are both complete well before this point.
+
+## ---- Costain panel provenance --------------------------------------------------------------
+## Layout_Plate!Costain_Panel_Iteration names the panel a reagent was costained in. If a master
+## panel inventory is reachable, that name resolves to the panel's reagents -- antigen,
+## fluorochrome, catalogue, vendor -- which is how a costain panel's provenance reaches the report
+## without anybody retyping a catalogue number into the layout.
+##
+## PROVENANCE, NOT QC. A reagent that does not match a measured marker is marked "no match" in the
+## table beside 2.4 and changes nothing else: no gate fails and no number moves. This is the one
+## place ACTA deliberately differs from ACFA, where the same lookup is a QC gate because the panel
+## feeds patient data.
+panelIterationInfo <- local({
+  if (!"Costain_Panel_Iteration" %in% names(metadata_file)) return(NULL)
+
+  ## ONE TABLE PER ITERATION, SCOPED TO THE REAGENTS THAT DECLARE IT.
+  ##
+  ## A plate can carry several costain panels at once -- reagent A titrated in panel P1, reagent B
+  ## in P2 -- and the run itself does not care, because grouping is by reagent. The TABLE has to
+  ## care. Matching P1's reagents against every channel the whole plate measured would report a P1
+  ## reagent as "matched" because B, which was never in P1, happened to measure that channel. So
+  ## each iteration is matched only against the markers and channels of the groups that declared
+  ## it, which is what makes the verdict mean anything at all.
+  grpIter <- vapply(seq_len(nrow(actaGroups)), function(i) {
+    sel <- trimws(as.character(metadata_file$Dirname)) == actaGroups$dirname[i]
+    if (!is.na(actaGroups$alias[i]) && nzchar(actaGroups$alias[i]))
+      sel <- sel & trimws(as.character(metadata_file$Alias)) == actaGroups$alias[i]
+    v <- unique(trimws(stats::na.omit(as.character(metadata_file$Costain_Panel_Iteration[sel]))))
+    v <- v[nzchar(v)]
+    ## Two iterations on one reagent's wells is a layout mistake, not a feature -- the reagent was
+    ## in one panel. Named out loud rather than silently taking the first.
+    if (length(v) > 1L)
+      warning(sprintf(paste0("Reagent '%s' declares %d different Costain_Panel_Iteration values ",
+                             "(%s); the first is used for the provenance table."),
+                      actaGroups$key[i], length(v), paste(v, collapse = ", ")), call. = FALSE)
+    if (!length(v)) NA_character_ else v[1]
+  }, "")
+  names(grpIter) <- actaGroups$key
+  if (!any(!is.na(grpIter))) return(NULL)
+
+  invPath <- actaPanelInventoryPath(infoSheet, version_dir = getwd(), code_dir = acta_code_dir)
+  inv <- actaPanelInventory(invPath)
+
+  out <- list()
+  for (i in unique(stats::na.omit(grpIter))) {
+    grp <- names(grpIter)[!is.na(grpIter) & grpIter == i]
+    pl  <- panelList[intersect(grp, names(panelList))]
+    mk  <- unique(unlist(lapply(pl, function(d) d$Markername)))
+    ch  <- unique(unlist(lapply(pl, function(d) d$Channel)))
+    mk  <- mk[!is.na(mk) & mk != "\u2014"]
+    ## RESOLVED ON THE ORIGINAL NAME, REPORTED UNDER THE PLACEHOLDER. With scrub_confidential on,
+    ## `i` is "Iteration1" and the inventory has never heard of it -- looking that up finds nothing
+    ## and the panel's reagents are lost from both the report and the submission, which is not what
+    ## the switch is for. The composition is not the secret; the panel's internal name is.
+    lookup <- if (length(ACTA_ITER_MAP) && i %in% names(ACTA_ITER_MAP)) ACTA_ITER_MAP[[i]] else i
+    r   <- actaPanelIterationTable(inv, lookup, mk, ch)
+    r$iteration <- i
+    ## AND THE INVENTORY'S FILENAME IS A PLACEHOLDER TOO, for the same reason the iteration is.
+    ## The caption now names the file it consulted, and a lab names its inventory after the
+    ## programme it serves -- so under scrub the caption would publish exactly the identifier the
+    ## iteration rename exists to withhold. The bundle ships it as Master_Panel_Inventory.xlsx,
+    ## so that is the honest name to print: it is what a reader of the submission will find.
+    if (actaScrubConfidential(infoSheet) && !is.null(r$file) && !is.na(r$file))
+      r$file <- "Master_Panel_Inventory.xlsx"
+    ## Only when there is MORE THAN ONE panel on the plate -- see actaPanelIterationCaption().
+    ## With one panel the list is just every reagent in the run and makes the title unreadable.
+    r$reagents <- if (length(unique(stats::na.omit(grpIter))) > 1L) grp else NULL
+    out[[i]] <- r
+    message(sprintf("[ACTA] %s", actaPanelIterationCaption(r)))
+  }
+  ## The ABSOLUTE path, which names the lab's folder layout as well as the file. Nothing reads it
+  ## today, but this object is handed to the TiterPubs bundle (ACTA_TITERPUBS, `panels=`), so a
+  ## future reader of it would inherit a leak nobody put there on purpose. Scrubbed at the source.
+  attr(out, "inventory") <- if (actaScrubConfidential(infoSheet))
+    "Master_Panel_Inventory.xlsx" else invPath
+  ## Carried separately because the scrub above replaces the path with a plain string and takes
+  ## the provenance attribute with it. Report section 6 prints this as the row's Source.
+  attr(out, "inventory_source") <- attr(invPath, "acta_inventory_source") %||% "unknown"
+  out
+})
+
+## THE INFO SHEET AS THIS RUN USED IT -- report section 6. Built AFTER panelIterationInfo so the
+## master_panel_inventory_path row can report the file that was actually opened and why, rather
+## than the blank the workbook holds when the inventory was found some other way.
+##
+## Built from `infoSheet`, which by this point has already been through the scrub when
+## scrub_confidential is on -- so the table inherits the scrub instead of needing its own.
+infoReportTable <- local({
+  res <- list()
+  if (!is.null(panelIterationInfo))
+    res[["master_panel_inventory_path"]] <-
+      actaInfoResolvedInventory(attr(panelIterationInfo, "inventory"),
+                                attr(panelIterationInfo, "inventory_source"))
+  tryCatch(actaInfoReport(infoSheet, resolved = res),
+           ## One table in one section. A malformed Info sheet is a reason to lose the section,
+           ## not the report -- the same rule the panel iteration table follows.
+           error = function(e) { warning(sprintf("Info table skipped: %s", conditionMessage(e)),
+                                         call. = FALSE); NULL })
+})
+
 ## Formatted export: the operator-facing lead block UNFORMATTED, all derived columns in
 ## blue, every cell centred with a thin black border, Aptos Narrow 12 throughout -- see
 ## writeTitrationExport(). writexl cannot style cells, hence openxlsx.
@@ -1972,10 +2167,56 @@ exportName<-paste0(str_replace_all(str_replace_all(lubridate::today(),"-",""),"^
 auditSheets <- local({
   want <- c("Info", "gating_template", "Layout_Plate")
   have <- intersect(want, excel_sheets(metadata_file_path))
-  setNames(lapply(have, function(sh)
+  out <- setNames(lapply(have, function(sh)
     as.data.frame(suppressMessages(read_excel(metadata_file_path, sheet = sh, col_types = "text")),
                   check.names = FALSE)), have)
+  ## ...EXCEPT WHEN THE RUN IS SCRUBBING. Re-reading from disk is what makes this an audit copy,
+  ## and it is also what let the unscrubbed Layout_Plate ride into the export: stats was scrubbed,
+  ## the bundled workbook was scrubbed, and this verbatim copy of the same sheet sat inside the
+  ## export workbook still naming the operator and the notebook. Found by sweeping a built bundle.
+  ## The copy stays faithful to the workbook in every other respect; the scrub is itself declared
+  ## in the Info sheet sitting beside it, so nothing is hidden.
+  if (actaScrubConfidential(infoSheet) && "Layout_Plate" %in% names(out))
+    out[["Layout_Plate"]] <- actaApplyScrub(out[["Layout_Plate"]], quiet = TRUE)
+
+  ## Panel_Inventory: the costain panel, SUBSET from the master inventory to just the panels this
+  ## run used. The other three sheets are copies of the workbook; this one is the piece of the
+  ## lab's inventory the workbook POINTS AT, which is otherwise only reachable by whoever has the
+  ## inventory. Carrying it means the export explains its own costain panel -- catalogue, vendor,
+  ## clone -- to a reader who has neither the inventory nor any way to ask for it.
+  if (!is.null(panelIterationInfo) && length(panelIterationInfo)) {
+    .pi <- do.call(rbind, lapply(names(panelIterationInfo), function(nm) {
+      tb <- panelIterationInfo[[nm]]$table
+      if (is.null(tb) || !nrow(tb)) return(NULL)
+      cbind(Panel_Iteration = nm, tb, stringsAsFactors = FALSE)
+    }))
+    if (!is.null(.pi) && nrow(.pi)) {
+      out[["Panel_Inventory"]] <- .pi
+      message("[ACTA] Panel_Inventory: ", nrow(.pi), " reagent(s) across ",
+              length(unique(.pi$Panel_Iteration)), " panel iteration(s).")
+    }
+  }
+  out
 })
+
+## ---- the truncated inventory, as a run artefact ---------------------------------------------
+## The same subset, written as a workbook a reader can POINT ACTA AT. The export sheet above says
+## what the panel was; this is the file that makes a re-run resolve it, and it is written for
+## every run that resolves a panel, not only for TiterPubs ones.
+##
+## NAMED <ELN>_Panel_Inventory.xlsx, deliberately NOT Master_Panel_Inventory.xlsx. ACTA auto-picks
+## up a Master_Panel_Inventory*.xlsx sitting in the run folder, so writing one under that name
+## would mean the NEXT run in this folder silently resolved against ACTA's own truncated copy
+## instead of the lab's live master -- and would keep doing so after the master was corrected.
+## Under this name it is inert until somebody sets Info!master_panel_inventory_path to it.
+if (!is.null(panelIterationInfo) && length(panelIterationInfo)) {
+  .invOut <- sprintf("%s_Panel_Inventory.xlsx", gsub("[^A-Za-z0-9._-]", "_", BIDfile))
+  .w <- tryCatch(.tpWriteInventory(panelIterationInfo, .invOut), error = function(e) {
+         message("[ACTA] panel inventory not written: ", conditionMessage(e)); NULL })
+  if (!is.null(.w))
+    message("[ACTA] wrote ", basename(.invOut),
+            " -- point Info!master_panel_inventory_path at it to reproduce this run's panel.")
+}
 ## Info!miflowcyt_export = TRUE adds a MiFlowCyt appendix sheet, FIRST among the extra sheets because
 ## it is the substantive one -- the other three are verbatim copies of the workbook. This is the first
 ## thing that has ever READ that flag: it has sat in all four instructions files unconsumed.
@@ -2036,7 +2277,9 @@ if (!is.null(statsExportAll) && nrow(statsExportAll)) {
 ## everything that is per WELL and therefore NOT on that sheet -- the plate position, the stain
 ## quantity, the positive/negative medians, the robust SD and the SI itself -- plus the per-group
 ## maxima and the Michaelis-Menten fit, joined from mmFits because they live per Dirname.
-siLeadCols <- c("Titration","Dirname","Alias","Markername","Fl","name","PlateID","Row","Column",
+## fcs_file sits next to `name` on purpose: `name` is ACTA's canonical well label and fcs_file is
+## the file on disk. A reader needs both -- one to read the row, one to open it.
+siLeadCols <- c("Titration","Dirname","fcs_file","Alias","Markername","Fl","name","PlateID","Row","Column",
                 "StainType","StainQty","StainUnit",
                 "pos","neg","robustSD","SI","percent",
                 "maxSI","maxSI_StainQty","maxSat","maxSat_StainQty","GatingMethod","label")
@@ -2053,6 +2296,14 @@ message("[ACTA] SI_stats: ", nrow(siStats), " well(s) x ", ncol(siStats), " colu
 ## appendix, then the verbatim workbook copies.
 auditSheets <- c(Filter(Negate(is.null), list(SI_stats = siStats, Pop_stats = popStats)), auditSheets)
 
+## MINUTES, to one decimal. Measured at the moment the export is written, which is the end of the
+## analysis -- the report render is still to come (or, with report = TRUE, is still wrapped around
+## this script), so it cannot be included here and is reported by run_acta() instead.
+statsForExport$time_taken_min <-
+  round(as.numeric(difftime(Sys.time(), ACTA_T0, units = "mins")), 1)
+ACTA_ANALYSIS_MIN <- statsForExport$time_taken_min[1]
+message(sprintf("[ACTA] analysis took %.1f min.", ACTA_ANALYSIS_MIN))
+
 writeTitrationExport(statsForExport, exportName, primary = exportLeadCols, audit = auditSheets)
 for(i in seq_along(plotList_hist)){
   ## THIS antibody's parent. These files belong to one group, so a run-level label would name the
@@ -2065,6 +2316,19 @@ for(i in seq_along(plotList_hist)){
   filename_pseudo<-paste0("Plots/",antibody[i],"_",.eln,"_parent_",.pp,"_pseudo.png")
   ggsaveIf(filename_hist,plotList_hist[[i]], height=plotDims[[i]]$height, width=plotDims[[i]]$width, unit="in", dpi=300)
   ggsaveIf(filename_pseudo,plotList_pseudo[[i]], height=plotDims[[i]]$height, width=plotDims[[i]]$width, unit="in", dpi=300)
+  ## Same naming convention as every other per-antibody figure, identifier `gating_scheme`. Its
+  ## own size, not plotDims: a four-node tree in a facet-sized canvas is mostly whitespace.
+  ## ONE GATING SCHEME PER RUN, not one per reagent. Every group in a run is gated by the SAME
+  ## gating_template sheet -- that is what makes the Stain Indices comparable across reagents --
+  ## so a per-reagent tree repeats the same hierarchy with one node renamed. The first group's
+  ## realised tree stands for the run, and it is named like the other run-level figures
+  ## (ConcatPlot_, PlateMap_, SIPlot_, SatPlot_) rather than after a reagent that does not own it.
+  if (i == 1L && !is.null(plotList_gatingScheme[[i]])) {
+    .gsz <- plotList_gatingScheme[[i]]$size
+    ggsaveIf(paste0("Plots/gating_scheme_",.eln,"_parent_",.pp,".png"),
+             plotList_gatingScheme[[i]]$plot, height=.gsz[["height"]], width=.gsz[["width"]],
+             unit="in", dpi=300)
+  }
   ## One PNG per gating_template population flagged layout_export=TRUE, named by its alias (was: two
   ## fixed plotLayout1/plotLayout2 half-and-half patchwork images). Driven by plotExportList,
   ## NOT plotLayoutList -- Export and Layout are independent opt-ins, so a population can be
@@ -2089,6 +2353,32 @@ for(i in seq_along(plotList_hist)){
 ##setwd(acta_dir)
 ##ReportMarkdownFile<-grep("\\.Rmd$",list.files(pattern="Report"), value = TRUE)
 ##rmarkdown::render(ReportMarkdownFile)
+
+## ---- TiterPubs submission, opted in per run -----------------------------------------------
+## Info!titerpubs_export = TRUE builds one upload-ready bundle per reagent. DEFAULT FALSE, and it
+## stays that way in the template: TiterPubs publishes under CC BY 4.0, so turning this on is a
+## decision to release the titration publicly and irrevocably, not a formatting preference.
+##
+## The INPUTS are gathered here and the bundle is built by run_acta(), because the figures are
+## written by the loop above but the run is not finished until the render is -- and with
+## report = TRUE this script is running INSIDE that render. Assembling here would package a
+## half-written Plots/ folder.
+ACTA_TITERPUBS <- if (toupper(trimws(actaInfoValue(infoSheet, "titerpubs_export") %||% "")) %in%
+                      c("TRUE", "T", "YES", "1")) {
+  message("[ACTA] Info!titerpubs_export = TRUE -- a TiterPubs bundle will be built per reagent.")
+  list(stats  = statsForExport,
+       info   = infoSheet,
+       gating = gating_template,
+       tp     = if ("TiterPubs_template" %in% excel_sheets(metadata_file_path))
+                  as.data.frame(read_excel(metadata_file_path, sheet = "TiterPubs_template",
+                                           col_types = "text")) else NULL,
+       ## Laser lines come from the file, not from the instrument model: an Aurora ships in
+       ## 3L/4L/5L trims and only the FCS says which one was in the room.
+       keys   = tryCatch(flowCore::keyword(fs[[1]]), error = function(e) NULL),
+       ## The resolved costain panels, so the bundle's Panel iteration sheet and its figure come
+       ## from the same lookup the report used rather than repeating it.
+       panels = panelIterationInfo)
+} else NULL
 
 ## ======================= ANALYSIS-COMPLETE SENTINEL =======================
 ## Deliberately the LAST statement in this script, and the only thing that proves the analysis ran to

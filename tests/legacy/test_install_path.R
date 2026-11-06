@@ -81,10 +81,20 @@ for (pat in c("^ACTA_Script",  "^ACTA_Report", "^ACTA_Dashboard", "^ACTA_App[.]R
 tpl <- file.path(pl, "Template")
 chk("inst/pipeline/Template/ exists", dir.exists(tpl))
 ## EXACTLY one, twice over: the README's copy snippet passes dir() straight to file.copy(), so a
-## second TEMPLATE would silently copy both; and the dashboard generator requires exactly one
-## *dashboard_template*.html in Template/ and errors on two.
-chk("exactly one TEMPLATE_*.xlsx ships inside the package",
-    length(dir(tpl, pattern = "^TEMPLATE.*[.]xlsx$")) == 1L)
+## second matching TEMPLATE would silently copy both into the user's run folder; and the dashboard
+## generator requires exactly one *dashboard_template*.html in Template/ and errors on two.
+##
+## ASSERTED PER TEMPLATE, not on the folder. Template/ now ships two: the instructions workbook a
+## user copies and edits, and TEMPLATE_Master_Panel_Inventory.xlsx, which is an EXAMPLE resolved
+## in place by actaPanelInventoryPath() and is not meant to be copied anywhere. A bare
+## "^TEMPLATE.*xlsx$" count conflated the two the moment the second arrived, and the README's
+## glob -- now anchored on TEMPLATE_Ab_Titration -- has to agree with whatever is asserted here.
+chk("exactly one instructions TEMPLATE ships inside the package",
+    length(dir(tpl, pattern = "^TEMPLATE_Ab_Titration.*[.]xlsx$")) == 1L)
+chk("the README's copy glob still selects exactly that one",
+    length(dir(tpl, pattern = "^TEMPLATE_Ab_Titration.*\\.xlsx$")) == 1L)
+chk("the master panel inventory example ships beside it",
+    length(dir(tpl, pattern = "^TEMPLATE_Master_Panel_Inventory[.]xlsx$")) == 1L)
 chk("exactly one *dashboard_template*.html sits in Template/",
     length(dir(tpl, pattern = "dashboard_template.*[.]html$")) == 1L)
 
@@ -438,14 +448,32 @@ local({
   chk("purrr is not a dependency of anything that ships", !length(hits))
   if (length(hits)) cat("         still references purrr:", paste(utils::head(hits, 3),
                                                                   collapse = " | "), "\n")
-  ## The loop it was there for must still install and attach every name, or removing purrr
-  ## traded a dependency for a broken installer.
+  ## The loop it was there for must still walk and attach every name, or removing purrr traded a
+  ## dependency for a broken installer.
   loop <- grep("^for \\(\\.pkg in listOfLibrary\\)", txt, value = TRUE)
   chk("the install manifest is walked by a base for loop over listOfLibrary", length(loop) >= 2L)
-  chk("...and still installs from CRAN, falls back to Bioconductor, and attaches",
-      any(grepl("install.packages(.pkg)", txt, fixed = TRUE)) &&
-        any(grepl("BiocManager::install(.pkg", txt, fixed = TRUE)) &&
-        any(grepl("library(.pkg, character.only = TRUE)", txt, fixed = TRUE)))
+  chk("...and attaches every name in it",
+      sum(grepl("library(.pkg, character.only = TRUE)", txt, fixed = TRUE)) >= 2L)
+
+  ## THE PIPELINE MUST NOT INSTALL ANYTHING. This assertion replaces its own opposite: the test
+  ## used to REQUIRE install.packages(.pkg) and the BiocManager fallback, because that was the
+  ## behaviour at the time. It is the behaviour the 3.6.0 security review asked for the removal
+  ## of -- an unpinned install, chosen by the analysis, during the analysis, into the library
+  ## about to produce the numbers. A test that pins the old behaviour is how a fix gets reverted
+  ## by someone making the suite green, so it is inverted here rather than deleted.
+  chk("the pipeline does not install packages at run time",
+      !any(grepl("install.packages(.pkg", txt, fixed = TRUE)) &&
+        !any(grepl("BiocManager::install(.pkg", txt, fixed = TRUE)))
+  ## ...and refuses instead, naming every missing package rather than the first.
+  chk("...it stops with the full list of what is missing",
+      any(grepl("ACTA cannot run: %d required package(s) are not installed", txt, fixed = TRUE)) &&
+        any(grepl("cannot be rendered: %d required package(s)", txt, fixed = TRUE)))
+  chk("...and tells the reader how to install them",
+      any(grepl("BiocManager::install(c(%s))", txt, fixed = TRUE)))
+  ## BiocManager was bootstrapped before the manifest was read, so the one package the
+  ## Bioconductor half needs was the one never reported missing.
+  chk("BiocManager is not bootstrapped behind the manifest's back",
+      !any(grepl('install.packages("BiocManager", quietly', txt, fixed = TRUE)))
 })
 
 cat(if (ok) "\nINSTALL PATH: all checks passed\n" else "\nINSTALL PATH: FAILURES ABOVE\n")

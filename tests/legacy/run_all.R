@@ -41,14 +41,26 @@ if (!file.exists(file.path(td, "acta_test_paths.R")))
 ## slower gates spend a minute rediscovering it.
 SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the template row
              "test_quad_pops.R",      # openCyto pop= forms, pinned against .preprocess_row()
+             "test_gate_mindensity_costain.R", # the Costain floor is a floor, not the gate
+             "test_gate_costain.R",   # ...except here, where the floor IS the gate
+             "test_gate_range_floor.R", # gate_range pinned to the Costain floor, and its default
              "test_preflight.R",      # instructions-check records, incl. the real workbooks
+             "test_qc_rollup.R",      # SKIPPED still fails the run; N/A is excluded from it
              "test_miflowcyt.R",      # the metadata assembler and its export appendix
+             "test_equipment_override.R", # $CYT -> model, and the Info Equipment_Make/Model override
              "test_compensation.R",   # compensation pre-flight and csv staging
              "test_app_support.R",    # app-only helpers, incl. the LaTeX package check
              "test_diagnostics.R",    # the three write points and the diagnostic bundle
              "test_combinatorial.R", # the Combinatorial_group declaration and its per-value test
              "test_arg_safety.R",     # no workbook cell is ever evaluated
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
+             "test_which_plate.R",    # the plate token is a DIRECTORY, not a substring of a date
+             "test_panel_inventory_source.R", # a caption names the inventory it actually opened
+             "test_scrub_iteration.R", # scrub_confidential removes panel names, keeps composition
+             "test_sample_status.R",  # Test_Material_Status: the column, and the menu it publishes
+             "test_info_report.R",    # the Info table and its Source column
+             "test_bundle_scan.R",    # the leak scan that GATES a bundle build
+             "test_titerpubs_scrub.R", # the de-identifiers themselves: NO fixture ran this path
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
              "test_dashboard_runs.R", # which folders count as runs -- the same export pooled twice
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer

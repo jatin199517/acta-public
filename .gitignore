@@ -192,3 +192,10 @@ Plans/
 
 # The build's own provenance note: meaningful only in the source repository. Stays out of this one.
 RELEASE_MANIFEST.txt
+
+# R environment files. None exists in this tree today, but .Renviron is the conventional place
+# an R user puts an API token and this repository is published publicly.
+.Renviron
+.Rprofile
+.env
+.env.*

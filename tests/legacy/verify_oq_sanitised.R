@@ -33,6 +33,63 @@ suppressMessages({library(flowCore); library(readxl)})
 ## and the home-directory pattern catch the actual leak; the private list adds the rest.
 GENERIC_SUB <- c("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}",  # e-mail address
                  "Users/[A-Za-z0-9._-]+")                            # home directory -> username
+## THE SHIPPED SUBMITTER ADDRESS IS A FIXTURE, AND IT HAS TO BE ONE.
+##
+## Info!Submitter_Email feeds the TiterPubs submission's Email cell, so every workbook must carry
+## SOME address -- and the e-mail pattern in GENERIC_SUB above cannot tell a placeholder from a
+## real one. Declared HERE, in the open, rather than in the private token list: this is the
+## opposite of a secret, it is the value we WANT in the public tree, and a reviewer should be able
+## to read the allowance and confirm it is still fake.
+##
+## Deliberately NARROW -- this exact address, and only on an Info sheet. The same string in a
+## Layout_Plate cell, a report or a docProps field is still a leak, and the day somebody fills in
+## a real address before a release the gate says so. Both workbook sweeps (per-case and shipped)
+## consult this one declaration; an allowance defined twice is an allowance that drifts.
+## Two fixture addresses, both obviously fake and both deliberate: the template's example
+## submitter, and the placeholder scrub_confidential substitutes for a real submitter
+## address (ACTA_SCRUB_INFO). Anchored, so only these exact strings are allowed -- any
+## other address, including a real one that happens to sit beside them, still fails.
+FIXTURE_EMAIL <- "^(wilee_coyote@acme\\.com|johndoe@anonymouscompany\\.com)$"
+nFixMail <- 0L
+
+## THE SCRUB'S OWN SUBSTITUTION VALUES. Info!scrub_confidential replaces real identifiers with
+## fixed placeholders, and one of them -- EXP26000001 -- is deliberately SHAPED like a real
+## notebook ID so a reader recognises what kind of field it stands in for. That shape is exactly
+## what the private token list looks for, so the constant trips the sweep wherever it is written:
+## the mapping table in R/panel_inventory.R, the Info sheet's description of the switch, and any
+## submission produced with the switch on.
+##
+## Declared in the open, like the fixture address above, because it is the opposite of a secret --
+## it is the value we PUT THERE. The allowance is for these exact strings and nothing else, so a
+## real EXP26xxxxxx elsewhere in the tree is still a leak.
+## MASKED BEFORE THE SWEEP, not filtered after it. The constant appears inside longer strings --
+## a code comment, the Info sheet's description of the switch, a mapping-table line -- so matching
+## the extracted hit against an anchored pattern never fires: the hit IS the whole sentence.
+## Masking is what this gate already does for the declared fixture identity, and it leaves every
+## other token in the same line still checked.
+##
+## Only the ID-shaped placeholder can collide with a real identifier; "JD", "ELN" and
+## "Iteration1" are too generic for the token list to match. Listed anyway, so the reader sees
+## the whole substitution set in one place.
+SCRUB_PLACEHOLDERS <- c("EXP26000001", "Iteration1", "JD", "ELN")
+nPlaceholder <- 0L
+## EVERY value scrub_confidential substitutes IN. These are the strings ACTA writes to REPLACE a
+## real identifier, so they necessarily appear in the mapping table, in the Info sheet's
+## description of the switch, and in this gate's own explanation of the allowance. Masked before
+## grepping, or the scrub's cure reads as the disease.
+##
+## The address joined the list 2026-10-23 with Submitter_Email: it is email-shaped, which the
+## source sweep flags by default and should, so it has to be declared here rather than exempted
+## by a looser rule. Exact strings only -- a real address one character different still fails.
+.maskPlaceholder <- function(x) {
+  if (!length(x)) return(x)
+  out <- x
+  for (ph in c("EXP26000001", "johndoe@anonymouscompany.com"))
+    out <- gsub(ph, "<scrub-placeholder>", out, fixed = TRUE)
+  nPlaceholder <<- nPlaceholder + sum(out != x)
+  out
+}
+
 skipped <- character(0)          # sections that could not be checked -- see the summary
 
 SCRUB_WORD <- character(0); SCRUB_SUB <- character(0)
@@ -172,8 +229,12 @@ for (cs in cases) {
   for (f in lay) for (sh in excel_sheets(f)) {
     d <- suppressMessages(read_excel(f, sheet = sh, col_types = "text"))
     cells <- c(names(d), unlist(lapply(d, as.character)))
-    cells <- cells[!is.na(cells)]
+    cells <- .maskPlaceholder(cells[!is.na(cells)])
     h2 <- unique(grep(BAD, cells, value = TRUE, ignore.case = TRUE, perl = TRUE))
+    if (identical(sh, "Info")) {
+      .ok <- grepl(FIXTURE_EMAIL, trimws(h2), perl = TRUE)
+      nFixMail <<- nFixMail + sum(.ok); h2 <- h2[!.ok]
+    }
     if (length(h2)) { nL <- nL + length(h2)
       for (x in h2) cat(sprintf("  LEAK %s[%s]: %s\n", basename(f), sh, substr(x, 1, 70))) }
   }
@@ -270,6 +331,10 @@ if (!length(tracked)) {
     f <- file.path(vd, rel)
     if (!file.exists(f)) next
     ln <- tryCatch(readLines(f, warn = FALSE), error = function(e) character(0))
+    ## The scrub's own substitution value is written into the mapping table, the Info sheet's
+    ## description of the switch, and this gate's explanation of the allowance. Masked here for
+    ## the same reason it is masked in the workbook sweeps.
+    ln <- .maskPlaceholder(ln)
     if (grepl(FIXTURE_RE, rel)) {
       masked <- gsub(FIXTURE_ID, "<declared-fixture>", ln, perl = TRUE)
       nFix <- sum(masked != ln)
@@ -391,12 +456,29 @@ if (!length(tracked)) {
     }
     tf
   }
+  ## THE SHIPPED SUBMITTER ADDRESS IS A FIXTURE, AND IT HAS TO BE ONE.
+  ##
+  ## Info!Submitter_Email feeds the TiterPubs submission's Email cell, so the workbooks must carry
+  ## SOME address -- and the generic e-mail pattern in GENERIC_SUB cannot tell a placeholder from
+  ## a real one. Spelled out here rather than left to the token list because it is the OPPOSITE of
+  ## a secret: it is the value we WANT in the public tree, and a reviewer should be able to read
+  ## the allowance and check it is still fake. Anchored to the Info sheet, so the same address
+  ## appearing in a Layout_Plate cell or a report would still be a leak.
+  ##
+  ## Deliberately NARROW: only this exact address at only this one variable. The day somebody
+  ## fills in a real address before a release, the gate says so.
   for (rel in wbs) {
     f <- file.path(vd, rel)
     for (sh in excel_sheets(f)) {
       d <- suppressMessages(read_excel(f, sheet = sh, col_types = "text"))
-      cells <- c(names(d), unlist(lapply(d, as.character))); cells <- cells[!is.na(cells)]
+      cells <- c(names(d), unlist(lapply(d, as.character)))
+      cells <- .maskPlaceholder(cells[!is.na(cells)])
       h <- unique(grep(BAD, cells, value = TRUE, ignore.case = TRUE, perl = TRUE))
+      if (identical(sh, "Info")) {
+        allowed <- grepl(FIXTURE_EMAIL, trimws(h), perl = TRUE)
+        nFixMail <<- nFixMail + sum(allowed)
+        h <- h[!allowed]
+      }
       if (length(h)) { nW <- nW + length(h)
         for (x in h) cat(sprintf("  LEAK %s[%s]: %s\n", basename(rel), sh, substr(x, 1, 70))) }
     }
@@ -449,6 +531,41 @@ if (!length(tracked)) {
       for (x in .ps)
         cat(sprintf("  LEAK %s[%s]: printerSettings names a print server (hex-encoded; no text sweep sees it)\n",
                     basename(rel), x)) }
+    ## WHICH PART IS THE Info SHEET. The cell-level sweep above knows sheet NAMES; down here a
+    ## part is just "xl/worksheets/sheet1.xml", so the declared fixture-address allowance has
+    ## nothing to key on and the same approved placeholder came back as a leak from a third
+    ## direction. Resolved by reading the workbook's own sheet list, so the allowance stays
+    ## pinned to Info rather than being widened to "any worksheet".
+    .infoPart <- tryCatch({
+      rdz <- function(part) { con <- unz(src, part, open = "rb"); on.exit(close(con))
+                              rawToChar(readBin(con, "raw", n = 4e6)) }
+      wbx <- rdz("xl/workbook.xml"); rlx <- rdz("xl/_rels/workbook.xml.rels")
+      sh <- regmatches(wbx, gregexpr("<sheet [^>]*/?>", wbx))[[1]]
+      nmz <- vapply(sh, function(z) sub('.*\\sname="([^"]*)".*', "\\1", z), "")
+      idz <- vapply(sh, function(z) sub('.*\\sr:id="([^"]*)".*', "\\1", z), "")
+      k <- which(nmz == "Info")
+      if (!length(k)) NA_character_ else
+        paste0("xl/", sub(sprintf('.*<Relationship Id="%s"[^>]*Target="([^"]*)".*', idz[k[1]]),
+                          "\\1", rlx))
+    }, error = function(e) NA_character_)
+
+    ## WHICH CELL HOLDS IT, NOT HOW THE STRING IS STORED. This allowance used to require the hit to
+    ## be in the Info WORKSHEET PART, which silently depended on the value being an INLINE string.
+    ## Excel re-saved TEMPLATE_Ab_Titration_Instructions.xlsx on 2026-11-05 (inlineStr cells 27 ->
+    ## 8), the address moved into xl/sharedStrings.xml, and a correct workbook failed this gate
+    ## while ten others passed. Storage mode is Excel's choice and changes under us; the CELL is the
+    ## fact. So read the VALUES and allow the address only when every cell holding it is in Info --
+    ## STRICTER than the old rule too, because an address sitting in a part while being no cell's
+    ## value (docProps, a comment, a defined name) is now excused nowhere.
+    .fixMailCell <- tryCatch({
+      shn  <- readxl::excel_sheets(src)
+      hits <- vapply(shn, function(s) {
+        d <- suppressMessages(readxl::read_excel(src, sheet = s))
+        sum(grepl(FIXTURE_EMAIL, trimws(as.character(unlist(d))), perl = TRUE), na.rm = TRUE)
+      }, numeric(1))
+      sum(hits) > 0 && sum(hits[names(hits) != "Info"]) == 0
+    }, error = function(e) FALSE)
+
     for (pp in pl) {
       ## Opened and CLOSED explicitly -- unz() inside readBin() leaves the connection dangling and R
       ## warns about every one of them at exit, which buries the gate's own output.
@@ -458,8 +575,28 @@ if (!length(tracked)) {
       }, error = function(e) raw(0))
       if (!length(raw)) next
       txt <- rawToChar(raw[raw != as.raw(0)]); Encoding(txt) <- "UTF-8"
+      ## AN A1 CELL ADDRESS IS STRUCTURE, NOT CONTENT -- and it has the same shape as a serial.
+      ## `r=` on a <c> or <row> is a column letter followed by a row number; the private token
+      ## list carries bare <letters><digits> cytometer serials, and one of them collides exactly
+      ## with an address a deep sheet really has. The TiterPubs template is over 1200 rows deep,
+      ## so this sweep reported that serial three times over cells that are EMPTY -- the
+      ## cell-level pass above, which reads values, saw nothing, and neither did any <t> node
+      ## anywhere in the package. (Value not quoted here: this file ships.)
+      ##
+      ## Blanked before the sweep rather than allow-listed after it. An allowance keyed on the
+      ## token would also swallow the real serial the day it appears in a cell, which is the one
+      ## thing this gate exists to catch; the attribute, by schema, can never hold content.
+      ## Worksheet parts only -- nothing else uses r= for an address.
+      if (grepl("^xl/worksheets/", pp)) txt <- gsub(' r="[A-Z]{1,3}[0-9]+"', "", txt)
+      txt <- .maskPlaceholder(txt)
       h <- unique(unlist(regmatches(txt, gregexpr(BAD, txt, ignore.case = TRUE, perl = TRUE))))
       h <- h[nzchar(trimws(h))]
+      if (isTRUE(.fixMailCell) &&
+          (identical(pp, "xl/sharedStrings.xml") ||
+           (!is.na(.infoPart) && identical(pp, .infoPart)))) {
+        .ok <- grepl(FIXTURE_EMAIL, trimws(h), perl = TRUE)
+        nFixMail <<- nFixMail + sum(.ok); h <- h[!.ok]
+      }
       if (length(h)) { nW <- nW + length(h)
         for (x in h) cat(sprintf("  LEAK %s[%s]: %s\n", basename(rel), pp, substr(x, 1, 70))) }
       ## Structural, because these two carry internal text that no generic pattern describes.
@@ -471,6 +608,14 @@ if (!length(tracked)) {
                     basename(rel), pp)) }
     }
   }
+  ## Said out loud, every run. Same rule as the fixture identity above: an allowance nobody sees
+  ## is an allowance nobody audits, and this one hides an e-mail address from an e-mail gate.
+  if (nFixMail)
+    cat(sprintf("  note: the declared fixture submitter address was allowed in Info on %d sheet(s)\n",
+                nFixMail))
+  if (nPlaceholder)
+    cat(sprintf("  note: the scrub_confidential placeholder (%s) was allowed %d time(s)\n",
+                paste(SCRUB_PLACEHOLDERS, collapse = ", "), nPlaceholder))
   if (length(wbs) && !nW) cat(sprintf("  clean (%d workbook(s))\n", length(wbs)))
   nV <- nV + nW
 }

@@ -262,6 +262,37 @@ unlink(relp, recursive = TRUE)
 ## form is the fingerprint. A hand-written row added in 3.4.0 reproduced it by copying the shape.
 ## Nothing shipped needs the attribute -- no value in any of these workbooks has leading or
 ## trailing whitespace -- so the rule is simply that it must not appear.
+## ---------------------------------------------------------------------------------------------
+## CELLS WITHIN A ROW MUST BE IN ASCENDING COLUMN ORDER.
+##
+## A hard OOXML rule, and the only thing wrong with a workbook that Excel offered to repair while
+## every other check here passed: the XML parsed, the package was well formed, no part was
+## missing, no content type dangled. One row read A, B, D, C.
+##
+## It happened because a BLANK cell is written as no cell at all, so setting that value later
+## found nothing to replace and appended the new cell at the end of the row. Nothing in the OPC
+## model notices -- the package is structurally perfect and semantically invalid -- so it needs
+## its own check, and it is cheap: the cell refs are already in the XML.
+cat("\n=== cells within each row are in ascending column order ===\n")
+.colIdx <- function(L) { n <- 0L
+  for (ch in strsplit(L, "")[[1]]) n <- n * 26L + (utf8ToInt(ch) - 64L)
+  n }
+for (f in books) {
+  bad <- character(0)
+  for (sh in grep("^xl/worksheets/sheet[0-9]+[.]xml$", utils::unzip(f, list = TRUE)$Name, value = TRUE)) {
+    con <- unz(f, sh, open = "rb"); x <- rawToChar(readBin(con, "raw", n = 8e6)); close(con)
+    for (r in regmatches(x, gregexpr("<row[^>]*>.*?</row>", x))[[1]]) {
+      refs <- regmatches(r, gregexpr('<c r="[A-Z]+[0-9]+"', r))[[1]]
+      if (length(refs) < 2L) next
+      cols <- vapply(sub('<c r="([A-Z]+)[0-9]+"', "\\1", refs), .colIdx, 0L)
+      if (is.unsorted(cols))
+        bad <- c(bad, sprintf("%s row %s", basename(sh), sub('.*r="([0-9]+)".*', "\\1", substr(r, 1, 40))))
+    }
+  }
+  chk(sprintf("%s: every row ascends (%d bad)", basename(f), length(bad)), length(bad) == 0L)
+  for (b in utils::head(bad, 4)) cat("          ", b, "\n")
+}
+
 cat("\n=== no inline string carries xml:space=\"preserve\" ===\n")
 for (f in books) {
   hits <- 0L

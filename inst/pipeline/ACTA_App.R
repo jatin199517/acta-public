@@ -728,7 +728,7 @@ server <- function(input, output, session) {
         list(id = "gate_manual", label = "No gate_manual in the gating template", status = "fail",
              detail = paste0("gate_manual is NOT IMPLEMENTED in this version of ACTA. Drawing gates ",
                              "by hand needs an interactive gating UI that ACTA does not have. ",
-                             "Planned for a future release; use an automated method."),
+                             "Use an automated gating method instead."),
              where = layout)
         else list(id = "gate_manual", label = "No gate_manual in the gating template",
                   status = "pass", detail = NA_character_, where = layout)))
@@ -959,7 +959,15 @@ server <- function(input, output, session) {
             data.frame(Dirname = d$Dirname, MM_R2 = d$MM_R2, MM_90pct_Vmax = d$MM_90pct_Vmax,
                        MM_note = if ("MM_note" %in% names(d)) d$MM_note else NA) else NULL
     thr <- suppressWarnings(as.numeric(infoVal(layout, "MM_R2_threshold"))); if (!is.finite(thr)) thr <- 0.9
-    opts <- if (!is.null(li)) actaTiterOptions(li, d, thr) else list()
+    ## THE RANGE CHECK NEEDS EVERY WELL, so it is handed SI_stats -- one row per well -- and not
+    ## `d`, which is the TitrationExport sheet holding one max-SI row per reagent. Passing `d`
+    ## collapsed the tested range to that single dose and disabled the 90%Vmax option for every
+    ## reagent whose optimum was anywhere else. `d` is still what the dialog's rows are read from.
+    wells <- tryCatch(
+      if ("SI_stats" %in% readxl::excel_sheets(ex))
+        suppressMessages(readxl::read_excel(ex, sheet = "SI_stats", .name_repair = "minimal"))
+      else d, error = function(e) d)
+    opts <- if (!is.null(li)) actaTiterOptions(li, wells, thr) else list()
     rv$titerOpts <- opts
     showModal(modalDialog(
       title = "Titer and titer status", size = "l", easyClose = FALSE,

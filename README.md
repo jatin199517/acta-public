@@ -20,8 +20,9 @@ This is an automated tool for flow cytometry antibody titer analysis.
 The user provides a folder of FCS files, inside a parent folder named `Titration_FCS`, and one
 Excel instructions workbook. ACTA gates the positive and negative populations for each titrated
 reagent, computes a Stain Index at every stain quantity, fits a saturation curve, and writes the
-plots, an export workbook, a PDF report and an HTML dashboard — so the analyst can pick the
-reagent titer.
+plots, an export workbook, a PDF report and an HTML dashboard. ACTA does not report a titer but
+provides resolution and saturation metrics for the reagent of interest which the analyst can use
+to pick a titer.
 
 ![](assets/workflow.png)
 
@@ -108,6 +109,28 @@ No licence to buy, and no R experience needed to run it: the Shiny app covers th
 
 The instructions file is a spreadsheet and the gating template is plain text, so an LLM can help
 fill in a workbook, suggest gating arguments for a panel, or execute `run_acta()`.
+
+## Share ACTA outputs with the community
+
+![](assets/titerpubs-bundle.png)
+
+ACTA outputs can be shared on the [Metrdy/TiterPubs](https://metrdy.com/titerpubs) repository. ACTA
+creates a TiterPubs bundle (Zipped file containing ACTA outputs + FCS files) when you turn on
+the `titerpubs_export` toggle in the Info sheet of the instructions file. If you want certain details to stay anonymous in
+the submission, either leave them empty in the Info sheet or turn on the `scrub_confidential`
+toggle which scrubs certain details from your bundle (see image for details). It changes values
+inside your files but does not rename them, so keep confidential identifiers out of your FCS
+filenames. It is advisable to
+fill in other information on the Info and `Layout_Plate` sheets to provide sufficient experimental
+and reagent context to the community to reproduce your titers under identical conditions. The
+bundle can be uploaded directly to the
+[TiterPubs repository](https://metrdy.com/titerpubs#contribute). More info can be found on Metrdy's
+[TiterGuide](https://metrdy.com/titerguide) webpage.
+
+Building a bundle also needs the `pdftools` package, which the install above does not bring:
+`install.packages("pdftools")`. ACTA's leak scan reads the report PDF before a bundle may be
+published, and it will not pass a PDF it cannot read. A run with `titerpubs_export` off does
+not need it.
 
 ## Components
 
@@ -227,11 +250,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.5.0")
+remotes::install_github("jatin199517/acta-public@v3.6.0")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.5.0 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.0 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more
@@ -387,7 +410,7 @@ package and have no clone, the template ships inside it — copy it out to somew
 
 ```r
 file.copy(dir(system.file("pipeline", "Template", package = "ACTA"),
-              pattern = "^TEMPLATE.*\\.xlsx$", full.names = TRUE), ".")
+              pattern = "^TEMPLATE_Ab_Titration.*\\.xlsx$", full.names = TRUE), ".")
 ```
 
 You may replace the text `TEMPLATE` from this file but keep the rest of the filename as is — the
@@ -442,7 +465,7 @@ numeric value is expected.
 | `Markername ($PnS)` <u>or</u> `Channel ($PnN)` | `Layout_Plate` | No | Yes — either will do; `Channel` wins if both are set |
 | `Fix`, `Perm` | `Layout_Plate` | No | Yes — the export's `Fix_Perm` column. `Perm` true with `Fix` false is rejected as a layout error |
 | `alias`, `parent`, `pop` | `gating_template` | **Yes** | Yes — they become openCyto node names |
-| exactly one `Costain` well per titration | `Layout_Plate` | No | Yes — it sets the gate floor. None leaves the floor at −∞, which looks like a successful run; more than one pools their events, so the floor belongs to no single well. Both stop the run |
+| exactly one `Costain` well per titration | `Layout_Plate` | No | Only when a gating method reads the Costain floor — that is, the `gating_template` names a `gate_*_costain` method or `pp_costain_floor` / `pp_auto2_costain`. Then it stops the run: none leaves the floor at −∞, which looks like a successful run, and more than one pools their events, so the floor belongs to no single well. A template gating on `boundary` / `gate_flowmeans` alone never asks for a floor, so a titration with no `Costain` well runs normally and the two Costain QC checks report N/A rather than failing it |
 | an `Unstained` well | `Layout_Plate` | No | No — it is dropped before gating and changes no result, so a titration without one is fine. More than one is a note, not an error. But if the FCS folder *contains* an unstained file, it needs its own layout row like any other well — once per titration in a combinatorial folder — because filenames are not inspected |
 | `groupBy` | `gating_template` | **Yes** | No — but when used it must name a `pData` column exactly |
 | `ELN_ID`, `ELN_Name`, `Operator` | `Layout_Plate` | No | Yes — the pre-flight stops the run if any of the three columns is absent. Per well, so a run can carry more than one operator. `ELN_ID` also names your export and plate-map files |

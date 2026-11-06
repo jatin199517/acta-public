@@ -16,6 +16,18 @@
 # README about recorded versions.
 name: tests
 
+# LEAST PRIVILEGE. No job here writes to the repository -- they check out, install and run
+# gates -- so the token does not need write access to anything. Without this block GITHUB_TOKEN
+# inherits whatever the repository default is, which for an older repo is read/write on every
+# scope.
+#
+# ACTIONS ARE STILL ON MUTABLE MAJOR TAGS (@v4, @v2) rather than commit SHAs. Pinning needs the
+# real SHAs, which cannot be resolved offline, and a guessed SHA breaks CI outright -- strictly
+# worse than the tag. Do it from a session with network access:
+#   gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -110,7 +122,7 @@ jobs:
           # whole string on whitespace. Two comment lines placed in there once became 29 bogus package
           # refs and pak aborted on `#`, breaking the job on both runners. Explanations go out here.
           #
-          # magrittr, rmarkdown, tibble, tidyselect, tinytex and xml2 are DESCRIPTION Imports, needed
+          # magrittr, rmarkdown, tibble, tidyselect, tinytex, xml2 and zip are DESCRIPTION Imports, needed
           # because this job runs `R CMD INSTALL .`. They arrive transitively on ubuntu and did not on
           # macOS, so v3.0 passed on one runner and failed on the other.
           #
@@ -164,6 +176,7 @@ jobs:
             any::tidyselect
             any::tinytex
             any::xml2
+            any::zip
             any::yaml
       # INSTALL THE PACKAGE FIRST, when this release IS one. test_app_package.R drives the Shiny
       # app against the installed namespace, where it can see only the exported names -- and it
@@ -184,6 +197,36 @@ jobs:
           f=tests/run_all.R; [ -f "$f" ] || f=tests/legacy/run_all.R
           echo "running $f"
           Rscript "$f"
+
+  secrets:
+    name: secret scan (observation only)
+    runs-on: ubuntu-latest
+    # NON-BLOCKING ON PURPOSE, and this is the same promotion path report-windows took.
+    #
+    # The BLOCKING half of this check already exists and runs where it matters: the credential
+    # gate in make_public_release.sh sweeps every staged text file for provider key formats and
+    # key material, and REFUSES the build on a hit. That one is verifiable on a laptop -- it was
+    # tested against five planted credential shapes and against the real tree (125 files, 0
+    # findings) before it went in.
+    #
+    # This job is the complement: a generic scanner with rules nobody here maintains, over the
+    # git HISTORY as well as the tree, which the release gate cannot see. It starts
+    # continue-on-error because NOTHING HERE HAS EVER RUN IT -- the fixtures deliberately contain
+    # credential-ish strings (a fake submitter address, and synthetic home-directory paths in the
+    # diagnostics tests) and an unknown number of them will trip default rules. Turning that
+    # into a required check sight-unseen is how v3.1.0's CI went red on a tag.
+    #
+    # TO PROMOTE IT: read the first few runs, add an allowlist for the fixture strings it names,
+    # and once it has been green on three runs it did not choose -- scheduled, not pushes -- drop
+    # continue-on-error. Same bar report-windows had to clear.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # history too; the release gate only ever sees the tree
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   oq:
     name: diagnostic cases (OQ)
@@ -246,6 +289,7 @@ jobs:
             any::lubridate
             any::stringr
             any::xml2
+            any::zip
             any::BiocManager
             any::rstudioapi
             any::ragg
@@ -278,22 +322,25 @@ jobs:
 
   report-windows:
     name: report renders on Windows (from a spaced path)
-    # NOT BLOCKING YET, ON PURPOSE. The open item this closes carries its own warning -- "an
-    # untestable new workflow job is how v3.1.0's CI went red on a tag" -- and nothing about a
-    # first run on a platform nobody has rendered a report on is predictable. continue-on-error
-    # means the first few runs are OBSERVED rather than trusted: the job reports, and the badge
-    # does not move. Promoting it is a separate change, made once it has been green on a schedule
-    # it did not choose, and the line below is the only thing that has to go.
-    continue-on-error: true
+    # BLOCKING SINCE 2026-10-12. It was continue-on-error from the day it was added, deliberately:
+    # "an untestable new workflow job is how v3.1.0's CI went red on a tag", and nothing about a
+    # first run on a platform nobody had rendered a report on was predictable. The condition set
+    # then for promoting it was a green on a SCHEDULE IT DID NOT CHOOSE -- not a push, not a
+    # dispatch, both of which someone picks the moment for.
+    # That is now met three times over: 2026-09-28, 10-05 and 10-12, all on 87acf109, all green,
+    # alongside `oq` passing the same three after its -lcurl fix. It also earned the promotion
+    # rather than merely surviving: while non-blocking it caught the inverted verdict that shipped
+    # in v3.2.4, where the render PASSED and the job reported "the fix is NOT working here".
+    # Observed long enough; it gates now.
     # EVERY EVENT, deliberately -- and this was schedule-and-dispatch-only until 3.2.6, on the
     # reasoning that a ten-minute job "is one people learn to ignore". The cost of that was
     # measured: it meant the job did not run for two releases, and v3.2.4 shipped an INVERTED
     # verdict in it that reported "the fix is NOT working here" on a run whose report had rendered
     # perfectly. Nothing caught it because nothing executed it. A gate that never runs is worse
     # than one that fails, which is the same lesson the dashboard run-scan gate taught.
-    # It stays continue-on-error, so ten minutes per push buys observation at zero risk to the
-    # badge. `oq` is NOT promoted with it: that one is 15 minutes cold, needs the whole flow stack,
-    # and is the job whose cost this reasoning was actually about.
+    # Ten minutes per push, and since 2026-10-12 it BLOCKS -- it is a real gate now, not an
+    # observation. `oq` is still NOT promoted to every event: that one is 15 minutes cold, needs
+    # the whole flow stack, and is the job whose cost this reasoning was actually about.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -333,6 +380,7 @@ jobs:
             any::lubridate
             any::stringr
             any::xml2
+            any::zip
             any::BiocManager
             any::rstudioapi
             any::ragg
