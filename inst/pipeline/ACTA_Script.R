@@ -224,7 +224,12 @@ if (!is.null(infoSheet)) names(infoSheet)<-actaStripHeaderAnnotation(names(infoS
 ## the bundle is scrubbed separately, by .tpScrubWorkbook().
 ACTA_ITER_MAP <- character(0)
 if (actaScrubConfidential(infoSheet)) {
-  metadata_file <- actaApplyScrub(metadata_file)
+  ## Resolved ONCE, here, and handed to every scrub on this run -- see actaScrubElnPlaceholder().
+  ## `current` is read BEFORE the line below scrubs it, which is the only point in the run where
+  ## the real ELN_ID is still there to compare against.
+  actaElnPlaceholder <- actaScrubElnPlaceholder(
+    infoSheet, current = if ("ELN_ID" %in% names(metadata_file)) metadata_file[["ELN_ID"]])
+  metadata_file <- actaApplyScrub(metadata_file, eln = actaElnPlaceholder)
   ## The Info sheet too: Submitter_Email rides it verbatim into the bundle's instructions copy and
   ## the export's Info audit sheet. Scrubbed HERE, before anything reads infoSheet, so every
   ## downstream artefact inherits the placeholder rather than each one needing its own redaction.
@@ -2176,8 +2181,15 @@ auditSheets <- local({
   ## export workbook still naming the operator and the notebook. Found by sweeping a built bundle.
   ## The copy stays faithful to the workbook in every other respect; the scrub is itself declared
   ## in the Info sheet sitting beside it, so nothing is hidden.
+  ## REUSES the value resolved at the top of this script; it does NOT resolve it again. Both are
+  ## guarded by the same actaScrubConfidential(infoSheet), so the variable always exists here --
+  ## and re-reading infoSheet at this point would read a sheet THAT HAS ALREADY BEEN SCRUBBED,
+  ## so the two call sites could answer differently and publish an instructions copy and an export
+  ## naming different experiments. That is the drift actaScrubElnPlaceholder()'s own comment
+  ## promises cannot happen, and a second call was the one thing that could make it happen.
   if (actaScrubConfidential(infoSheet) && "Layout_Plate" %in% names(out))
-    out[["Layout_Plate"]] <- actaApplyScrub(out[["Layout_Plate"]], quiet = TRUE)
+    out[["Layout_Plate"]] <- actaApplyScrub(out[["Layout_Plate"]], quiet = TRUE,
+                                            eln = actaElnPlaceholder)
 
   ## Panel_Inventory: the costain panel, SUBSET from the master inventory to just the panels this
   ## run used. The other three sheets are copies of the workbook; this one is the piece of the

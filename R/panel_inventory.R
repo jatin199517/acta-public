@@ -504,16 +504,84 @@ actaScrubConfidential <- function(info) {
   isTRUE(on("titerpubs_export")) && isTRUE(on("scrub_confidential"))
 }
 
+## THE PUBLISHED ELN ID, which a site may want to MEAN something.
+##
+## The default replaces every run's ELN_ID with one constant, which is right when the only goal is
+## to hide it -- and wrong when a set of datasets is published together. Six bundles all reading
+## EXP26000001 give a reviewer no way to tell which DOI belongs to which dataset, and that is
+## exactly what a public repository needs them to do.
+##
+## Info!scrub_eln_placeholder overrides it per run. Blank or absent keeps the old constant, so
+## nothing changes for anyone who does not set it.
+##
+## READ ONCE AND PASSED AROUND, never re-derived. The workbook scrub and the export scrub are
+## different code paths over the same run; if they resolved this separately they could disagree,
+## and the failure would be a bundle whose instructions sheet and export name different
+## experiments -- the kind of inconsistency no structural check looks for.
+actaScrubElnPlaceholder <- function(info = NULL, current = NULL) {
+  v <- if (is.null(info)) NA_character_ else actaInfoValue(info, "scrub_eln_placeholder")
+  v <- if (length(v) != 1L || is.na(v)) "" else trimws(as.character(v))
+  if (!nzchar(v) || identical(toupper(v), "NA")) return(unname(ACTA_SCRUB_CONFIDENTIAL[["ELN_ID"]]))
+  ## A placeholder long enough to look like prose is a mistake worth catching here rather than in
+  ## a published file.
+  if (nchar(v) > 64L)
+    stop(sprintf("Info!scrub_eln_placeholder is %d characters; that is a label, not an id.",
+                 nchar(v)), call. = FALSE)
+  ## THIS VALUE BECOMES PART OF FILE NAMES, so it is constrained to what a file name may hold.
+  ##
+  ## Not defence in depth -- it is the only check on two real sinks. Before 3.6.4 every replacement
+  ## in the scrub map was a hardcoded constant; this is the first operator-supplied one, and the
+  ## map is what renames the staged FCS files (.tpStageFcs -> .tpRenameToken) and what names the
+  ## bundle zip. .tpStageFcs() cleans "/" and ":" out of each leaf BEFORE the rename is applied, so
+  ## a placeholder slips past that guard entirely: "../../x" yields a staged path that escapes the
+  ## bundle directory, where dir.create(recursive = TRUE) and write.FCS/file.copy(overwrite = TRUE)
+  ## then act on it. A ":" merely ships a name that cannot be unpacked on Windows, which is the
+  ## breakage .tpStageFcs()'s own comment exists to prevent.
+  ##
+  ## XML safety needs no check here -- every workbook-part writer goes through .tpEsc() -- so this
+  ## is about paths alone. Refused rather than rewritten: silently turning "a/b" into "a_b" would
+  ## publish an id the operator never chose, and this value exists to be recognised by a reader.
+  if (grepl("[^A-Za-z0-9._-]", v))
+    stop(sprintf(paste0("Info!scrub_eln_placeholder is '%s'. It becomes part of file names in the ",
+                        "bundle, so it may hold only letters, digits, dot, underscore and hyphen."),
+                 v), call. = FALSE)
+  ## A PLACEHOLDER EQUAL TO THE REAL ID PUBLISHES THE REAL ID, AND NO GATE CAN SEE IT.
+  ##
+  ## This is the one way the feature can defeat the scrub it belongs to, and it is invisible by
+  ## construction rather than by oversight: .tpApplyRepl() drops any key whose replacement equals
+  ## itself (OQ_Test2's `ELN -> ELN` taught it to, or a clean workbook failed), so the rewrite
+  ## becomes a no-op; .tpReplSurvivors() is then asked about the FILTERED key list and never looks
+  ## for the value; and .tpSiteTokens() excludes placeholder values from the seeded scan on
+  ## purpose. Three independent checks all decline, correctly, for the same reason.
+  ##
+  ## WARNED, NOT REFUSED. Someone whose ELN id is not itself confidential may set this deliberately
+  ## to publish it while still scrubbing Operator and ELN_Name -- that is a legitimate use, and
+  ## stopping would be the fail-always trap this project has already been bitten by more than once.
+  ## So it says so, loudly, every run, and leaves the decision where it belongs.
+  cur <- unique(trimws(as.character(stats::na.omit(current))))
+  cur <- cur[nzchar(cur)]
+  if (length(cur) && v %in% cur)
+    warning(sprintf(paste0("Info!scrub_eln_placeholder is '%s', which is already the ELN_ID in ",
+                           "this run -- so the scrub will publish the real identifier unchanged ",
+                           "and the bundle gate cannot flag it. Change it if that is not what ",
+                           "you intend."), v), call. = FALSE)
+  v
+}
+
 ## Apply the column replacements to a stats/export frame. Columns that are absent are skipped
 ## rather than created: a workbook that predates a column should not gain one from a scrub.
-actaApplyScrub <- function(df, quiet = FALSE) {
+actaApplyScrub <- function(df, quiet = FALSE, eln = NULL) {
   if (is.null(df) || !is.data.frame(df) || !nrow(df)) return(df)
+  ## `eln` is the resolved placeholder from actaScrubElnPlaceholder(). NULL keeps the constant,
+  ## so every existing caller behaves exactly as before.
+  repl <- ACTA_SCRUB_CONFIDENTIAL
+  if (!is.null(eln) && length(eln) == 1L && !is.na(eln) && nzchar(eln)) repl[["ELN_ID"]] <- eln
   hit <- character(0)
-  for (cn in names(ACTA_SCRUB_CONFIDENTIAL)) {
+  for (cn in names(repl)) {
     if (!cn %in% names(df)) next
     was <- unique(stats::na.omit(as.character(df[[cn]])))
     if (!length(was)) next
-    df[[cn]] <- ACTA_SCRUB_CONFIDENTIAL[[cn]]
+    df[[cn]] <- repl[[cn]]
     hit <- c(hit, sprintf("%s (%d value(s))", cn, length(was)))
   }
 

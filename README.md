@@ -119,8 +119,16 @@ creates a TiterPubs bundle (Zipped file containing ACTA outputs + FCS files) whe
 the `titerpubs_export` toggle in the Info sheet of the instructions file. If you want certain details to stay anonymous in
 the submission, either leave them empty in the Info sheet or turn on the `scrub_confidential`
 toggle which scrubs certain details from your bundle (see image for details). It changes values
-inside your files but does not rename them, so keep confidential identifiers out of your FCS
-filenames. It is advisable to
+inside your files but does not rename them, so keep confidential identifiers out of your file
+names — the FCS files, the instructions workbook, and the run folder itself, since the report
+prints the workbook's name.
+
+The scrub replaces `ELN_ID` with one placeholder, so several scrubbed runs can read as the same
+experiment. To choose what a run publishes instead, add a row to the Info sheet with `Variable` set
+to `scrub_eln_placeholder` and your id in `Value` — the template does not ship that row, and
+without it the shipped constant is used. A set of related datasets can then be told apart without
+naming your notebook. The id becomes part of file names inside the bundle, so it may hold only
+letters, digits, dot, underscore and hyphen; anything else stops the run. It is advisable to
 fill in other information on the Info and `Layout_Plate` sheets to provide sufficient experimental
 and reagent context to the community to reproduce your titers under identical conditions. The
 bundle can be uploaded directly to the
@@ -247,11 +255,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.6.3")
+remotes::install_github("jatin199517/acta-public@v3.6.4")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.6.3 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.4 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more

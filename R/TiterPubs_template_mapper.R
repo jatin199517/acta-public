@@ -1248,8 +1248,11 @@ actaTiterPubsBundle <- function(stats, info, outputs_dir, template, run_dir = ou
   ## Only when the operator asked for a scrub. Renaming a submitter's data files when they did
   ## NOT ask to be anonymised would be a surprise, and a bad one -- the names are how they find
   ## their own wells again.
+  ## `eln` was resolved above and is the SAME value the run published everywhere else -- the export,
+  ## the report, the zip name. Passing it here is what keeps the FCS rename agreeing with them.
   fcsMap <- if (scrub && !is.null(files[["instructions"]]) &&
-                file.exists(files[["instructions"]])) .tpScrubMap(files[["instructions"]])
+                file.exists(files[["instructions"]]))
+              .tpScrubMap(files[["instructions"]], eln = eln)
             else list()
   fcsExtra <- list()
 
@@ -1298,7 +1301,7 @@ actaTiterPubsBundle <- function(stats, info, outputs_dir, template, run_dir = ou
         ## an error handler that warns and returns FALSE with the note "it is bundled
         ## unchanged", which is precisely the outcome that must not be silent. .tpApplyRepl()
         ## now also returns FALSE when a key matched no cell or a value survived the rewrite.
-        if (scrub && !isTRUE(.tpScrubWorkbook(dst, extra_repl = fcsExtra)))
+        if (scrub && !isTRUE(.tpScrubWorkbook(dst, extra_repl = fcsExtra, eln = eln)))
           stop(sprintf("TiterPubs: %s could not be scrubbed, so it was not bundled.",
                        basename(dst)), call. = FALSE)
         ## ALWAYS, and AFTER the scrub. The scrub rewrites a real address to the placeholder, so
@@ -1853,12 +1856,37 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
 ## cannot reach) and seeding the leak scan with the very values being substituted. Three callers
 ## deriving this independently would be three chances to disagree about what "confidential"
 ## means, and the one that disagreed silently would be the one that leaks.
-.tpScrubMap <- function(path) {
+.tpScrubMap <- function(path, eln = NULL) {
   if (!file.exists(path)) return(list())
   tryCatch({
     lp <- suppressMessages(readxl::read_excel(path, sheet = "Layout_Plate", col_types = "text"))
     names(lp) <- actaStripHeaderAnnotation(names(lp))
     tgt <- intersect(c(names(ACTA_SCRUB_CONFIDENTIAL), "Costain_Panel_Iteration"), names(lp))
+    ## THE PUBLISHED ELN ID IS HANDED IN, NOT RE-DERIVED HERE. An earlier version of this resolved
+    ## Info!scrub_eln_placeholder from the workbook on disk, which was wrong three ways at once:
+    ##
+    ##   * TWO READS, TWO ANSWERS. ACTA_Script.R reads Info with no col_types; this read it as
+    ##     "text". For a DATE cell -- which is what Excel makes of "2026-10-23", and dating a
+    ##     dataset is an obvious way to tell a published set apart -- the script resolved
+    ##     "2026-10-23" while this resolved the serial "46318". The report, the plots and the zip
+    ##     name would say one thing and both bundled workbooks another: one bundle naming two
+    ##     experiments, the exact drift actaScrubElnPlaceholder()'s header promises cannot happen.
+    ##   * A VALIDATION ERROR BECAME A SILENT NO-OP. actaScrubElnPlaceholder() stop()s on a bad
+    ##     placeholder, and this function's own handler below turns any error into list() -- an
+    ##     EMPTY map, which .tpScrubWorkbook() reads as "nothing to do" and reports success for.
+    ##     A refused placeholder would have bundled a wholly unscrubbed workbook while every gate
+    ##     said clean, with fcsMap empty and the site tokens unseeded. Fail-open, again.
+    ##   * ITS SAFETY WARNING FIRED ON EVERY CORRECT RUN. The `current` comparison needs the REAL
+    ##     ELN_ID, and .tpScrubWorkbook() calls this on the staged EXPORT, whose Layout_Plate audit
+    ##     copy has already been scrubbed in memory -- so the placeholder always equalled the
+    ##     column and the one control guarding the feature's only invisible leak cried wolf every
+    ##     time. That comparison belongs at ACTA_Script.R's call, which is the single point in a run
+    ##     where the real value is still there.
+    ##
+    ## The caller resolves it once and passes it down. NULL keeps the shipped constant.
+    scrubRepl <- ACTA_SCRUB_CONFIDENTIAL
+    if (!is.null(eln) && length(eln) == 1L && !is.na(eln) && nzchar(eln))
+      scrubRepl[["ELN_ID"]] <- as.character(eln)
     repl <- list()
     for (cn in tgt) {
       v <- unique(trimws(stats::na.omit(as.character(lp[[cn]]))))
@@ -1867,7 +1895,7 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
       if (identical(cn, "Costain_Panel_Iteration"))
         for (i in seq_along(v)) repl[[v[i]]] <- paste0(ACTA_SCRUB_ITERATION_PREFIX, i)
       else
-        for (z in v) repl[[z]] <- ACTA_SCRUB_CONFIDENTIAL[[cn]]
+        for (z in v) repl[[z]] <- scrubRepl[[cn]]
     }
     inf <- tryCatch(suppressMessages(readxl::read_excel(path, sheet = "Info", col_types = "text")),
                     error = function(e) NULL)
@@ -1962,10 +1990,10 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
 ## through the SAME whole-cell pass: the export's `fcs_file` cells hold exactly one path each, so
 ## a cell-value substitution reaches them, and routing them here means the renamed files and the
 ## cells that point at them are rewritten by one mechanism rather than two.
-.tpScrubWorkbook <- function(path, extra_repl = list()) {
+.tpScrubWorkbook <- function(path, extra_repl = list(), eln = NULL) {
   if (!file.exists(path)) return(invisible(FALSE))
   ok <- tryCatch({
-    repl <- .tpScrubMap(path)
+    repl <- .tpScrubMap(path, eln = eln)
     ## OPTIONAL, AND SUBSTRING-MATCHED. Skipping either property is how this fix would have become
     ## the fourth fail-always regression in this file:
     ##   * OPTIONAL, because .tpApplyRepl()'s post-condition requires every key to match a cell --
