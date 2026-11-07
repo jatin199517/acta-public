@@ -544,5 +544,143 @@ local({
   }
 })
 
+## ---------------------------------------------------------------------------------------------
+## Test_Material MAPS FREELY: a value the menu does not cover is PUBLISHED, not blanked.
+##
+## The old guard replaced an unrecognised Cell type with Info!Cell_Type_Fallback, on the reasoning
+## that it kept donor identifiers out of a submission. It did not: the same string is published
+## verbatim twice more in the same zip -- the export's sharedStrings and the bundled Layout_Plate.
+## So it removed a field a reader wants and prevented nothing. ACTA is run by other labs whose
+## naming it cannot dictate; confidentiality for this field is acta.test_material_rules, which is
+## site-configured and shipped empty.
+cat("\n=== Test_Material -> Cell type maps freely ===\n")
+local({
+  ct <- .tp(".tpCellType")
+  ## Recognised materials still normalise to the menu term -- that is what keeps a submission
+  ## queryable, and is why the alias table stays.
+  chk("HD PBMC normalises",            identical(ct("HD PBMC"), "mononuclear cells"))
+  chk("HD human PBMC normalises",      identical(ct("HD human PBMC"), "mononuclear cells"))
+  chk("HD Human PBMCs normalises",     identical(ct("HD Human PBMCs"), "mononuclear cells"))
+  chk("HD Human T cells normalises",   identical(ct("HD Human T cells"), "T cells"))
+  ## THE PREFIX IS STRIPPED, not enumerated: three spellings of one material reached production
+  ## one at a time, two of them publishing blank. A key the table never lists must still resolve.
+  chk("an unlisted HD spelling still resolves", identical(ct("healthy donor PBMCs"), "mononuclear cells"))
+  ## A menu value typed directly needs no alias at all.
+  chk("a menu value passes through",   identical(ct("splenocytes"), "splenocytes"))
+
+  ## THE CHANGE ITSELF: unrecognised is published, not discarded.
+  chk("an unrecognised material is RETURNED, not blanked",
+      identical(ct("Whole blood"), "Whole blood"))
+  ## A DELIBERATELY SYNTHETIC "product code". The assertion is that an UNRECOGNISED string is
+  ## returned rather than blanked -- its shape carries no test meaning, and a realistic product
+  ## name trips the tracked-text leak sweep in verify_oq_sanitised.R, which flags product-shaped
+  ## tokens precisely because they look real. Third time this has bitten in this suite.
+  chk("...including something that looks like an internal code",
+      identical(ct("ZZ-INTERNAL-CODE-7"), "ZZ-INTERNAL-CODE-7"))
+  chk("blank stays blank", is.na(ct("")))
+})
+
+## ---------------------------------------------------------------------------------------------
+## THE OFF-MENU VALUE REACHES ROW 3 OF A WRITTEN TEMPLATE -- through the real writer.
+##
+## The first version of this block claimed exactly that in its header and then asserted on
+## .tpCellType() and .tpOnMenu() only. It never called the writer, never opened a workbook, and
+## stayed GREEN with both actaTiterPubsValues() and actaTiterPubsWrite() deliberately broken --
+## one of its three assertions was a constant lookup against ACTA_TP_OMIT. That is the
+## grep-instead-of-execute shape this suite exists to prevent, written by the person warning
+## about it. It now writes a template and reads the rows back.
+cat("\n=== an off-menu Cell type lands in row 3 of a WRITTEN template ===\n")
+local({
+  tpl <- .tp("actaTiterPubsTemplate")()
+  if (!nzchar(tpl) || !file.exists(tpl)) { cat("  [skip] no TiterPubs template shipped\n"); return() }
+  menus <- .tp("actaTiterPubsMenus")(tpl)
+
+  write_and_read <- function(material) {
+    v <- stats::setNames(rep(NA_character_, length(.tp("ACTA_TP_COLS"))), unname(.tp("ACTA_TP_COLS")))
+    v[["Cell type"]] <- .tp(".tpCellType")(material)
+    v <- .tp(".tpCanonicaliseAll")(v, menus)
+    over <- names(v)[!vapply(names(v), function(f) .tp(".tpOnMenu")(v[[f]], f, menus), TRUE)]
+    out <- file.path(tempdir(), paste0("tpw_", basename(tempfile("")), ".xlsx"))
+    dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
+    .tp("actaTiterPubsWrite")(tpl, out, v, over)
+    d <- as.data.frame(suppressMessages(readxl::read_excel(out, sheet = "to publish",
+                                                           col_types = "text", n_max = 2)))
+    list(row2 = d[["Cell type"]][1], row3 = d[["Cell type"]][2])
+  }
+
+  a <- write_and_read("HD Human T cells")
+  chk("a recognised material is written to ROW 2 as the menu term",
+      identical(a$row2, "T cells"), paste("row2 =", a$row2))
+
+  b <- write_and_read("Whole blood")
+  chk("an off-menu material is written to ROW 3, verbatim",
+      identical(b$row3, "Whole blood"), paste("row3 =", b$row3))
+  chk("...and row 2 is left empty for it, not filled with a guess",
+      is.na(b$row2) || !nzchar(trimws(b$row2)), paste("row2 =", b$row2))
+
+  ## A BACKSLASH SURVIVES THE WRITER. buildRow()'s output is the REPLACEMENT argument of sub(),
+  ## where R reads \\ and \1-\9 as escape syntax -- so "C:\lab\donor" published as
+  ## "C:labdonor", silently, with the package well formed and every OPC check clean. A backslash
+  ## is ordinary lab notation and this row is where free text now lands.
+  bs <- write_and_read("CD4\\CD8 sorted")
+  chk("a backslash in the material is NOT eaten by the row writer",
+      identical(bs$row3, "CD4\\CD8 sorted"), paste("row3 =", bs$row3))
+})
+
+## ---------------------------------------------------------------------------------------------
+## acta.test_material_rules MUST REACH THE BUNDLED WORKBOOK, not only the export and the template.
+##
+## actaApplyScrub() maps Test_Material on the stats frame, which covers the export, the report and
+## the submission template. The bundled Ab_Titration_Instructions.xlsx is a BYTE COPY of the
+## operator's file with only .tpScrubMap()'s map applied -- and that map named Operator, ELN_ID,
+## ELN_Name and Costain_Panel_Iteration, never Test_Material. So a site whose rules rewrite a
+## donor identifier OUT of Test_Material still shipped the raw string in that workbook, with every
+## control reporting success and the leak scan unable to see it, because .tpSiteTokens() seeds
+## itself from the same map. Found by review, not by this suite.
+cat("\n=== site Test_Material rules reach the bundled workbook ===\n")
+local({
+  RAW <- "DONOR-ZZ9-PBMC"; MAPPED <- "mononuclear cells"
+  p <- file.path(tempdir(), paste0("tmr_", basename(tempfile(""))), "wb.xlsx")
+  dir.create(dirname(p), recursive = TRUE); file.copy(SRC, p)
+  ## Plant the raw material in Layout_Plate the way an operator would write it.
+  d <- unpack(p); sf <- file.path(d, "xl", "worksheets", "sheet3.xml")
+  lp <- as.data.frame(suppressMessages(readxl::read_excel(p, sheet = "Layout_Plate", col_types = "text")))
+  j  <- match("Test_Material", names(lp))
+  if (is.na(j)) { cat("  [skip] fixture has no Test_Material column\n"); return() }
+  L <- function(i){ s<-""; while(i>0){ r<-(i-1)%%26; s<-paste0(LETTERS[r+1],s); i<-(i-1)%/%26 }; s }
+  sx <- paste(readLines(sf, warn = FALSE), collapse = "\n")
+  for (rw in 2:(nrow(lp)+1L)) {
+    ref <- sprintf("%s%d", L(j), rw)
+    cpat <- sprintf('<c r="%s"[^>]*(/>|>.*?</c>)', ref)
+    cell <- sprintf('<c r="%s" t="inlineStr"><is><t>%s</t></is></c>', ref, RAW)
+    if (grepl(cpat, sx)) sx <- sub(cpat, cell, sx)
+  }
+  writeLines(sx, sf, useBytes = TRUE); repack(d, p)
+
+  old <- getOption("acta.test_material_rules")
+  on.exit(options(acta.test_material_rules = old), add = TRUE)
+  options(acta.test_material_rules = list(c(pattern = "^DONOR-", replacement = MAPPED)))
+
+  m <- .tp(".tpScrubMap")(p, eln = "EXP0001")
+  chk("fixture: the raw material really is in the workbook",
+      any(grepl(RAW, cellValues(p), fixed = TRUE)))
+  ## THE ASSERTION: the map the bundled workbook is rewritten with must know about it.
+  chk("the raw material is a KEY in the bundled-workbook scrub map",
+      RAW %in% names(m), paste("map keys:", paste(utils::head(names(m), 6), collapse = ", ")))
+  chk("...and maps to the rule's replacement", identical(unname(m[[RAW]]), MAPPED))
+  ## Seeding the leak scan falls out of the same map -- that is why it has to be here and not
+  ## somewhere parallel.
+  chk("...so the leak scan is seeded with it too",
+      RAW %in% names(.tp(".tpSiteTokens")(m)$use) ||
+      RAW %in% .tp(".tpSiteTokens")(m)$use ||
+      RAW %in% unlist(.tp(".tpSiteTokens")(m)))
+
+  ## With NO rules set, nothing is added -- an unmapped material is published as written, and
+  ## seeding it would make .tpApplyRepl()'s "every key must hit" refuse a correct bundle.
+  options(acta.test_material_rules = NULL)
+  m0 <- .tp(".tpScrubMap")(p, eln = "EXP0001")
+  chk("with no site rules, Test_Material is NOT added to the map", !(RAW %in% names(m0)))
+})
+
 cat(if (ok) "\nTITERPUBS SCRUB TESTS PASSED\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

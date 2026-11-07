@@ -123,6 +123,13 @@ inside your files but does not rename them, so keep confidential identifiers out
 names — the FCS files, the instructions workbook, and the run folder itself, since the report
 prints the workbook's name.
 
+**`Test_Material` is published as you write it.** It reaches the bundle in three places — the
+instructions workbook, the export, and the submission template's `Cell type` field, which takes the
+menu term when your wording matches one and your own words otherwise. Nothing rewrites it for you,
+so keep donor and subject identifiers out of that cell. A site that needs its own vocabulary mapped
+can set `options(acta.test_material_rules = ...)`; the rules are applied everywhere the material is
+published, including the copy of your workbook inside the bundle.
+
 The scrub replaces `ELN_ID` with one placeholder, so several scrubbed runs can read as the same
 experiment. To choose what a run publishes instead, add a row to the Info sheet with `Variable` set
 to `scrub_eln_placeholder` and your id in `Value` — the template does not ship that row, and
@@ -255,11 +262,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.6.5")
+remotes::install_github("jatin199517/acta-public@v3.6.6")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.6.5 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.6 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more

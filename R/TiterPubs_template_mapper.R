@@ -92,8 +92,41 @@ ACTA_TP_ANTIGEN <- c("Strep" = "Streptavidin", "SA" = "Streptavidin", "SAV" = "S
 ## Test material -> the Cell type menu. PBMC is absent from their 22 options; `mononuclear cells`
 ## is literally what the P-M-C in PBMC stands for, so it is a rename, not an interpretation.
 ACTA_TP_CELLTYPE <- c("PBMC" = "mononuclear cells", "HD PBMC" = "mononuclear cells",
-                      "Human T cells" = "T cells", "T cells" = "T cells",
+                      "HD human PBMC" = "mononuclear cells",
+                      "HD Human PBMCs" = "mononuclear cells",
+                      "Human PBMC" = "mononuclear cells", "Human PBMCs" = "mononuclear cells",
+                      "Human T cells" = "T cells", "HD Human T cells" = "T cells",
+                      "HD T cells" = "T cells", "T cells" = "T cells",
                       "Tcells" = "T cells", "WBC" = "white blood cells/leukocytes")
+
+## MATCHED AFTER NORMALISING, so the table does not have to list every spelling a lab uses.
+##
+## Adding literal aliases one at a time does not converge: `HD PBMC` was in the table, then
+## `HD Human PBMCs` was not, then `HD human PBMC` was not -- three spellings of one material,
+## two of which published a BLANK cell type before anyone noticed. The `HD ` prefix is house
+## style at this site and will keep appearing.
+##
+## So the lookup strips a leading donor-health prefix, folds case, and tolerates a trailing
+## plural. It does NOT do fuzzy matching: an unrecognised material is still unrecognised, and
+## now publishes in row 3 rather than vanishing, so a near-miss costs a reader nothing.
+.tpCellTypeKey <- function(x) {
+  s <- tolower(.tpNorm(x))
+  s <- sub("^(hd|healthy donor|healthy)\\s+", "", s)   # donor-health prefix, not a cell type
+  s <- sub("s$", "", s)                                 # PBMCs -> PBMC, T cells -> T cell
+  trimws(s)
+}
+
+.tpCellType <- function(x) {
+  if (.tpBlank(x)) return(NA_character_)
+  k <- .tpCellTypeKey(x)
+  ## Keys first, then the menu values themselves, so a workbook already typed as "T cells"
+  ## resolves without needing its own entry.
+  j <- match(k, vapply(names(ACTA_TP_CELLTYPE), .tpCellTypeKey, ""))
+  if (!is.na(j)) return(unname(ACTA_TP_CELLTYPE[[j]]))
+  j <- match(k, vapply(unname(ACTA_TP_CELLTYPE), .tpCellTypeKey, ""))
+  if (!is.na(j)) return(unname(ACTA_TP_CELLTYPE[[j]]))
+  as.character(x)                                       # unrecognised -> row 3, not blank
+}
 
 ## Layout_Plate!Test_Material_Status -> the `Fresh or Frozen` menu. The layout holds one word per
 ## well; the menu holds four whole sentences, each naming BOTH the thaw state and whether the
@@ -597,13 +630,16 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     "Secondary Concentration used" = tv("Secondary_Concentration"),
     "Gating"                      = actaTiterPubsGating(gating, tv("Gating_Parent", "Live")),
     "Tissue"                      = NA_character_,
-    "Cell type"                   = .tpAlias(rv("Test_Material"), ACTA_TP_CELLTYPE),
+    "Cell type"                   = .tpCellType(rv("Test_Material")),
     "Sample details"              = NA_character_,
-    ## MENU VALUE OR NOTHING -- the maintainer's words. "See references" is not on their menu, so
-    ## every run pushed it into the off-menu overflow row. Blank is the honest answer, and the URL
-    ## now has a column of its own.
-    "Preparation protocol"        = local({ v <- iv("Preparation_Protocol")
-                                            if (.tpOnMenu(v, "Preparation protocol", menus)) v else NA_character_ }),
+    ## PUBLISHED EVEN WHEN OFF MENU, in row 3, for the reason given at the Cell type block below.
+    ##
+    ## This was "menu value or nothing" after every run pushed the literal words "See references"
+    ## into the overflow row -- which was the right call for THAT value, and the URL has had a
+    ## column of its own since. But the rule it produced blanks every other off-menu answer too,
+    ## and an isolation method a site actually used is worth more to a reader in row 3 than it is
+    ## discarded. Row 3 is what the template provides for exactly this.
+    "Preparation protocol"        = iv("Preparation_Protocol"),
     ## NEW IN TEMPLATE v3.
     "Acquisition date"            = rv("Acquisition_date"),
     ## THE PROTOCOL'S URL, not the Preparation_Protocol cell. That cell holds a menu value (an
@@ -624,14 +660,37 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     "Live or Fixed"               = liveFixed,
     "Fixed after antibody incubation?" = fixedAfter)
 
-  ## An unmapped Cell type falls back to the Info default rather than publishing a donor code.
-  ## Test_Material routinely carries a donor identifier rather than a cell type, and routing the
-  ## value through an alias table is what keeps those identifiers out of a public submission:
-  ## only a value that resolves to one of their 22 menu options is ever emitted.
-  ct <- v[["Cell type"]]
-  if (!.tpBlank(ct) && is.na(match(tolower(.tpNorm(ct)), tolower(names(ACTA_TP_CELLTYPE)))) &&
-      is.na(match(tolower(.tpNorm(ct)), tolower(unname(ACTA_TP_CELLTYPE)))))
-    v[["Cell type"]] <- iv("Cell_Type_Fallback", NA_character_)
+  ## AN UNRECOGNISED Cell type IS PUBLISHED, in row 3, like every other off-menu value.
+  ##
+  ## This used to replace it with Info!Cell_Type_Fallback, on the reasoning that routing
+  ## Test_Material through the alias table "keeps those identifiers out of a public submission".
+  ## IT DOES NOT, and that is measured: the same string is published verbatim TWICE MORE in the
+  ## same zip -- the export's sharedStrings.xml and the bundled Layout_Plate. Checked on a v3.6.5
+  ## OQ_Test1 bundle carrying "HD Human T cells". So the replacement removed a useful field and
+  ## prevented no disclosure; a reader lost the cell type while the string sat two parts away.
+  ##
+  ## Confidentiality for this field belongs to acta.test_material_rules -- site-configured,
+  ## shipped EMPTY, applied before any of this, and never in the public tree. ACTA cannot dictate
+  ## how another lab names its materials, and silently blanking their metadata is the wrong
+  ## default for a tool other people run.
+  ##
+  ## The alias table STAYS, as a normaliser: a value it recognises still lands in row 2 as the
+  ## proper menu term, which is what makes a submission queryable. Everything else goes to row 3,
+  ## the template's own escape hatch -- "if the menu in row 2 does not contain a relevant option,
+  ## add text to row 3" -- which this mapper already uses for Clone and Supplier.
+  ##
+  ## Info!Cell_Type_Fallback is now an OPT-IN OVERRIDE rather than a silent default: set it and it
+  ## wins, leave it blank and the operator's own words are published.
+  ## Normalised through the SAME key function the resolver uses, so "is this on the menu" cannot
+  ## answer differently here than it did there -- the two-readers-of-one-value shape that has
+  ## already cost this file one release.
+  ctFallback <- iv("Cell_Type_Fallback", NA_character_)
+  if (!.tpBlank(ctFallback)) {
+    ct <- v[["Cell type"]]
+    if (!.tpBlank(ct) &&
+        is.na(match(.tpCellTypeKey(ct), vapply(unname(ACTA_TP_CELLTYPE), .tpCellTypeKey, ""))))
+      v[["Cell type"]] <- ctFallback
+  }
 
   v[ACTA_TP_OMIT] <- NA_character_
   v
@@ -821,8 +880,18 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
   for (rn in c(2L, 3L)) {
     new <- buildRow(rn, if (rn == 2L) onRow2 else onRow3)
     pat <- sprintf('<row[^>]*r="%d"[^>]*>.*?</row>', rn)
-    if (grepl(pat, x)) x <- sub(pat, new, x) else
-      x <- sub("</sheetData>", paste0(new, "</sheetData>"), x)
+    ## BACKSLASHES DOUBLED, because `new` is a REPLACEMENT and carries operator text.
+    ##
+    ## sub() reads `\\` and `\1`-`\9` in a replacement as escape syntax, so a cell containing a
+    ## backslash was silently rewritten before it was ever written out. Measured end to end:
+    ## Test_Material "C:\lab\donor \1 PBMC" published as "C:labdonor  PBMC" -- no warning, the
+    ## package well formed, actaOpcFindings() clean, the workbook opening fine with the wrong text.
+    ## A backslash is ordinary lab notation (CD4\CD8, a pasted Windows path), and this row is now
+    ## also where an unmapped Test_Material lands, so free text reaches it by design.
+    ## Same fix and same reason as .tpRenameToken()'s note further down this file.
+    newEsc <- gsub("\\\\", "\\\\\\\\", new)
+    if (grepl(pat, x)) x <- sub(pat, newEsc, x) else
+      x <- sub("</sheetData>", paste0(newEsc, "</sheetData>"), x)
   }
   writeLines(x, spath, useBytes = TRUE)
 
@@ -2009,6 +2078,31 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
         for (i in seq_along(v)) repl[[v[i]]] <- paste0(ACTA_SCRUB_ITERATION_PREFIX, i)
       else
         for (z in v) repl[[z]] <- scrubRepl[[cn]]
+    }
+
+    ## Test_Material, WHEN THE SITE HAS RULES FOR IT -- and this map is the only thing that
+    ## reaches the bundled instructions workbook.
+    ##
+    ## actaApplyScrub() maps Test_Material on the stats frame, which covers the export, the report
+    ## and the submission template. The bundled Ab_Titration_Instructions.xlsx is a BYTE COPY of
+    ## the operator's own file with only THIS map applied, so a site whose rules rewrite a donor
+    ## identifier out of Test_Material still shipped the RAW string in that workbook's
+    ## Layout_Plate. Every control reported success: the map never named the column, so there was
+    ## nothing to fail, and .tpSiteTokens() seeds the leak scan from this same map -- so the gate
+    ## could not see it either. A reader that cannot read reporting "clean", once more.
+    ##
+    ## Mapped through actaMapTestMaterial(), the SAME function actaApplyScrub() uses, so the two
+    ## paths cannot disagree about what a rule means. Only values the rules actually CHANGE are
+    ## added: an unmapped material is published as written, by design, and seeding it here would
+    ## make .tpApplyRepl()'s "every key must hit" post-condition fail on a correct bundle.
+    if ("Test_Material" %in% names(lp) && length(actaTestMaterialRules())) {
+      tm <- unique(trimws(stats::na.omit(as.character(lp[["Test_Material"]]))))
+      tm <- tm[nzchar(tm)]
+      for (z in tm) {
+        mapped <- actaMapTestMaterial(z)
+        if (length(mapped) == 1L && !is.na(mapped) && nzchar(mapped) && !identical(mapped, z))
+          repl[[z]] <- mapped
+      }
     }
     inf <- tryCatch(suppressMessages(readxl::read_excel(path, sheet = "Info", col_types = "text")),
                     error = function(e) NULL)
