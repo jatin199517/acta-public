@@ -130,6 +130,15 @@ so keep donor and subject identifiers out of that cell. A site that needs its ow
 can set `options(acta.test_material_rules = ...)`; the rules are applied everywhere the material is
 published, including the copy of your workbook inside the bundle.
 
+**The staining protocol has its own field.** Put it in `Protocol_reference` on the Info sheet and
+it is published verbatim to the submission's `Protocol reference` column — a URL or a plain
+citation, whichever you have. Leave it blank and that column is empty. `Preparation_Protocol` is a
+different thing: the sample isolation method, for which TiterPubs offers a menu — ficoll, RBC
+lysis, mechanical dissociation and so on — and a value that is not on that menu is published in the
+off-menu row rather than dropped. `References` is a citation list, published as written and not
+parsed for anything. A workbook made before 3.6.7 has no `Protocol_reference` row; add one, or that
+column stays empty.
+
 The scrub replaces `ELN_ID` with one placeholder, so several scrubbed runs can read as the same
 experiment. To choose what a run publishes instead, add a row to the Info sheet with `Variable` set
 to `scrub_eln_placeholder` and your id in `Value` — the template does not ship that row, and
@@ -262,11 +271,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.6.6")
+remotes::install_github("jatin199517/acta-public@v3.6.7")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.6.6 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.7 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more

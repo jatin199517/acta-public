@@ -30,10 +30,21 @@ source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 h <- actaTestFunctions(actaTestAppDir())
 .tp <- function(nm) if (!is.null(h[[nm]])) h[[nm]] else getFromNamespace(nm, "ACTA")
 
-SRC <- system.file("extdata", "oq_small", "OQ_Test1",
-                   "OQ_Test1_Ab_Titration_Instructions.xlsx", package = "ACTA")
-if (!nzchar(SRC))
-  SRC <- "inst/extdata/oq_small/OQ_Test1/OQ_Test1_Ab_Titration_Instructions.xlsx"
+## THE FIXTURE MUST COME FROM THE SAME TREE AS THE CODE.
+##
+## This read system.file() FIRST -- the INSTALLED package -- while actaTestFunctions() sources
+## R/ from THIS tree. So the suite asserted this checkout's code against whatever release
+## happened to be installed on the machine, and a fixture migrated in the working tree was
+## invisible to it. Measured 2026-11-07, falsifying the Protocol_reference assertions below with
+## 3.6.6 installed: the gate reported "the workbook was not migrated" while the migrated
+## workbook was sitting in inst/, and the failure it printed had nothing to do with the code
+## under test. Same rule acta_test_paths.R states for the sources: a test must exercise THIS
+## tree. The installed copy stays as the fallback for a context that has no inst/.
+SRC <- file.path(ACTA_REPO_ROOT, "inst", "extdata", "oq_small", "OQ_Test1",
+                 "OQ_Test1_Ab_Titration_Instructions.xlsx")
+if (!file.exists(SRC))
+  SRC <- system.file("extdata", "oq_small", "OQ_Test1",
+                     "OQ_Test1_Ab_Titration_Instructions.xlsx", package = "ACTA")
 if (!file.exists(SRC)) {
   cat("  [skip] needs the OQ_Test1 instructions workbook.\n")
   cat("\nTITERPUBS SCRUB TESTS SKIPPED\n"); quit(status = 0)
@@ -680,6 +691,71 @@ local({
   options(acta.test_material_rules = NULL)
   m0 <- .tp(".tpScrubMap")(p, eln = "EXP0001")
   chk("with no site rules, Test_Material is NOT added to the map", !(RAW %in% names(m0)))
+})
+
+## ---------------------------------------------------------------------------------------------
+## Info!Protocol_reference -> TiterPubs "Protocol reference", VERBATIM AND UNDERIVED.
+##
+## It used to be computed from Info!References: split on ";", keep URLs, drop any
+## github.com/*/acta one, take the last survivor. Nothing about that was visible to the operator
+## -- the published value depended on how many URLs were in References and in what order, and a
+## second non-ACTA URL silently changed the answer.
+##
+## THE LOAD-BEARING ASSERTION IS THE BLANK ONE. References still holds a non-ACTA URL in the
+## fixture, so if any derivation survived, a blank Protocol_reference would publish that URL
+## instead of NA. That single case is what distinguishes the new behaviour from the old; the
+## others would pass under BOTH implementations.
+local({
+  cat("\n=== Info!Protocol_reference is published verbatim, not derived ===\n")
+  Vfn <- .tp("actaTiterPubsValues")
+  i0  <- as.data.frame(suppressMessages(readxl::read_excel(
+           SRC, sheet = "Info", col_types = "text", .name_repair = "minimal")))
+  if (!("Protocol_reference" %in% i0$Variable)) {
+    chk("the fixture workbook carries an Info!Protocol_reference row", FALSE,
+        "absent -- the workbook was not migrated")
+    return(invisible(NULL))
+  }
+  chk("the fixture workbook carries an Info!Protocol_reference row", TRUE)
+  row <- data.frame(x = 1)
+  set <- function(v) { i <- i0; i$Value[which(i$Variable == "Protocol_reference")[1]] <- v; i }
+  got <- function(inf) Vfn(row, inf)[["Protocol reference"]]
+
+  refs <- i0$Value[which(i0$Variable == "References")[1]]
+  chk("the fixture's References still holds a non-ACTA URL (so the blank case can discriminate)",
+      grepl("https?://", refs) && grepl("biolegend", refs, ignore.case = TRUE), refs)
+
+  chk("a URL in the field publishes verbatim",
+      identical(got(i0), i0$Value[which(i0$Variable == "Protocol_reference")[1]]), got(i0))
+
+  ## THE ONE THAT CATCHES A SURVIVING DERIVATION.
+  chk("BLANK Protocol_reference publishes NA, NOT a URL scavenged from References",
+      is.na(got(set(NA_character_))), got(set(NA_character_)))
+
+  ## "Remove the split" literally: a value containing ';' is one value, not a list to pick from.
+  chk("a value containing ';' is published WHOLE, not split",
+      identical(got(set("doi:10.1/x ; doi:10.2/y")), "doi:10.1/x ; doi:10.2/y"),
+      got(set("doi:10.1/x ; doi:10.2/y")))
+
+  ## The name-based exclusion is gone with the derivation. If an operator deliberately puts
+  ## ACTA's own URL here, that is their answer and it is published.
+  chk("ACTA's own repo URL is no longer special-cased away",
+      identical(got(set("https://github.com/jatin199517/acta-public")),
+                "https://github.com/jatin199517/acta-public"))
+
+  ## The column is free text on TiterPubs' side -- no menu column at all -- so a citation that
+  ## is not a URL must survive too.
+  chk("a non-URL citation survives",
+      identical(got(set("Smith et al. 2024, Cytometry A")), "Smith et al. 2024, Cytometry A"))
+
+  ## References is a citation list and keeps its own column, unparsed.
+  chk("Info!References is still published verbatim to its own column",
+      identical(Vfn(row, i0)[["References"]], refs))
+
+  ## Preparation protocol is the ISOLATION METHOD and must not carry the protocol URL any more.
+  chk("the fixture's Preparation_Protocol is empty (the URL moved out of it)",
+      { pp <- i0$Value[which(i0$Variable == "Preparation_Protocol")[1]]
+        is.na(pp) || !nzchar(trimws(pp)) },
+      i0$Value[which(i0$Variable == "Preparation_Protocol")[1]])
 })
 
 cat(if (ok) "\nTITERPUBS SCRUB TESTS PASSED\n" else "\nFAILURES ABOVE\n")

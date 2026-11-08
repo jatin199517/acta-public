@@ -978,7 +978,7 @@ server <- function(input, output, session) {
         choices <- c("Validated","Confirmed","Pending","Re-run needed","Undetermined","Custom…")
         tagList(tags$hr(),
           tags$strong(o$dirname),
-          tags$div(class = "d", sprintf("max SI at %s µL · well volume %s µL · %s e6 cells/well",
+          tags$div(class = "d", sprintf("max SI at %s \u00B5L \u00B7 well volume %s \u00B5L \u00B7 %s e6 cells/well",
                                         row$maxSI_StainQty %||% "?",
                                         (row$Well_volume_uL %||% "?"), (row$e6_cells_per_well %||% "?"))),
           radioButtons(paste0("src_", i), NULL,
@@ -987,7 +987,7 @@ server <- function(input, output, session) {
                        selected = if (o$maxsi$enabled) "maxsi" else "manual"),
           if (!o$vmax90$enabled) tags$div(class = "d warn", style = "color:#8a5a00",
                                           paste("90%Vmax unavailable:", o$vmax90$reason)),
-          numericInput(paste0("titer_", i), "Titer (µL)",
+          numericInput(paste0("titer_", i), "Titer (\u00B5L)",
                        value = if (o$maxsi$enabled) o$maxsi$value else NA, width = "160px"),
           selectInput(paste0("stat_", i), "Titer status", choices = choices,
                       selected = "Validated", width = "220px"),

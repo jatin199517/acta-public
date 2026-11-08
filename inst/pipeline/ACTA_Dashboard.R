@@ -16,7 +16,13 @@
 ## stripped, so `dashboard_dir (L)` and `dashboard_dir` both work:
 ##   dashboard_dir         where the .html is written. Blank -> this folder.
 ##   titration_export_dir  the folder whose IMMEDIATE SUBFOLDERS are the runs.
-##                         Blank -> the ACTA root (this folder's parent).
+##                         Blank -> THIS folder is the run, and only its own
+##                         export is read. NOT the parent: defaulting to the
+##                         parent would silently pull in every sibling version
+##                         folder. This header said "the ACTA root (this
+##                         folder's parent)" until 3.6.7 while the code did the
+##                         opposite, and contradicted the inline note at the
+##                         resolution itself.
 ##
 ## Each immediate subfolder of titration_export_dir is one run, scanned for a
 ## *TitrationExport*.xlsx, a report .pdf, and figures. Anything whose path

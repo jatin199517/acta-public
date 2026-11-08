@@ -27,8 +27,8 @@ ACTA_PI_COLS <- c(antigen = "Antigen", fluorochrome = "Fluorochrome",
 ## fail. Stripped on read, once, so nothing downstream has to know.
 .piNorm <- function(x) {
   x <- as.character(x)
-  x <- gsub("[​-‍﻿­]", "", x)
-  x <- gsub(" ", " ", x)
+  x <- gsub("[\u200B-\u200D\uFEFF\u00AD]", "", x)  # ZWSP, ZWNJ, ZWJ, BOM, soft hyphen
+  x <- gsub("\u00A0", " ", x)  # non-breaking space
   trimws(gsub("[[:space:]]+", " ", x))
 }
 

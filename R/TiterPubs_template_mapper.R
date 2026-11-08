@@ -198,34 +198,48 @@ ACTA_TP_INSTRUMENT_MODEL <- c("EVEREST" = "ZE5", "YETI" = "ZE5", "ZE5" = "ZE5")
 ## "Streptavidin" followed by U+200B -- thirteen characters that look like twelve, pasted in from
 ## somewhere years ago. An exact menu match fails on it and the cell looks correct in Excel while
 ## it does, which is the worst way for a lookup to be wrong. Stripped here, once, for everything.
+## WRITTEN AS \uXXXX, NOT AS PASTED CHARACTERS, and the reason is narrower than it looks.
+##
+## These literals used to BE the invisible characters they match, so the one line whose job is to
+## remove invisible characters was itself unreadable, undiffable, and silently damaged by any
+## editor or transfer that re-encoded the file. The escapes make the source pure ASCII.
+##
+## WHAT THIS DOES NOT DO -- measured 2026-11-07, recorded so nobody re-derives it. It does NOT
+## make normalisation work under a non-UTF-8 locale. With DESCRIPTION's Encoding: UTF-8 both
+## spellings behave identically under any UTF-8 locale, which is the only locale ACTA is tested
+## in. Under a true LC_ALL=C the PASTED form silently returned "CD3BUV805" for "CD3<NBSP>BUV805"
+## -- the NBSP deleted rather than spaced, a wrong answer with no warning -- while the escaped
+## form raises "input string is invalid". That trade is deliberate: a reader that cannot read must
+## not report success. Making it actually WORK off UTF-8 needs byte-mode matching done properly,
+## which is a separate change and is NOT this one.
 .tpNorm <- function(x) {
   x <- as.character(x)
-  x <- gsub("[​-‍﻿­]", "", x)   # ZWSP, ZWNJ, ZWJ, BOM, soft hyphen
-  x <- gsub(" ", " ", x)                        # non-breaking space
+  x <- gsub("[\u200B-\u200D\uFEFF\u00AD]", "", x)   # ZWSP, ZWNJ, ZWJ, BOM, soft hyphen
+  x <- gsub("\u00A0", " ", x)                        # non-breaking space
   trimws(gsub("[[:space:]]+", " ", x))
 }
 
 .tpBlank <- function(x) is.null(x) || !length(x) || all(is.na(x)) || !nzchar(.tpNorm(x)[1])
 
-## The STAINING PROTOCOL's URL out of Info!References, for TiterPubs' "Protocol reference" column.
+## THE STAINING PROTOCOL NOW HAS AN INFO FIELD OF ITS OWN: Info!Protocol_reference.
 ##
-## References is a semicolon-separated list and holds two different kinds of citation: the
-## analysis tool (ACTA's own repository) and the protocol the cells were stained by. Only the
-## second answers "where is the protocol", so ACTA's repository is excluded by name -- otherwise
-## every run would publish a link to ACTA as though it were the bench protocol.
+## It used to be DERIVED from Info!References by .tpProtocolUrl(), which split that field on ";",
+## kept the URLs, dropped any github.com/*/acta one so a run could not publish a link to ACTA as
+## though it were the bench protocol, and took the last survivor. That worked, but nothing about
+## it was visible to the operator: the value published in TiterPubs' "Protocol reference" column
+## depended on how many URLs were in References, what order they were in, and a name-based
+## exclusion rule written in the source. An operator reading the workbook could not predict it,
+## and a second non-ACTA URL in References silently changed the answer.
 ##
-## Returns NA when there is no URL. The field previously carried Info!Preparation_Protocol, whose
-## value on every shipped workbook is the words "See references" -- a sentence, not a reference,
-## and not on their menu either. NA is honest; a dangling instruction is not.
-.tpProtocolUrl <- function(refs) {
-  if (.tpBlank(refs)) return(NA_character_)
-  parts <- trimws(strsplit(as.character(refs)[1], ";", fixed = TRUE)[[1]])
-  urls  <- parts[grepl("^https?://", parts, ignore.case = TRUE)]
-  if (!length(urls)) return(NA_character_)
-  keep <- urls[!grepl("github[.]com/[^/]+/acta", urls, ignore.case = TRUE)]
-  if (!length(keep)) return(NA_character_)
-  keep[length(keep)]
-}
+## Removed on the user's instruction (2026-11-07): one Info cell, published verbatim. If
+## Protocol_reference is blank the column is NA, which is honest -- rather than guessing from a
+## citation list. Info!References keeps its own column and is published verbatim too; it is a
+## citation list, and it is no longer parsed for anything.
+##
+## CONSEQUENCE, STATED: a workbook authored before this field existed has no Protocol_reference
+## row, so its "Protocol reference" column is now NA where it previously carried a derived URL.
+## That is the version-locked-template rule working as intended -- ACTA ships no back-compat
+## shim -- but it IS a visible change for an archived workbook re-run on this version.
 
 ## "BUV395-A" is a DETECTOR; "BUV395" is the dye. Only the trailing -A/-H/-W area/height/width
 ## suffix goes: a dye name can legitimately end in a letter, so an unanchored strip would eat one.
@@ -467,8 +481,8 @@ actaTiterPubsLasers <- function(keys) {
   base <- m[1]
   ## Light chain, in any of the spellings the inventory uses. Unicode kappa and lambda are what
   ## the menu is written with.
-  lc <- if (grepl("(κ|kappa|[^A-Za-z]k([^A-Za-z]|$))", v, ignore.case = TRUE, perl = TRUE)) "\u03ba"
-        else if (grepl("(λ|lambda|[^A-Za-z]l([^A-Za-z]|$))", v, ignore.case = TRUE, perl = TRUE)) "\u03bb"
+  lc <- if (grepl("(\u03BA|kappa|[^A-Za-z]k([^A-Za-z]|$))", v, ignore.case = TRUE, perl = TRUE)) "\u03ba"
+        else if (grepl("(\u03BB|lambda|[^A-Za-z]l([^A-Za-z]|$))", v, ignore.case = TRUE, perl = TRUE)) "\u03bb"
         else ""
   opts <- menus[["Isotype"]] %||% character(0)
   for (cand in c(paste0(base, lc), base)) if (!length(opts) || cand %in% opts) return(cand)
@@ -642,12 +656,9 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     "Preparation protocol"        = iv("Preparation_Protocol"),
     ## NEW IN TEMPLATE v3.
     "Acquisition date"            = rv("Acquisition_date"),
-    ## THE PROTOCOL'S URL, not the Preparation_Protocol cell. That cell holds a menu value (an
-    ## isolation method) or the words "See references", and the maintainer asked for a URL here.
-    ## Info!References is a semicolon-separated list whose entries are the analysis tool and the
-    ## staining protocol; .tpProtocolUrl() takes the protocol one -- the last URL that is not
-    ## ACTA's own repository -- and returns NA rather than guessing when there is no URL at all.
-    "Protocol reference"          = .tpProtocolUrl(iv("References")),
+    ## ITS OWN INFO CELL, PUBLISHED VERBATIM -- no longer derived from References. See the note
+    ## on the removal of .tpProtocolUrl() above for what changed and why.
+    "Protocol reference"          = iv("Protocol_reference"),
     "Cell count"                  = if (is.na(cells)) NA_character_
                                     else format(cells * 1e6, scientific = FALSE, trim = TRUE),
     ## PER WELL FIRST, run-level second. Test_Material_Status is a Layout_Plate column, so a plate
