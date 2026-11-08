@@ -1,18 +1,23 @@
-## Test_Material_Status: a Layout_Plate column, and the TiterPubs field it publishes.
+## The sample-description block: Cell_Type / Tissue_Type / Sample_Status / Culture_Status.
 ##
-## WHY THIS NEEDS A GATE OF ITS OWN. The column is the first per-well answer to a question the
-## submission template asks once -- "Fresh or Frozen" was read from Info, so one plate published
-## one value for every reagent on it. Three things have to agree for the new path to mean
-## anything, and each can be broken without the other two noticing:
+## WHY THIS NEEDS A GATE OF ITS OWN, AND WHY IT CHANGED SHAPE IN 3.6.8.
 ##
-##   1. THE COLUMN EXISTS, in every shipped workbook, NEXT TO Test_Material. Position is not
-##      cosmetic here: the operator reads the material and the state it was in together, and the
-##      export's lead block mirrors the sheet.
-##   2. THE VALUE MAPS ONTO THEIR MENU. `Frozen` is one word; the menu holds four sentences, each
-##      naming the thaw state AND whether the cells were cultured. An unmapped value is not an
-##      error anywhere -- it is published into the off-menu overflow row, quietly.
-##   3. AN OLD EXPORT STILL PUBLISHES WHAT IT USED TO. The column did not exist before 3.6.0, so
-##      a row without it has to fall back to Info!Fresh_or_Frozen rather than go blank.
+## It used to assert that Sample_Status MAPPED onto TiterPubs' `Fresh or Frozen` menu. It no
+## longer does, deliberately: all four of that menu's options state TWO facts -- thaw state AND
+## whether the cells were cultured before staining -- so publishing a bare `Frozen` as
+## "Frozen, thawed and incubated with antibody" asserted NO CULTURE STEP, which no operator had
+## said. Every run shipped that claim.
+##
+## The facts now travel as themselves. Three things have to hold, and each can break without the
+## other two noticing:
+##
+##   1. THE FOUR COLUMNS EXIST, in every shipped workbook, together and in order. A reader who
+##      sees the material without its tissue or its state has a fraction of the fact.
+##   2. THEY REACH THE EXPORT. With the submission column unmapped, the bundled export is the
+##      ONLY place these facts still exist -- so membership of the export lead block is now
+##      load-bearing rather than cosmetic.
+##   3. THE SUBMISSION COLUMN STAYS EMPTY. Not "usually empty": a future edit that quietly
+##      restores the composition would put the fabricated claim straight back.
 
 ok <- TRUE
 chk <- function(label, pass, detail = NULL) {
@@ -26,9 +31,18 @@ chk <- function(label, pass, detail = NULL) {
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))
-suppressMessages(library(ACTA))
+## THE CODE MUST COME FROM THIS TREE, NOT FROM WHATEVER IS INSTALLED.
+##
+## This file used to `library(ACTA)` and reach in with `ACTA:::`, so every assertion below was
+## measured against the installed release rather than the checkout under test. Measured 2026-11-07
+## during the 3.6.8 schema change: four assertions failed describing 3.6.7's behaviour while the
+## working tree already had the new one. Same rule, and same reason, as the note at the top of
+## test_titerpubs_scrub.R. actaTestFunctions() sources R/ from this tree; the installed copy is
+## only a fallback for a context that has no inst/.
+h <- actaTestFunctions(actaTestAppDir())
+.f <- function(nm) if (!is.null(h[[nm]])) h[[nm]] else getFromNamespace(nm, "ACTA")
 
-## ---- 1. the shipped workbooks carry it, beside Test_Material, defaulted ------------------------
+## ---- 1. the shipped workbooks carry it, beside Cell_Type, defaulted ------------------------
 WBS <- c("inst/pipeline/Template/TEMPLATE_Ab_Titration_Instructions.xlsx",
          "inst/extdata/oq_small/OQ_Test1/OQ_Test1_Ab_Titration_Instructions.xlsx",
          "inst/extdata/oq_small/OQ_Test2/OQ_Test2_Ab_Titration_Instructions.xlsx",
@@ -37,11 +51,16 @@ for (wb in WBS) {
   p <- file.path(ACTA_REPO_ROOT, wb)
   if (!file.exists(p)) { cat("  [skip] not in this layout:", basename(wb), "\n"); next }
   lp <- suppressMessages(readxl::read_excel(p, sheet = "Layout_Plate", col_types = "text"))
-  i <- match("Test_Material_Status", names(lp)); j <- match("Test_Material", names(lp))
-  chk(sprintf("%s has Test_Material_Status", basename(dirname(p))), !is.na(i))
-  if (is.na(i) || is.na(j)) next
-  chk("...immediately after Test_Material", i == j + 1L, sprintf("%d vs %d", i, j))
-  ## Filled exactly where Test_Material is: a blank plate row stays blank in BOTH.
+  nm <- names(lp)
+  j  <- match("Cell_Type", nm); i <- match("Sample_Status", nm)
+  ti <- match("Tissue_Type", nm); ci <- match("Culture_Status", nm)
+  chk(sprintf("%s has all four sample columns", basename(dirname(p))),
+      !any(is.na(c(j, ti, i, ci))), paste(c(j, ti, i, ci), collapse = "/"))
+  if (any(is.na(c(j, ti, i, ci)))) next
+  ## ORDER, not merely presence: Cell_Type, Tissue_Type, Sample_Status, Culture_Status.
+  chk("...contiguous and in order", identical(c(ti, i, ci), c(j + 1L, j + 2L, j + 3L)),
+      sprintf("%d/%d/%d/%d", j, ti, i, ci))
+  ## Filled exactly where Cell_Type is: a blank plate row stays blank in BOTH.
   chk("...filled on every row that names a test material",
       identical(is.na(lp[[i]]), is.na(lp[[j]])),
       sprintf("%d vs %d filled", sum(!is.na(lp[[i]])), sum(!is.na(lp[[j]]))))
@@ -52,66 +71,60 @@ for (wb in WBS) {
 }
 
 ## ---- 2. the export keeps the two columns together ----------------------------------------------
-lead <- ACTA:::ACTA_EXPORT_LEAD_COLS
-chk("the export lead block puts Test_Material_Status straight after Test_Material",
-    match("Test_Material_Status", lead) == match("Test_Material", lead) + 1L,
-    paste(lead[seq(max(1, match("Test_Material", lead) - 1), length.out = 3)], collapse = " / "))
+lead <- .f("ACTA_EXPORT_LEAD_COLS")
+chk("the export lead block keeps all four together, in sheet order",
+    identical(lead[match("Cell_Type", lead) + 0:3],
+              c("Cell_Type", "Tissue_Type", "Sample_Status", "Culture_Status")),
+    paste(lead[match("Cell_Type", lead) + 0:3], collapse = " / "))
 ## An older workbook has no such column, and the export's lead block is a FIXED schema -- the
 ## script fills it with NA rather than letting the column vanish. Asserted on the source because
 ## the alternative is a full pipeline run.
-scr <- readLines(system.file("pipeline/ACTA_Script.R", package = "ACTA"), warn = FALSE)
-chk("the pipeline emits it blank when the workbook predates it",
-    any(grepl('if (!"Test_Material_Status" %in% names(stats))', scr, fixed = TRUE)))
+scr <- readLines(file.path(ACTA_REPO_ROOT, "inst", "pipeline", "ACTA_Script.R"), warn = FALSE)
+chk("the pipeline backfills all three with NA when a layout predates them",
+    any(grepl('c("Tissue_Type", "Sample_Status", "Culture_Status")', scr, fixed = TRUE)))
 
-## ---- 3. the mapping onto their menu ------------------------------------------------------------
-tpl   <- ACTA:::actaTiterPubsTemplate()
-menus <- if (nzchar(tpl) && file.exists(tpl)) ACTA:::actaTiterPubsMenus(tpl) else list()
+## ---- 3. the submission column is UNMAPPED, and must stay that way --------------------------
+tpl   <- .f("actaTiterPubsTemplate")()
+menus <- if (nzchar(tpl) && file.exists(tpl)) .f("actaTiterPubsMenus")(tpl) else list()
 FIELD <- "Fresh or Frozen"
-opts  <- menus[[FIELD]]
-chk("the submission template still has a 'Fresh or Frozen' menu to map onto", length(opts) > 0L,
-    length(opts))
 
-INFO <- data.frame(Fresh_or_Frozen = "Frozen, thawed and incubated with antibody",
-                   stringsAsFactors = FALSE)
-pub <- function(status) {
+## Their menu still exists -- we are choosing not to use it, which is different from it being gone.
+chk("the submission template still HAS a 'Fresh or Frozen' menu", length(menus[[FIELD]]) > 0L,
+    length(menus[[FIELD]]))
+
+## ...and every one of its options states a culture fact. This is the measurement the decision
+## rests on: if their menu ever gains a culture-neutral option, the trade-off changes and this
+## assertion is where that will surface.
+chk("every option states a culture fact, so ANY value asserts one",
+    all(grepl("cultured|incubated with antibody", menus[[FIELD]])),
+    paste(menus[[FIELD]], collapse = " | "))
+
+pub <- function(status = NULL, culture = NULL, info = data.frame(x = 1)) {
   row <- data.frame(Markername = "CD4", Alias = "CD4", stringsAsFactors = FALSE)
-  if (!is.null(status)) row$Test_Material_Status <- status
-  unname(ACTA:::actaTiterPubsValues(row, INFO, menus = menus)[[FIELD]])
+  if (!is.null(status))  row$Sample_Status  <- status
+  if (!is.null(culture)) row$Culture_Status <- culture
+  unname(.f("actaTiterPubsValues")(row, info, menus = menus)[[FIELD]])
 }
 
-CASES <- list(
-  c("Frozen",           "Frozen, thawed and incubated with antibody"),
-  c("frozen",           "Frozen, thawed and incubated with antibody"),   # case-folded
-  c("Thawed",           "Frozen, thawed and incubated with antibody"),
-  c("Frozen, cultured", "Frozen, thawed, cultured then incubated with antibody"),
-  c("Fresh",            "Fresh, never frozen, incubated with antibody day of collection"),
-  c("Fresh, cultured",  "Fresh, never frozen, cultured then incubated with antibody"))
-for (cs in CASES) {
-  got <- pub(cs[[1]])
-  chk(sprintf("'%s' publishes the right sentence", cs[[1]]), identical(got, cs[[2]]), got)
-  ## THE POINT OF THE ALIAS TABLE: an unmapped value is not rejected, it is published into the
-  ## overflow row. So being ON the menu is the assertion, not merely being non-empty.
-  if (length(opts))
-    chk("...and it is on their menu, not in the overflow row",
-        ACTA:::.tpOnMenu(got, FIELD, menus), got)
+for (cs in list(NULL, "Frozen", "Fresh", "Frozen, cultured",
+                "Frozen, thawed and incubated with antibody")) {
+  lab <- if (is.null(cs)) "<no column>" else cs
+  chk(sprintf("Sample_Status '%s' publishes NOTHING", lab), is.na(pub(cs)), pub(cs))
 }
+chk("a filled Culture_Status does not resurrect it either",
+    is.na(pub("Frozen", "not cultured")), pub("Frozen", "not cultured"))
 
-## A value already typed as one of their sentences is passed through, not blanked -- .tpAlias(),
-## not .tpAliasStrict(). The off-menu escape hatch is a designed feature of their template.
-long <- "Frozen, thawed, cultured then incubated with antibody"
-chk("a full menu sentence in the layout passes through unchanged", identical(pub(long), long),
-    pub(long))
+## The retired Info cell must not be a back door: a workbook that still carries
+## Info!Fresh_or_Frozen (an un-migrated one, or a hand-edit) publishes nothing either.
+chk("a surviving Info!Fresh_or_Frozen is NOT used as a fallback",
+    is.na(pub(NULL, NULL, data.frame(Variable = "Fresh_or_Frozen",
+                                     Value = "Frozen, thawed and incubated with antibody",
+                                     stringsAsFactors = FALSE))))
 
-## ---- 4. the Info fallback, which is what every archived export relies on -----------------------
-chk("a row WITHOUT the column falls back to Info!Fresh_or_Frozen",
-    identical(pub(NULL), INFO$Fresh_or_Frozen), pub(NULL))
-chk("...and so does a row whose cell is blank", identical(pub(""), INFO$Fresh_or_Frozen), pub(""))
-chk("...and one holding the literal string NA", identical(pub("NA"), INFO$Fresh_or_Frozen),
-    pub("NA"))
-## With neither, the field is empty rather than invented.
-chk("with no column and no Info value the field is blank",
-    is.na(unname(ACTA:::actaTiterPubsValues(data.frame(Markername = "CD4"),
-                                            data.frame(x = 1), menus = menus)[[FIELD]])))
+## And the alias table that did the composing is gone, not merely unused -- so it cannot be
+## reached by a future edit that re-adds a caller.
+chk("ACTA_TP_SAMPLE_STATUS no longer exists in this tree",
+    is.null(h[["ACTA_TP_SAMPLE_STATUS"]]))
 
 cat(if (ok) "\nSAMPLE STATUS TESTS PASSED\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

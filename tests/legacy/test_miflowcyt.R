@@ -18,7 +18,7 @@ chk <- function(what, cond) { if (!isTRUE(cond)) ok <<- FALSE
 ## A minimal `stats`-shaped frame: the layout columns the assembler reads, nothing else.
 st <- data.frame(
   ELN_ID = "EXP00000001", ELN_Name = "Benchling", Operator = "OP",
-  Acquisition_date = "2026-07-30", Equipment = "Aurora (SN0000)", Test_Material = "PBMC",
+  Acquisition_date = "2026-07-30", Equipment = "Aurora (SN0000)", Cell_Type = "PBMC",
   e6_cells_per_well = "1", Well_volume_uL = "100", SOP = "001", Fix = "FALSE", Perm = "FALSE",
   ## `Fl` is the RESOLVED marker channel and `Channel` the layout's own column. Channel is deliberately
   ## absent here: that is the common case (the user named the marker instead), and it is what makes the

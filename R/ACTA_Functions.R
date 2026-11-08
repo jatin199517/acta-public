@@ -686,7 +686,7 @@ ACTA_NON_FLUOR <- c("Time", "INFO", "AF-A", "T0", "T1", "TLSW", "TMSW")
 ## Case- and whitespace-insensitive equality for the layout's ENUM-like text values (StainType,
 ## Row). These are matched against literals in code, so a well typed `unstained` used to slip past
 ## `!= "Unstained"` and be titrated as a real sample -- a silent corruption, not an error.
-## Descriptive free-text columns (Vendor, Clone, Test_Material...) are never compared, and the
+## Descriptive free-text columns (Vendor, Clone, Cell_Type...) are never compared, and the
 ## gating_template's alias/parent/pop are NOT routed through here: those become openCyto node
 ## names, which are case-sensitive by design.
 ## Was this titration part of a COMBINATORIAL run, per the analyst's own declaration?
@@ -1046,42 +1046,94 @@ actaNumericLiteral <- function(x) {
   NA_real_
 }
 
-actaTransArgs <- function(metadata, groups, col = "flowjo_transformation_arg") {
-  hit <- match(tolower(col), tolower(names(metadata)))
-  if (is.na(hit)) return(list())                       # column absent -> actaBiexpTrans() defaults
-  ## FOLDERS, not titration keys. This is a run-level check -- one transform must cover every group
-  ## or Stain Indices are not comparable -- so it reads every row belonging to any group. Handed
-  ## keys, `Dirname %in% ...` matched nothing, `v` came back empty, and an empty `v` is the
-  ## documented "nothing specified, use defaults" path: the sheet's transform was ignored SILENTLY
-  ## and every SI in the run was computed on different arguments than the workbook asked for.
-  v <- trimws(as.character(metadata[[hit]][!is.na(metadata$Dirname) &
-                                           metadata$Dirname %in% .actaAsGroups(groups)$dirname]))
-  v <- v[!is.na(v) & nzchar(v) & toupper(v) != "NA"]
-  if (!length(v)) return(list())                       # all blank -> defaults
-  u <- unique(gsub("\\s+", "", v))
-  if (length(u) > 1)
-    stop(sprintf(paste0("Layout_Plate!%s differs between antibody groups: %s. One transform must ",
-                        "apply to the whole run, or Stain Indices are not comparable between groups."),
-                 col, paste(sprintf("'%s'", unique(v)), collapse = " vs ")), call. = FALSE)
+## THE WORKBOOK IS VERSION-LOCKED, AND 3.6.8 MOVED A COLUMN BETWEEN SHEETS.
+##
+## `flowjo_transformation_arg` was a Layout_Plate column, repeated per well, for a value that is
+## RUN-LEVEL by definition: one transform must cover every group or Stain Indices are not
+## comparable. It is now Info!flowjo_transformation_arg.
+##
+## TWO INDEPENDENT CHECKS, because neither alone is sufficient:
+##
+##   * Info!Template_Version catches a stale workbook even when the operator has deleted the old
+##     column, which a shape test cannot see.
+##   * The legacy-shape test catches a workbook that CLAIMS 3.6.8 but still carries the column --
+##     a hand-edited version cell, or a layout pasted from an older run.
+##
+## And BOTH SHEETS AT ONCE IS AN ERROR, not a precedence rule. Choosing a winner silently is how
+## this field already produced one silent-partial defect; two populated cells mean the operator
+## does not know which one is live, and guessing for them would publish a run gated on arguments
+## they did not choose.
+##
+## Called from the HEADLESS path, not only pre-flight: pre-flight does not run headless, which is
+## how two earlier defects wrote a full set of plots before failing and then reported success.
+ACTA_TEMPLATE_MIN_VERSION <- "3.6.8"
+
+actaAssertTemplateVersion <- function(info, layout = NULL,
+                                      min_version = ACTA_TEMPLATE_MIN_VERSION,
+                                      col = "flowjo_transformation_arg") {
+  tv  <- actaInfoValue(info, "Template_Version")
+  has_layout_col <- !is.null(layout) && !is.na(match(tolower(col), tolower(names(layout))))
+  has_info_cell  <- !is.na(actaInfoValue(info, col))
+
+  if (has_layout_col && has_info_cell)
+    stop(sprintf(paste0("%s is present in BOTH Layout_Plate and the Info sheet. ACTA will not ",
+                        "guess which one is live -- delete the Layout_Plate column, which was ",
+                        "retired in %s, and keep the Info cell."), col, min_version), call. = FALSE)
+
+  if (is.na(tv) || !nzchar(trimws(tv)))
+    stop(sprintf(paste0("This instructions workbook has no Info!Template_Version. ACTA %s and ",
+                        "newer require a template of version %s or later -- `%s` moved from ",
+                        "Layout_Plate to the Info sheet. Download the current template and ",
+                        "transfer your layout into it."),
+                 min_version, min_version, col), call. = FALSE)
+
+  ok <- tryCatch(utils::compareVersion(trimws(tv), min_version) >= 0, error = function(e) FALSE)
+  if (!isTRUE(ok))
+    stop(sprintf(paste0("Info!Template_Version is '%s'; ACTA requires %s or later. `%s` moved ",
+                        "from Layout_Plate to the Info sheet in %s. Download the current ",
+                        "template and transfer your layout into it."),
+                 trimws(tv), min_version, col, min_version), call. = FALSE)
+
+  if (has_layout_col)
+    stop(sprintf(paste0("Info!Template_Version says '%s', but Layout_Plate still carries the ",
+                        "retired `%s` column. That column is run-level and now lives on the Info ",
+                        "sheet; delete it from Layout_Plate to continue."), trimws(tv), col),
+         call. = FALSE)
+
+  invisible(TRUE)
+}
+
+## RUN-LEVEL SINCE 3.6.8: read from Info, not from a per-well Layout_Plate column.
+##
+## The old signature took (metadata, groups) and reconciled one value across every well of every
+## group, erroring when they disagreed. That check existed only because the value was stored in
+## the wrong place; one Info cell cannot disagree with itself, so the reconciliation is gone and
+## the per-group failure mode with it. The PARSE and the allowlist are unchanged -- the cell is
+## still parsed and never evaluated.
+actaTransArgs <- function(info, col = "flowjo_transformation_arg") {
+  v <- actaInfoValue(info, col)
+  if (is.na(v)) return(list())                         # absent or blank -> actaBiexpTrans() defaults
+  v <- trimws(as.character(v))
+  if (!nzchar(v) || toupper(v) == "NA") return(list())
   ## PARSED, NEVER EVALUATED -- see the block above actaDisallowedCalls(). The parse tree is walked
   ## for numeric literals; a cell containing anything else is refused by name.
   expr <- tryCatch(parse(text = paste0("list(", v[1], ")")),
                    error = function(e)
-                     stop(sprintf("Layout_Plate!%s is not readable as arguments (%s): %s",
+                     stop(sprintf("Info!%s is not readable as arguments (%s): %s",
                                   col, conditionMessage(e), v[1]), call. = FALSE))
   parts <- as.list(expr[[1]])[-1L]
   ## `list` is the wrapper this function adds itself, and unary +/- is how a negative literal
   ## parses; `c` is deliberately NOT allowed, because every transform argument is a scalar.
   nogo <- actaDisallowedCalls(expr, allow = c("list", "-", "+"))
   if (length(nogo))
-    stop(sprintf(paste0("Layout_Plate!%s must contain only numbers, e.g. 'pos=4.5, ",
+    stop(sprintf(paste0("Info!%s must contain only numbers, e.g. 'pos=4.5, ",
                         "widthBasis=-10'. It calls %s, and this cell is never evaluated as code. ",
                         "Value: %s"),
                  col, paste(sprintf("`%s`", nogo), collapse = ", "), v[1]), call. = FALSE)
   args <- lapply(parts, actaNumericLiteral)
   nonnum <- names(args)[vapply(args, function(z) !is.finite(z), logical(1))]
   if (length(nonnum) || (length(args) && !length(names(args))))
-    stop(sprintf(paste0("Layout_Plate!%s takes numeric values only; %s could not be read as a ",
+    stop(sprintf(paste0("Info!%s takes numeric values only; %s could not be read as a ",
                         "number. Value: %s"),
                  col, paste(sprintf("`%s`", if (length(nonnum)) nonnum else "the argument"),
                             collapse = ", "), v[1]), call. = FALSE)
@@ -1089,11 +1141,11 @@ actaTransArgs <- function(metadata, groups, col = "flowjo_transformation_arg") {
   ok <- setdiff(ok, "maxValue")
   bad <- setdiff(names(args), ok)
   if (length(bad))
-    stop(sprintf(paste0("Layout_Plate!%s has unknown argument(s): %s. Accepted: %s. maxValue is ",
+    stop(sprintf(paste0("Info!%s has unknown argument(s): %s. Accepted: %s. maxValue is ",
                         "taken from $PnR and cannot be set here."),
                  col, paste(bad, collapse = ", "), paste(ok, collapse = ", ")), call. = FALSE)
   if (!length(names(args)) || any(!nzchar(names(args))))
-    stop(sprintf("Layout_Plate!%s must be name=value pairs, e.g. 'pos=4.5, widthBasis=-10'.", col),
+    stop(sprintf("Info!%s must be name=value pairs, e.g. 'pos=4.5, widthBasis=-10'.", col),
          call. = FALSE)
   args
 }
@@ -2700,12 +2752,21 @@ pop.MeFI<-function(fr){
 ## the sheet has exactly two looks -- plain here, navy/blue everywhere else.
 ## `Combinatorial_group (n)` LEFT the block in 3.4.0 and so takes the navy theme; it is still
 ## exported, just no longer part of the operator-facing run.
-## `Test_Material_Status` sits immediately after `Test_Material` for the same reason it sits
-## beside it in Layout_Plate: the material and the state it was in are one fact read together,
-## and a reader who sees the donor material without knowing whether it was thawed has half of it.
+## `Cell_Type`, `Tissue_Type`, `Sample_Status` and `Culture_Status` SIT TOGETHER, in the order
+## Layout_Plate holds them. The material, where it came from, and the state it was in are one
+## fact read together; a reader who sees the donor material without knowing whether it was thawed
+## has half of it.
+##
+## Sample_Status and Culture_Status BEING HERE IS LOAD-BEARING, not cosmetic. 3.6.8 stopped
+## mapping them onto TiterPubs' `Fresh or Frozen` column, because all four of that menu's options
+## state a culture fact and composing one from a bare `Frozen` asserted something no operator had
+## said. The submission therefore leaves that column empty and the two raw columns travel in the
+## bundled export instead, for a reader -- or TiterPubs -- to interpret. Drop either from this
+## block and that path loses the only place the facts still exist.
 ACTA_EXPORT_LEAD_COLS <- c("Vendor", "Clone", "Alias", "Fl", "Cat_Num", "Lot_Num",
                            "Titer", "Titration_Status", "Well_volume_uL", "e6_cells_per_well",
-                           "Test_Material", "Test_Material_Status", "ELN_ID", "Fix_Perm",
+                           "Cell_Type", "Tissue_Type", "Sample_Status", "Culture_Status",
+                           "ELN_ID", "Fix_Perm",
                            "Operator", "SOP", "Costain_Panel_Iteration", "ACTA_version",
                            "time_taken_min")
 
@@ -4804,7 +4865,7 @@ actaMiFlowCyt <- function(stats, info, gating_template = NULL, qcList = NULL, ga
   ## reference, which is exactly MiFlowCyt 2.3, and Fix/Perm are the parts of it the layout records.
   specimen <- list(
     characteristics = list(
-      test_material      = .mfcOne(stats, "Test_Material"),
+      test_material      = .mfcOne(stats, "Cell_Type"),
       cells_per_well_e6  = .mfcOne(stats, "e6_cells_per_well"),
       well_volume_uL     = .mfcOne(stats, "Well_volume_uL")),
     source     = eln,

@@ -59,19 +59,23 @@ chk("  and the same tree with only literals is clean",
     length(h$actaDisallowedCalls(parse(text = "list(x=1, y=c(2,-Inf), z=list(NA))"))) == 0)
 
 cat("=== flowjo_transformation_arg: numbers only, never evaluated ===\n")
-md <- function(v) data.frame(Dirname = "D1", flowjo_transformation_arg = v, stringsAsFactors = FALSE)
-gr <- data.frame(dirname = "D1", alias = "D1", key = "D1", stringsAsFactors = FALSE)
-chk("pos=4.5 reads as a number", identical(h$actaTransArgs(md("pos=4.5"), gr), list(pos = 4.5)))
+## AN INFO SHEET, NOT A LAYOUT FRAME, SINCE 3.6.8. The value is run-level -- one transform must
+## cover every group or Stain Indices are not comparable -- so it is one Info cell rather than a
+## column repeated per well. The parse and the allowlist below are unchanged: the cell is still
+## parsed and never evaluated, which is what this block exists to prove.
+md <- function(v) data.frame(Variable = "flowjo_transformation_arg", Value = v,
+                             stringsAsFactors = FALSE)
+chk("pos=4.5 reads as a number", identical(h$actaTransArgs(md("pos=4.5")), list(pos = 4.5)))
 chk("a negative literal reads as a number",
-    identical(h$actaTransArgs(md("pos=4.5, widthBasis=-10"), gr), list(pos = 4.5, widthBasis = -10)))
+    identical(h$actaTransArgs(md("pos=4.5, widthBasis=-10")), list(pos = 4.5, widthBasis = -10)))
 probe <- tempfile()
 chk("a call is refused and DOES NOT RUN",
     inherits(try(h$actaTransArgs(md(sprintf('pos=(function(){ writeLines("x","%s"); 4.5 })()', probe)),
                                  gr), silent = TRUE), "try-error") && !file.exists(probe))
 chk("maxValue is still blocked by name",
-    inherits(try(h$actaTransArgs(md("pos=4.5, maxValue=1e6"), gr), silent = TRUE), "try-error"))
+    inherits(try(h$actaTransArgs(md("pos=4.5, maxValue=1e6")), silent = TRUE), "try-error"))
 chk("a quoted string is refused (these arguments are numeric)",
-    inherits(try(h$actaTransArgs(md("pos='high'"), gr), silent = TRUE), "try-error"))
+    inherits(try(h$actaTransArgs(md("pos='high'")), silent = TRUE), "try-error"))
 unlink(probe)
 
 cat("=== MUTATION SELF-CHECK: openCyto really does evaluate these ===\n")

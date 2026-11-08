@@ -57,10 +57,16 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_which_plate.R",    # the plate token is a DIRECTORY, not a substring of a date
              "test_panel_inventory_source.R", # a caption names the inventory it actually opened
              "test_scrub_iteration.R", # scrub_confidential removes panel names, keeps composition
-             "test_sample_status.R",  # Test_Material_Status: the column, and the menu it publishes
+             "test_sample_status.R",  # Sample_Status: the column, and the menu it publishes
              "test_info_report.R",    # the Info table and its Source column
              "test_bundle_scan.R",    # the leak scan that GATES a bundle build
              "test_titerpubs_scrub.R", # the de-identifiers themselves: NO fixture ran this path
+             ## REGISTERED THE DAY IT WAS WRITTEN, and that is the point. test_titerpubs_tissue.R
+             ## passed when invoked directly and was INVISIBLE here, because this list is explicit
+             ## and nobody added to it -- a gate that cannot run in CI is a gate that does not
+             ## exist. Same shape as the index audit that found five defects in unchanged code.
+             "test_titerpubs_tissue.R", # Info!Tissue_Type/Tissue_Fallback -> the Tissue column
+             "test_schema_368.R",       # the 3.6.8 rename, version gate and site-rule firing
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
              "test_dashboard_runs.R", # which folders count as runs -- the same export pooled twice
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer

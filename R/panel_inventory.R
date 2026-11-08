@@ -16,9 +16,19 @@
 
 ## The inventory's own column names, as the shipped template writes them. Matched case- and
 ## space-insensitively so a lab that renamed a header slightly still resolves.
+## EVERY ENTRY IS OPTIONAL. The reader below resolves each name against the sheet's headers and
+## fills an ABSENT one with NA rather than failing, so a lab that deletes a column it does not
+## keep gets a blank field, not a stopped run. That is deliberate: the inventory is provenance,
+## not QC, and the columns a site maintains are the site's business.
+##
+## `clonality` added 3.6.8 -- reagent-level, so it belongs here and not on the Info sheet, which
+## is run-level. It replaces the old inference "a named Clone means monoclonal", which was ACTA
+## asserting a fact the operator never stated and was wrong for a polyclonal with a catalogue
+## designation in the Clone field.
 ACTA_PI_COLS <- c(antigen = "Antigen", fluorochrome = "Fluorochrome",
                   fl_alias = "Fluorochrome_Alias", marker_alias = "Marker_Alias",
                   vendor = "Vendor", catalog = "Catalog", clone = "Clone",
+                  clonality = "Clonality",
                   isotype = "Species / Isotype", type = "Type",
                   iteration = "Panel Iteration")
 
@@ -138,7 +148,51 @@ actaPanelInventory <- function(path) {
   attr(out, "acta_inventory_path") <- as.character(path)
   src <- attr(path, "acta_inventory_source")
   attr(out, "acta_inventory_source") <- if (is.null(src)) "unknown" else src
+  ## PER-LOT DETAIL RIDES ALONG AS AN ATTRIBUTE, not a second argument threaded through four
+  ## call sites. Same shape as the two attributes above, and it keeps actaTiterPubsValues()'s
+  ## signature stable -- one workbook, one read, one object.
+  attr(out, "acta_lot_info") <- .piLotInfo(path)
   out
+}
+
+## The inventory's Lot_info sheet, or NULL. Per-LOT facts, which the Master sheet cannot hold:
+## Master has one row per reagent, and a lab buys the same catalogue number many times.
+##
+## OPTIONAL AT EVERY LEVEL, like every other inventory column. No sheet, no columns, no matching
+## row, or a blank cell all mean the same thing downstream -- the field publishes empty. An
+## inventory that does not track concentrations is not a broken inventory.
+ACTA_PI_LOT_COLS <- c(catalog = "Catalog", lot = "Lot",
+                      concentration = "Concentration (ug/mL)")
+
+.piLotInfo <- function(path) {
+  sheets <- tryCatch(readxl::excel_sheets(path), error = function(e) character(0))
+  if (!"Lot_info" %in% sheets) return(NULL)
+  d <- tryCatch(as.data.frame(suppressMessages(
+         readxl::read_excel(path, sheet = "Lot_info", col_types = "text"))),
+       error = function(e) NULL)
+  if (is.null(d) || !nrow(d)) return(NULL)
+  key <- function(x) tolower(gsub("[^a-z0-9]", "", tolower(.piNorm(x))))
+  have <- key(names(d))
+  out <- list()
+  for (nm in names(ACTA_PI_LOT_COLS)) {
+    j <- match(key(ACTA_PI_LOT_COLS[[nm]]), have)
+    out[[nm]] <- if (is.na(j)) rep(NA_character_, nrow(d)) else .piNorm(d[[j]])
+  }
+  as.data.frame(out, stringsAsFactors = FALSE)
+}
+
+## The concentration recorded for one catalogue number AND lot. Both must match: a concentration
+## from the wrong lot is worse than none, which is the whole reason this sheet is keyed by lot.
+## THE EARLIEST MATCHING ROW WINS, so a sheet that has accumulated duplicate entries for one lot
+## resolves deterministically instead of depending on read order.
+actaLotConcentration <- function(lots, catalog, lot) {
+  if (is.null(lots) || !nrow(lots)) return(NA_character_)
+  k <- function(z) gsub("[^a-z0-9]", "", tolower(as.character(z)))
+  if (is.na(catalog) || is.na(lot)) return(NA_character_)
+  hit <- which(k(lots$catalog) == k(catalog) & k(lots$lot) == k(lot))
+  if (!length(hit)) return(NA_character_)
+  v <- lots$concentration[hit[1]]
+  if (is.na(v) || !nzchar(trimws(v))) NA_character_ else trimws(v)
 }
 
 ## The reagents of ONE panel iteration.
@@ -308,7 +362,7 @@ actaScrubEquipmentSerial <- function(x) {
 ## wondering whether "JD" is somebody's actual initials. Blanking instead would make the export
 ## look incomplete and lose the fact that there WAS an operator.
 ##
-## Test_Material is deliberately NOT here (user's call, 2026-10-13): it describes what was stained
+## Cell_Type is deliberately NOT here (user's call, 2026-10-13): it describes what was stained
 ## and a reader needs it, so a site that cannot publish its sample labels should edit them in the
 ## layout rather than have ACTA guess a substitute.
 ACTA_SCRUB_CONFIDENTIAL <- c(
@@ -328,9 +382,9 @@ ACTA_SCRUB_CONFIDENTIAL <- c(
 ACTA_SCRUB_INFO <- c(
   Submitter_Email         = "johndoe@anonymouscompany.com")
 
-## SITE RULES FOR Test_Material, AND THEY ARE NOT SHIPPED.
+## SITE RULES FOR Cell_Type, AND THEY ARE NOT SHIPPED.
 ##
-## Test_Material is free text a lab writes for itself, and the strings it holds are exactly the
+## Cell_Type is free text a lab writes for itself, and the strings it holds are exactly the
 ## ones a public submission should not carry -- internal product codes, donor identifiers, mixture
 ## notation. A site that publishes needs to map its own vocabulary onto plain language, and the
 ## mapping is SITE-SPECIFIC: the codes in it identify the organisation as surely as its name does.
@@ -338,7 +392,7 @@ ACTA_SCRUB_INFO <- c(
 ## So ACTA ships NO RULES. The default below is empty, a public install renames nothing, and the
 ## patterns live in the operator's own R profile:
 ##
-##   options(acta.test_material_rules = list(
+##   options(acta.cell_type_rules = list(
 ##     c(pattern = "<site regex>", replacement = "Human PBMCs"), ...))
 ##
 ## FIRST MATCH WINS, in the order given, because real materials hit more than one rule -- a mix of
@@ -348,12 +402,30 @@ ACTA_SCRUB_INFO <- c(
 ##
 ## Applied only when scrub_confidential is on: these exist for publication, and a local run should
 ## keep the operator's own words.
-ACTA_TEST_MATERIAL_RULES <- list()
+ACTA_CELL_TYPE_RULES <- list()
 
-actaTestMaterialRules <- function() {
-  o <- getOption("acta.test_material_rules", default = NULL)
-  if (is.null(o) || !length(o)) return(ACTA_TEST_MATERIAL_RULES)
-  o
+## RENAMED IN 3.6.8, AND THE OLD NAME STOPS THE RUN RATHER THAN BEING IGNORED.
+##
+## The option was `acta.test_material_rules`, named for the Layout_Plate column that is now
+## `Cell_Type`. A site that set the old name in its R profile and upgraded would, under a silent
+## rename, get a run where NOTHING MATCHED and every rule quietly stopped firing -- a bundle that
+## reports clean because the scrub never ran, which is the one failure this whole layer exists to
+## prevent. There is no safe default here: honouring the old name hides the drift, ignoring it
+## publishes unscrubbed material. So it is a hard stop with the fix in the message.
+##
+## Deliberately NOT a silent alias. See the note on template version-locking: this project does
+## not ship backward-compatibility shims that make a stale configuration look like a working one.
+actaCellTypeRules <- function() {
+  old <- getOption("acta.test_material_rules", default = NULL)
+  new <- getOption("acta.cell_type_rules",     default = NULL)
+  if (!is.null(old) && length(old) && (is.null(new) || !length(new)))
+    stop("options(acta.test_material_rules = ...) was renamed to options(acta.cell_type_rules = ",
+         "...) in ACTA 3.6.8, along with Layout_Plate!Test_Material -> Cell_Type. The old option ",
+         "is set and the new one is not, so NO site rules would be applied and a bundle could ",
+         "publish unscrubbed material labels. Rename the option in your R profile to continue.",
+         call. = FALSE)
+  if (is.null(new) || !length(new)) return(ACTA_CELL_TYPE_RULES)
+  new
 }
 
 ## MARKERS THAT MUST NEVER REACH A PUBLIC BUNDLE.
@@ -362,7 +434,7 @@ actaTestMaterialRules <- function() {
 ## reagent identifies the construct, and through it the programme, no matter how the run is
 ## scrubbed. Renaming cannot fix that: the panel composition is the disclosure.
 ##
-## SHIPPED EMPTY, like the Test_Material rules and for the same reason -- the patterns name the
+## SHIPPED EMPTY, like the Cell_Type rules and for the same reason -- the patterns name the
 ## site's own constructs. Set in the operator's profile:
 ##
 ##   options(acta.bundle_blocked_markers = c("<construct regex>", ...))
@@ -433,10 +505,10 @@ actaAssertBundleAllowed <- function(files, enabled, patterns = actaBundleBlocked
                paste(hits, collapse = "; ")), call. = FALSE)
 }
 
-## Map one Test_Material string through the site rules. Returns it unchanged when nothing matches,
+## Map one Cell_Type string through the site rules. Returns it unchanged when nothing matches,
 ## so an unrecognised material is published as written rather than silently blanked -- a reader
 ## can see it was not mapped, which is the honest failure.
-actaMapTestMaterial <- function(x, rules = actaTestMaterialRules()) {
+actaMapCellType <- function(x, rules = actaCellTypeRules()) {
   if (!length(rules)) return(x)
   out <- as.character(x)
   for (i in seq_along(out)) {
@@ -609,14 +681,14 @@ actaApplyScrub <- function(df, quiet = FALSE, eln = NULL) {
                             length(orig), paste(lab, collapse = ", ")))
     }
   }
-  ## Site Test_Material mapping, applied with the rest of the scrub. Reported like every other
+  ## Site Cell_Type mapping, applied with the rest of the scrub. Reported like every other
   ## substitution: a published material label that silently changed is worse than one that did not.
-  if ("Test_Material" %in% names(df) && length(actaTestMaterialRules())) {
-    was <- as.character(df$Test_Material)
-    now <- actaMapTestMaterial(was)
+  if ("Cell_Type" %in% names(df) && length(actaCellTypeRules())) {
+    was <- as.character(df$Cell_Type)
+    now <- actaMapCellType(was)
     if (!identical(was, now)) {
-      df$Test_Material <- now
-      hit <- c(hit, sprintf("Test_Material (%s)",
+      df$Cell_Type <- now
+      hit <- c(hit, sprintf("Cell_Type (%s)",
                             paste(sprintf("'%s' -> '%s'", unique(was[was != now]),
                                           unique(now[was != now])), collapse = ", ")))
     }

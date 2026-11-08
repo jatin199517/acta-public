@@ -209,6 +209,13 @@ infoSheet<-if ("Info" %in% excel_sheets(metadata_file_path))
 ## get the same strip -- otherwise a reader keyed on `compensation` would miss `compensation (T)`.
 if (!is.null(infoSheet)) names(infoSheet)<-actaStripHeaderAnnotation(names(infoSheet))
 
+## ---- TEMPLATE VERSION GATE, AS EARLY AS BOTH SHEETS EXIST ------------------------------------
+## Placed here, immediately after the two sheets are read and their headers normalised, and NOT
+## next to the first use of what it guards. A stale workbook must stop before the run produces
+## anything: two earlier defects of this shape wrote a complete set of plots and then failed, and
+## the app reported success. This line is on the headless path, so a scripted run is gated too.
+actaAssertTemplateVersion(infoSheet, metadata_file)
+
 ## ---- Info!scrub_confidential, applied to the LAYOUT before anything is derived from it --------
 ## Operator, ELN_ID, ELN_Name and Costain_Panel_Iteration are replaced with fixed placeholders.
 ##
@@ -449,13 +456,14 @@ message(sprintf("ACTA: biexp maxValue = %s from $PnR (%.2f decades)",
                 format(actaMaxValue, scientific = FALSE), log10(actaMaxValue)))
 ## One transformer for the whole run: used both to transform the GatingSet and to build the
 ## decade axis breaks, so the axis can never drift from the transform actually applied.
-## Transform parameters come from the layout when set, defaults otherwise. maxValue stays with
-## $PnR. See actaTransArgs().
-## actaGroups, not `antibody`: this is a run-level check over every row belonging to any group,
-## and `antibody` now holds titration KEYS, which never match Dirname for a combinatorial folder --
-## the match came back empty and an empty match is the "use defaults" path, so the sheet's transform
-## was ignored without a word.
-actaTransArg  <- actaTransArgs(metadata_file, actaGroups)
+## Transform parameters come from Info!flowjo_transformation_arg when set, defaults otherwise.
+## maxValue stays with $PnR. See actaTransArgs().
+##
+## INFO, NOT THE LAYOUT, SINCE 3.6.8. The value is run-level -- one transform must cover every
+## group or Stain Indices are not comparable -- and storing it per well meant reconciling N
+## identical cells and failing when they drifted. The gate below refuses a workbook that still
+## carries the old column, so a stale layout cannot silently fall back to defaults.
+actaTransArg  <- actaTransArgs(infoSheet)
 actaTrans <- do.call(actaBiexpTrans, c(list(maxValue = actaMaxValue), actaTransArg))
 if (length(actaTransArg))
   message("[ACTA] biexp args from layout: ",
@@ -936,7 +944,7 @@ for(q in seq_along(antibody)){
   ## marker plots and the layout titles all silently omitted it, because actaTitleStamp() cannot
   ## tell "this workbook has no Clone" from "this frame no longer carries the column".
   abMeta<-metadata_file[.abRows, ] |>
-    distinct(Cat_Num, Vendor, Lot_Num, Clone, Test_Material, e6_cells_per_well)
+    distinct(Cat_Num, Vendor, Lot_Num, Clone, Cell_Type, e6_cells_per_well)
   if(nrow(abMeta)!=1)
     warning(sprintf("Antibody '%s': reagent metadata is not constant across its wells (%d distinct combinations); using the first.", antibody[q], nrow(abMeta)))
   abMeta<-abMeta[1,]
@@ -961,9 +969,9 @@ for(q in seq_along(antibody)){
   abLabel<-paste0(aliasName, " ", channel, " (", reagentMethod, ")\n",
                   "Cat: ", abMeta$Cat_Num, actaTitleStamp(abMeta$Clone, "Clone: ", " || "), "\n",
                   abMeta$Vendor, " || ", "Lot: ", abMeta$Lot_Num, "\n",
-                  "Test sample: ", abMeta$Test_Material, " at ", abMeta$e6_cells_per_well, "e6/well")
+                  "Test sample: ", abMeta$Cell_Type, " at ", abMeta$e6_cells_per_well, "e6/well")
   abLabelLine<-paste0(aliasName, " ", channel, " || Cat: ", abMeta$Cat_Num, " || ", abMeta$Vendor,
-                      " || Lot: ", abMeta$Lot_Num, " || Test sample: ", abMeta$Test_Material,
+                      " || Lot: ", abMeta$Lot_Num, " || Test sample: ", abMeta$Cell_Type,
                       " at ", abMeta$e6_cells_per_well, "e6/well")
   ## Marker +/- populations, resolved from the marker ROW by structure -- see actaMarkerNodes().
   ## The previous version took the first "+"/"-" suffixed node anywhere in the tree, which silently
@@ -1912,10 +1920,16 @@ exportLeadCols <- ACTA_EXPORT_LEAD_COLS
 ## workbook written before 3.4.0 simply does not have it, and the operator-facing block is a fixed
 ## schema. Absent becomes NA here rather than a column that silently disappears from the export.
 if (!"Costain_Panel_Iteration" %in% names(stats)) stats$Costain_Panel_Iteration <- NA_character_
-## Same contract for Test_Material_Status, a Layout_Plate column since 3.6.0. An older workbook
-## does not have it, and the TiterPubs mapper falls back to Info!Fresh_or_Frozen when this is NA,
-## so an archived run publishes exactly what it published before.
-if (!"Test_Material_Status" %in% names(stats)) stats$Test_Material_Status <- NA_character_
+## Same contract for the sample-description block. The export's lead block is a FIXED schema, so
+## a column the layout does not carry is filled with NA rather than vanishing -- a reader comparing
+## two exports should see an empty column, not a different set of columns.
+##
+## Sample_Status has been a Layout_Plate column since 3.6.0; Tissue_Type and Culture_Status since
+## 3.6.8. These three and Cell_Type are the only record of the material and its state now that the
+## TiterPubs `Fresh or Frozen` column is deliberately unmapped, so they must reach the export even
+## when blank.
+for (.col in c("Tissue_Type", "Sample_Status", "Culture_Status"))
+  if (!.col %in% names(stats)) stats[[.col]] <- NA_character_
 
 ## ---- Date_Analysis: WHEN THIS ANALYSIS RAN, which is not when the data were acquired ----------
 ## TiterPubs asks for "Month/Year of analysis" and ACTA was answering it from Acquisition_date --

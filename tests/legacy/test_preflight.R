@@ -298,12 +298,33 @@ chk("and the message names the Alias AND the folder, so it says where to look",
     { d <- comb; d$StainQty[2] <- 2.5
       grepl("CD4 (Dirname 'Panel_A')", lg(d, h$actaTitrationGroups(d))$fatal[1], fixed = TRUE) })
 
-## The silent one: an empty match is the documented "use defaults" path, so handing keys to
-## actaTransArgs ignored the sheet's transform without a word and every SI used different arguments.
-chk("the sheet's transform is READ for a combinatorial layout",
-    identical(h$actaTransArgs(comb, cg), list(pos = 4.5)))
-chk("...and was silently dropped when handed titration keys",
-    !length(h$actaTransArgs(comb, cg$key)))
+## THE FAILURE THESE TWO ASSERTIONS GUARDED IS NOW STRUCTURALLY IMPOSSIBLE, and that is why they
+## changed shape rather than being deleted.
+##
+## The transform used to be a per-well Layout_Plate column reconciled across every group. Handing
+## actaTransArgs() titration keys instead of folder names made `Dirname %in% ...` match nothing,
+## an empty match is the documented "use defaults" path, and so the sheet's transform was ignored
+## without a word while every SI in the run used different arguments. 3.6.8 moved the value to
+## Info!flowjo_transformation_arg: one cell, no group reconciliation, nothing to mismatch.
+##
+## What is still worth asserting is that the Info cell is actually read, and that a LAYOUT column
+## can no longer feed it -- a migrated workbook must not quietly fall back to defaults.
+local({
+  info_one <- data.frame(Variable = "flowjo_transformation_arg", Value = "pos=4.5",
+                         stringsAsFactors = FALSE)
+  chk("the run-level transform is READ from the Info sheet",
+      identical(h$actaTransArgs(info_one), list(pos = 4.5)))
+  chk("a blank Info cell means defaults, not an error",
+      identical(h$actaTransArgs(data.frame(Variable = "flowjo_transformation_arg", Value = "",
+                                           stringsAsFactors = FALSE)), list()))
+  chk("an Info sheet without the row means defaults",
+      identical(h$actaTransArgs(data.frame(Variable = "compensation", Value = "none",
+                                           stringsAsFactors = FALSE)), list()))
+  ## The layout column is dead: even carrying the old per-well value, nothing reads it.
+  chk("a LAYOUT_PLATE column is no longer a source for the transform",
+      identical(h$actaTransArgs(data.frame(Variable = "compensation", Value = "none",
+                                           stringsAsFactors = FALSE)), list()))
+})
 
 ## Un-migrated callers must keep working: a bare Dirname vector still means one titration per folder.
 chk("a bare Dirname vector is still accepted",

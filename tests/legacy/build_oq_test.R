@@ -89,10 +89,10 @@ raw <- suppressMessages(read_excel(out, sheet = "Layout_Plate", col_names = FALS
 hdr <- as.character(unlist(raw[1, ]))
 dirCol <- which(hdr == "Dirname")
 keep <- which(!is.na(raw[[dirCol]][-1])) + 1L      # excel rows with a populated Dirname
-for (cn in c("ELN_ID" = "EXP00000001", "Operator" = "OP", "Test_Material" = "Test material X")) NULL
-for (nm in c("ELN_ID", "Operator", "Test_Material")) {
+for (cn in c("ELN_ID" = "EXP00000001", "Operator" = "OP", "Cell_Type" = "Test material X")) NULL
+for (nm in c("ELN_ID", "Operator", "Cell_Type")) {
   j <- which(hdr == nm); if (!length(j)) next
-  val <- switch(nm, ELN_ID = "EXP00000001", Operator = "OP", Test_Material = "Test material X")
+  val <- switch(nm, ELN_ID = "EXP00000001", Operator = "OP", Cell_Type = "Test material X")
   ## EVERY row that currently holds a value, not only the rows with a Dirname: these columns are
   ## filled further down the sheet than the populated wells, so a Dirname-scoped rewrite left the
   ## real ELN ID sitting in the tail.

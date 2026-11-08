@@ -70,7 +70,24 @@ ACTA_TP_COLS <- c(
 ## left implicit, because "we forgot" and "we decided" look identical in an empty cell.
 ## Host species, Isotype and Clonality LEFT THIS LIST 2026-10-23: they are recoverable from the
 ## master panel inventory by catalogue, so "we decided not to" became "we can".
-ACTA_TP_OMIT <- c("Concentration for this Lot#", "Sample details", "Tissue")
+##
+## Tissue LEFT THIS LIST 2026-11-07, and the reason is PBMC. Their Cell type menu has no `PBMC`
+## option, so `.tpCellType()` maps it to `mononuclear cells` -- correct, on-menu, and silently
+## one half of the material: `mononuclear cells` could be marrow, cord blood, spleen or node,
+## while PBMC names peripheral blood. The missing half has a home. Their Tissue menu offers
+## `blood`, so the pair (Tissue = blood, Cell type = mononuclear cells) reconstructs PBMC in
+## THEIR controlled vocabulary -- machine-readable and facet-searchable, which free text is not.
+##
+## It is an INFO CELL, not an inference. ACTA does not derive `blood` from "PBMC": the inference
+## is safe for PBMC and wrong for a T cell product that could be apheresis-, marrow- or
+## tissue-derived, and ACTA has no business guessing a clinical fact. Blank publishes blank.
+## EMPTIED IN 3.6.8. `Sample details` is now Info!Sample_Details, free text for anything the other
+## columns do not cover; `Concentration for this Lot#` now comes from the inventory's Lot_info
+## sheet. Kept as an (empty) constant rather than deleted, because the LAST thing this function
+## does is `v[ACTA_TP_OMIT] <- NA_character_` and that line is the one that silently defeated the
+## first attempt to map Tissue -- a mapping entry read correctly in the source and published
+## nothing. An empty vector keeps the mechanism visible instead of letting it be re-added blind.
+ACTA_TP_OMIT <- character(0)
 
 ## Vendor shorthand -> the Supplier menu's 11 legal spellings. The layout writes what is on the
 ## tube; the menu wants the corporate name.
@@ -86,8 +103,18 @@ ACTA_TP_VENDOR <- c(
 
 ## Marker shorthand -> the Antigen menu. `Strep` is ours and `Streptavidin` is theirs; both name
 ## the same bacterial protein, and nothing downstream should care which one the panel typed.
-ACTA_TP_ANTIGEN <- c("Strep" = "Streptavidin", "SA" = "Streptavidin", "SAV" = "Streptavidin",
-                     "FVD" = "Viability", "Live/Dead" = "Viability")
+## ONLY SYNONYMS WHOSE TARGET IS ACTUALLY ON THEIR MENU.
+##
+## `Streptavidin` IS one of their 370 Antigen options and `Strep`/`SA`/`SAV` are not, so this
+## normalisation earns its place: it moves a value from the overflow row into row 2, where it is
+## facet-searchable, without changing what it means.
+##
+## `FVD` -> `Viability` and `Live/Dead` -> `Viability` were REMOVED in 3.6.8. Measured: their
+## Antigen menu has no viability entry at all -- no `Viability`, no `Live/Dead`, no `Zombie`, no
+## `Ghost`. So the rewrite swapped a specific product class for a generic word and STILL landed
+## off-menu in row 3. The operator lost "this was a fixable viability dye" and gained nothing.
+## Unmapped, the dye name reaches row 3 as written, which is strictly more informative.
+ACTA_TP_ANTIGEN <- c("Strep" = "Streptavidin", "SA" = "Streptavidin", "SAV" = "Streptavidin")
 
 ## Test material -> the Cell type menu. PBMC is absent from their 22 options; `mononuclear cells`
 ## is literally what the P-M-C in PBMC stands for, so it is a rename, not an interpretation.
@@ -128,23 +155,16 @@ ACTA_TP_CELLTYPE <- c("PBMC" = "mononuclear cells", "HD PBMC" = "mononuclear cel
   as.character(x)                                       # unrecognised -> row 3, not blank
 }
 
-## Layout_Plate!Test_Material_Status -> the `Fresh or Frozen` menu. The layout holds one word per
-## well; the menu holds four whole sentences, each naming BOTH the thaw state and whether the
-## cells were cultured before staining. A bare `Frozen` answers the first half and says nothing
-## about the second, so it maps to the no-culture option -- that is what the shipped templates
-## mean by it, and the two-word forms exist for the run that cultured.
+## ACTA_TP_SAMPLE_STATUS WAS HERE, AND ITS REMOVAL IS THE POINT.
 ##
-## .tpAlias(), not .tpAliasStrict(): input and output are the same kind of thing here, so a value
-## already typed as one of the four sentences passes through untouched rather than being blanked
-## for not being in this table.
-ACTA_TP_SAMPLE_STATUS <- c(
-  "Frozen"          = "Frozen, thawed and incubated with antibody",
-  "Thawed"          = "Frozen, thawed and incubated with antibody",
-  "Frozen, cultured" = "Frozen, thawed, cultured then incubated with antibody",
-  "Frozen cultured" = "Frozen, thawed, cultured then incubated with antibody",
-  "Fresh"           = "Fresh, never frozen, incubated with antibody day of collection",
-  "Fresh, cultured" = "Fresh, never frozen, cultured then incubated with antibody",
-  "Fresh cultured"  = "Fresh, never frozen, cultured then incubated with antibody")
+## It mapped Layout_Plate!Sample_Status onto the `Fresh or Frozen` menu. All four of that menu's
+## options state TWO facts -- thaw state AND whether the cells were cultured before staining --
+## so a bare `Frozen` could only be published by ALSO asserting "not cultured", which no operator
+## had said. Every run shipped that claim.
+##
+## 3.6.8 splits the input (Sample_Status + Culture_Status, both Layout_Plate columns, both
+## published verbatim in the bundle's instructions workbook and export) and stops composing the
+## sentence. See the `Fresh or Frozen` entry below for why nothing replaced it.
 
 ## Laser COLOUR NAME -> wavelength. Read from the FCS `LASERnNAME` keywords rather than looked up
 ## from the instrument model: a Cytek Aurora ships in 3L/4L/5L trims and the model name does not
@@ -394,6 +414,57 @@ actaTiterPubsGating <- function(gating, parent = "Live") {
 }
 
 ## Laser lines for the instrument that actually wrote the file.
+## openCyto + flowCore, as "name x.y.z", for the Plug-ins column.
+##
+## MEASURED, NOT DECLARED. Reads the versions actually loaded rather than DESCRIPTION's declared
+## minimums, because the point of publishing them is reproducibility and a declared floor is not
+## what ran. A package that is somehow absent is simply left out rather than reported at a guessed
+## version; all absent returns NA and the column publishes blank.
+.tpEngineVersions <- function(pkgs = c("openCyto", "flowCore")) {
+  out <- vapply(pkgs, function(p) {
+    v <- tryCatch(as.character(utils::packageVersion(p)), error = function(e) NA_character_)
+    if (is.na(v)) NA_character_ else paste(p, v)
+  }, "")
+  out <- out[!is.na(out)]
+  if (!length(out)) NA_character_ else paste(out, collapse = "; ")
+}
+
+## An FCS CREATOR string reduced to the Collection Software menu term it names.
+##
+## CREATOR is "<software> <version>" -- "SpectroFlo 3.3.0" on every Cytek file measured here --
+## and their menu holds bare names. So match on the LEADING menu option and publish that; the
+## version is dropped rather than carried into a controlled-vocabulary cell where it would push
+## the whole run into the overflow row.
+##
+## NO MATCH MEANS PASS THROUGH, not blank: an acquisition software their menu does not list is
+## still worth publishing, and row 3 is what the template provides for it. Longest option first,
+## so a menu that ever gains "SpectroFlo SE" cannot be shadowed by "SpectroFlo".
+.tpCollectionSw <- function(x, menus) {
+  v <- .tpNorm(x)
+  if (.tpBlank(v)) return(NA_character_)
+  opts <- menus[["Collection Software"]] %||% character(0)
+  if (!length(opts)) return(v)
+  opts <- opts[order(nchar(opts), decreasing = TRUE)]
+  for (o in opts)
+    if (grepl(sprintf("^%s(\\b|$)", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", o)), v,
+              ignore.case = TRUE)) return(o)
+  v
+}
+
+## One FCS keyword from the run's keyword list, normalised, NA when absent or empty.
+##
+## Matched case-insensitively and with the leading `$` optional, because the standard keywords
+## carry one ($CYT) and the vendor extensions do not (CREATOR, SPILL). A caller asking for
+## "CREATOR" should not have to know which kind it is.
+.tpKeyword <- function(keys, name) {
+  if (is.null(keys) || !length(keys) || is.null(names(keys))) return(NA_character_)
+  want <- tolower(sub("^\\$", "", name))
+  hit  <- match(want, tolower(sub("^\\$", "", names(keys))))
+  if (is.na(hit)) return(NA_character_)
+  v <- .tpNorm(as.character(keys[[hit]])[1])
+  if (.tpBlank(v) || toupper(v) == "NA") NA_character_ else v
+}
+
 actaTiterPubsLasers <- function(keys) {
   if (is.null(keys) || !length(keys)) return(NA_character_)
   nm <- names(keys)[grepl("^LASER[0-9]+NAME$", names(keys))]
@@ -521,6 +592,26 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
 
   instrument <- .tpModel(rv("Equipment"))
   acq <- suppressWarnings(as.Date(rv("Acquisition_date")))
+
+  ## Info!Tissue, falling back to Info!Tissue_Fallback WHEN TISSUE IS EMPTY.
+  ##
+  ## Deliberately a different rule from Cell_Type_Fallback below, which fires on an UNRECOGNISED
+  ## value rather than an absent one. Tissue has no alias table and nothing to fail to recognise:
+  ## the only question it can ask is "did the operator say". So the fallback is a site default for
+  ## runs where nobody filled the cell -- a lab that only ever titrates on blood sets it once --
+  ## and it cannot overwrite an answer the operator actually gave.
+  ##
+  ## Both blank still publishes blank. ACTA does not infer tissue from the material; see the note
+  ## on ACTA_TP_OMIT for why `PBMC` implies blood but `T cells` does not.
+  tissue <- rv("Tissue_Type")
+  if (.tpBlank(tissue)) tissue <- iv("Tissue_Fallback")
+
+  ## IS THIS A COMBINATORIAL RUN? Decides which column names the antigen, below. Read from the
+  ## layout rather than recomputed: actaGroups() already sets a `combinatorial` attribute from the
+  ## FCS folder structure, and a second opinion derived differently is the two-readers-of-one-value
+  ## shape that has already cost this file a release. Any well carrying a Combinatorial_group is
+  ## enough -- the column is blank on every non-combinatorial run measured.
+  combinatorial <- !.tpBlank(rv("Combinatorial_group"))
   ## Date_Analysis is written by the pipeline when the analysis completes. An export that predates
   ## the column yields NA here and the Month/Year fields fall back to `acq`, which is what those
   ## fields have always held -- so an old export keeps publishing the value it used to publish
@@ -566,12 +657,51 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     ## wrong year on any re-analysis of archived data.
     "Month of analysis"           = if (is.na(ana)) NA_character_ else format(ana, "%B"),
     "Year of analysis"            = if (is.na(ana)) NA_character_ else format(ana, "%Y"),
-    "Collection Software"         = .tpAliasStrict(instrument, ACTA_TP_COLLECTION_SW),
+    ## INFO FIRST, THEN THE FILE'S OWN RECORD, THEN BLANK.
+    ##
+    ## This was derived from the instrument MODEL through a lookup -- two inferences deep
+    ## ($CYT -> model -> table -> "SpectroFlo") -- while the FCS carries the answer literally.
+    ## Measured across all six validation sets: CREATOR = "SpectroFlo 3.3.0" on every Cytek file,
+    ## absent on the Bio-Rad one. Reading it is not ACTA guessing; it is ACTA reporting what the
+    ## acquisition software wrote about itself, with the version attached for free.
+    ## CREATOR CARRIES A VERSION AND THEIR MENU DOES NOT, so the keyword is reduced to the menu
+    ## term it starts with. Measured: their options are bare names -- Diva, SpectroFlo,
+    ## CytExpert, ID7000, Everest -- while every Cytek file here reads `SpectroFlo 3.3.0`.
+    ## Published verbatim it is off-menu on EVERY Cytek run, which is worse than the model lookup
+    ## it replaced. Reduced, it lands in row 2 and stays facet-searchable.
+    ##
+    ## An operator's own Info value is NOT reduced: they get to say exactly what they ran, and
+    ## row 3 is there for a value their menu does not list.
+    "Collection Software"         = { cs <- iv("Collection_Software")
+                                      if (!.tpBlank(cs)) cs
+                                      else .tpCollectionSw(.tpKeyword(keys, "CREATOR"), menus) },
     "Analysis Software"           = "ACTA",
-    "Plug-ins, other analysis tools" = NA_character_,
+    ## THE GATING ENGINE, WITH VERSIONS. `Analysis Software` says "ACTA"; this says what ACTA
+    ## gated with, which is what another lab needs to reproduce a cut. Read from the loaded
+    ## namespaces rather than hardcoded, so the string cannot drift from what actually ran.
+    "Plug-ins, other analysis tools" = .tpEngineVersions(),
     "References"                  = iv("References"),
     "Quality control measures"    = iv("Quality_Control_Measures"),
-    "Antigen"                     = .tpAntigen(rv("Markername"), rv("Alias"), menus),
+    ## ALIAS NAMES THE ANTIGEN, except on a combinatorial run.
+    ##
+    ## Alias is what the ANALYST called the reagent; Markername is $PnS, which the instrument
+    ## wrote. On a Cytek Aurora $PnS holds the marker and either works. On a Bio-Rad ZE5 $PnS
+    ## holds the DYE -- measured on OQ_Test2, whose three reagents carry "BV 421-A", "RB780-A"
+    ## and "BV 605-A" there while Alias holds CD19, CD7, CD56. Preferring Markername would
+    ## publish a fluorochrome in the Antigen field for every ZE5 run.
+    ##
+    ## A COMBINATORIAL RUN INVERTS THAT. Alias carries the grouping suffix ACTA needs to keep two
+    ## series in one folder apart -- OQ_Test3's `CD14_combo`, `CCR7_combo` -- and `CD14_combo` is
+    ## off their menu while plain `CD14` is on it. So a combinatorial run reads Markername first
+    ## and keeps Alias as the fallback.
+    ##
+    ## .tpAntigen() still applies the isDye guard either way, so a combinatorial run on a ZE5 --
+    ## where the preferred source holds a dye name -- falls through to the other candidate rather
+    ## than publishing the dye. The two rules compose; neither leaves a gap.
+    "Antigen"                     = if (combinatorial)
+                                      .tpAntigen(rv("Markername"), rv("Alias"), menus)
+                                    else
+                                      .tpAntigen(rv("Alias"), rv("Markername"), menus),
     "Clone"                       = rv("Clone"),
     ## THE CONJUGATE IS THE DYE, AND WHICH COLUMN HOLDS IT DEPENDS ON THE INSTRUMENT.
     ##
@@ -598,7 +728,11 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
       } else fl
       .tpMenuSpelling(out, "Conjugate", menus)
     }),
-    "Target Species"              = iv("Target_Species", "Human"),
+    ## NO DEFAULT. This was iv("Target_Species", "Human"), so a blank cell published `Human` as
+    ## though the operator had stated it. A reader can work the target species out from the cell
+    ## type and the catalogue number; ACTA asserting it is the same class of invention as deriving
+    ## `blood` from `PBMC`, and is not ACTA's call to make.
+    "Target Species"              = iv("Target_Species"),
     ## FROM THE MASTER PANEL INVENTORY, by catalogue -- no second source and nothing retyped.
     ## The inventory's "Species / Isotype" is one free-text field; both targets here are menu
     ## driven, so each parser lands on a menu value or returns NA. A half-parsed isotype would
@@ -608,11 +742,22 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     ## A NAMED CLONE IS A MONOCLONAL. Stated as an inference rather than left blank, because the
     ## clone is already published in the next column and the two would otherwise disagree by
     ## omission. No clone -> no claim.
-    "Clonality"                   = if (.tpBlank(rv("Clone"))) NA_character_ else "monoclonal",
+    ## FROM THE INVENTORY, AS WRITTEN. Was `a named Clone means monoclonal` -- an inference ACTA
+    ## had no standing to make, and wrong for a polyclonal antiserum carrying a catalogue
+    ## designation in the Clone field. Now a reagent-level inventory column; absent or blank
+    ## publishes blank, because .piReadInventory() fills a missing column with NA rather than
+    ## failing and the operator's silence is not a claim.
+    "Clonality"                   = if (is.null(.invRow)) NA_character_
+                                    else .tpNorm(.invRow$clonality[1]),
     "Supplier"                    = .tpSupplierMenu(.tpAlias(rv("Vendor"), ACTA_TP_VENDOR), menus),
     "Part#"                       = rv("Cat_Num"),
     "Lot#"                        = rv("Lot_Num"),
-    "Concentration for this Lot#" = NA_character_,
+    ## FROM THE INVENTORY'S Lot_info SHEET, keyed by catalogue AND lot. Per-lot by nature: the
+    ## Master sheet carries one row per reagent and a lab buys the same catalogue many times, so
+    ## a concentration taken from the wrong lot would be a confident wrong number. No sheet, no
+    ## matching row, or a blank cell all publish blank.
+    "Concentration for this Lot#" = actaLotConcentration(attr(inv, "acta_lot_info"),
+                                                         rv("Cat_Num"), rv("Lot_Num")),
     ## THE PANEL'S BASE ROWS, which is what the maintainer asked for -- the other reagents that
     ## were physically in the tube. Combinatorial_group was the old source and describes something
     ## else entirely (the analyst's own grouping), so it was blank on every run that did not use
@@ -623,14 +768,25 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
         if (nrow(b)) paste(sprintf("%s %s", b$Antigen, b$Fluorochrome), collapse = "; ")
         else rv("Combinatorial_group")
       } else rv("Combinatorial_group"),
-    "Instrument Manufacturer"     = .tpAliasStrict(instrument, ACTA_TP_INSTRUMENT_MFR),
+    ## INFO FIRST, THEN DERIVED FROM THE MODEL -- and derived is the only option when Info is
+    ## blank, because NO FCS KEYWORD CARRIES A MANUFACTURER. $CYT holds the model ("Aurora") or,
+    ## on a Bio-Rad, the acquisition software ("EVEREST"); "Cytek" appears nowhere in the file.
+    ## Stated here rather than left implicit: this one field cannot be as-written unless the
+    ## operator writes it.
+    "Instrument Manufacturer"     = { mk <- iv("Equipment_Make")
+                                      if (!.tpBlank(mk)) mk
+                                      else .tpAliasStrict(instrument, ACTA_TP_INSTRUMENT_MFR) },
     ## THE MODEL, resolved through an alias table. A Bio-Rad ZE5 reports its SOFTWARE in $CYT, so
     ## `instrument` is the string "EVEREST" and this field published a software name where the
     ## menu wants a cytometer. `ZE5` is on their Instrumentation menu and `EVEREST` is not, so the
     ## old value also went to the off-menu overflow row on every ZE5 run. Falls back to the
     ## instrument string unchanged when no alias applies, which is right: an unrecognised
     ## cytometer is still a cytometer, and the reader can judge it.
-    "Instrumentation"             = .tpAlias(instrument, ACTA_TP_INSTRUMENT_MODEL),
+    ## Info!Equipment_Model first; otherwise `instrument`, which fcsEquipment() already resolved
+    ## from $CYT (and which maps EVEREST/YETI -> ZE5, the model Bio-Rad's software stands in for).
+    "Instrumentation"             = { md <- iv("Equipment_Model")
+                                      if (!.tpBlank(md)) md
+                                      else .tpAlias(instrument, ACTA_TP_INSTRUMENT_MODEL) },
     "Lasers (nm)"                 = actaTiterPubsLasers(keys),
     ## stored as a bare number, emitted the way the menu spells it
     "Incubation Time"             = { t <- iv("Incubation_Time")
@@ -643,9 +799,16 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     "Secondary Catalogue #"       = tv("Secondary_Cat_Num"),
     "Secondary Concentration used" = tv("Secondary_Concentration"),
     "Gating"                      = actaTiterPubsGating(gating, tv("Gating_Parent", "Live")),
-    "Tissue"                      = NA_character_,
-    "Cell type"                   = .tpCellType(rv("Test_Material")),
-    "Sample details"              = NA_character_,
+    ## ITS OWN INFO CELL, with Info!Tissue_Fallback behind it -- resolved above. Menu-driven, so
+    ## .tpCanonicaliseAll() folds `Blood` to the menu's own `blood` before the off-menu split is
+    ## computed; a tissue their menu does not list reaches row 3 rather than being discarded. See
+    ## the note on ACTA_TP_OMIT above for why PBMC needs this column and why ACTA will not infer it.
+    "Tissue"                      = tissue,
+    "Cell type"                   = .tpCellType(rv("Cell_Type")),
+    ## FREE TEXT, RUN-LEVEL, PUBLISHED AS WRITTEN. The column their template provides for anything
+    ## its other 43 do not cover. Deliberately NOT fed from Cell_Type or Culture_Status: a field
+    ## that silently mirrors another one stops being a place to say something new.
+    "Sample details"              = iv("Sample_Details"),
     ## PUBLISHED EVEN WHEN OFF MENU, in row 3, for the reason given at the Cell type block below.
     ##
     ## This was "menu value or nothing" after every run pushed the literal words "See references"
@@ -661,26 +824,35 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     "Protocol reference"          = iv("Protocol_reference"),
     "Cell count"                  = if (is.na(cells)) NA_character_
                                     else format(cells * 1e6, scientific = FALSE, trim = TRUE),
-    ## PER WELL FIRST, run-level second. Test_Material_Status is a Layout_Plate column, so a plate
+    ## PER WELL FIRST, run-level second. Sample_Status is a Layout_Plate column, so a plate
     ## that titrated a frozen vial beside a fresh draw publishes the right answer for each reagent
     ## instead of one Info value for both. Info!Fresh_or_Frozen stays as the fallback and is what
     ## an export written before the column existed still resolves to, so no archived run changes.
-    "Fresh or Frozen"             = { s <- .tpAlias(rv("Test_Material_Status"),
-                                                    ACTA_TP_SAMPLE_STATUS)
-                                      if (is.na(s)) iv("Fresh_or_Frozen") else s },
+    ## DELIBERATELY UNMAPPED SINCE 3.6.8, and this is the honest answer rather than a gap.
+    ##
+    ## All four of their options state TWO facts -- thaw state AND whether the cells were cultured
+    ## before staining. There is no culture-neutral option. ACTA used to map a bare `Frozen` to
+    ## "Frozen, thawed and incubated with antibody", which asserts NO CULTURE STEP: a claim the
+    ## operator never made, published on every run.
+    ##
+    ## Sample_Status and Culture_Status are separate Layout_Plate columns and travel in the
+    ## bundle's own instructions workbook and export, where a reader (and TiterPubs) can see both
+    ## as written. Composing one menu sentence out of them would mean parsing free text to decide
+    ## a fact about someone else's experiment, which is exactly what this release stopped doing.
+    "Fresh or Frozen"             = NA_character_,
     "Live or Fixed"               = liveFixed,
     "Fixed after antibody incubation?" = fixedAfter)
 
   ## AN UNRECOGNISED Cell type IS PUBLISHED, in row 3, like every other off-menu value.
   ##
   ## This used to replace it with Info!Cell_Type_Fallback, on the reasoning that routing
-  ## Test_Material through the alias table "keeps those identifiers out of a public submission".
+  ## Cell_Type through the alias table "keeps those identifiers out of a public submission".
   ## IT DOES NOT, and that is measured: the same string is published verbatim TWICE MORE in the
   ## same zip -- the export's sharedStrings.xml and the bundled Layout_Plate. Checked on a v3.6.5
   ## OQ_Test1 bundle carrying "HD Human T cells". So the replacement removed a useful field and
   ## prevented no disclosure; a reader lost the cell type while the string sat two parts away.
   ##
-  ## Confidentiality for this field belongs to acta.test_material_rules -- site-configured,
+  ## Confidentiality for this field belongs to acta.cell_type_rules -- site-configured,
   ## shipped EMPTY, applied before any of this, and never in the public tree. ACTA cannot dictate
   ## how another lab names its materials, and silently blanking their metadata is the wrong
   ## default for a tool other people run.
@@ -695,13 +867,17 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
   ## Normalised through the SAME key function the resolver uses, so "is this on the menu" cannot
   ## answer differently here than it did there -- the two-readers-of-one-value shape that has
   ## already cost this file one release.
+  ## BLANK-TRIGGERED SINCE 3.6.8, matching Tissue_Fallback. It used to fire on an UNRECOGNISED
+  ## value, which published false facts: with the shipped fallback set, `Whole blood` and
+  ## `Jurkat cell line` both came out as `mononuclear cells`. Measured, both wrong -- whole blood
+  ## includes granulocytes and red cells, and a Jurkat line is neither. It also did NOT fire on a
+  ## blank cell, the one case a site default is actually for.
+  ##
+  ## So: it fills a gap, it never overrules an answer. An unrecognised material now reaches row 3
+  ## as written, which is unsearchable but true -- better than searchable and false.
   ctFallback <- iv("Cell_Type_Fallback", NA_character_)
-  if (!.tpBlank(ctFallback)) {
-    ct <- v[["Cell type"]]
-    if (!.tpBlank(ct) &&
-        is.na(match(.tpCellTypeKey(ct), vapply(unname(ACTA_TP_CELLTYPE), .tpCellTypeKey, ""))))
-      v[["Cell type"]] <- ctFallback
-  }
+  if (!.tpBlank(ctFallback) && .tpBlank(v[["Cell type"]]))
+    v[["Cell type"]] <- .tpCellType(ctFallback)
 
   v[ACTA_TP_OMIT] <- NA_character_
   v
@@ -895,10 +1071,10 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
     ##
     ## sub() reads `\\` and `\1`-`\9` in a replacement as escape syntax, so a cell containing a
     ## backslash was silently rewritten before it was ever written out. Measured end to end:
-    ## Test_Material "C:\lab\donor \1 PBMC" published as "C:labdonor  PBMC" -- no warning, the
+    ## Cell_Type "C:\lab\donor \1 PBMC" published as "C:labdonor  PBMC" -- no warning, the
     ## package well formed, actaOpcFindings() clean, the workbook opening fine with the wrong text.
     ## A backslash is ordinary lab notation (CD4\CD8, a pasted Windows path), and this row is now
-    ## also where an unmapped Test_Material lands, so free text reaches it by design.
+    ## also where an unmapped Cell_Type lands, so free text reaches it by design.
     ## Same fix and same reason as .tpRenameToken()'s note further down this file.
     newEsc <- gsub("\\\\", "\\\\\\\\", new)
     if (grepl(pat, x)) x <- sub(pat, newEsc, x) else
@@ -2091,26 +2267,26 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
         for (z in v) repl[[z]] <- scrubRepl[[cn]]
     }
 
-    ## Test_Material, WHEN THE SITE HAS RULES FOR IT -- and this map is the only thing that
+    ## Cell_Type, WHEN THE SITE HAS RULES FOR IT -- and this map is the only thing that
     ## reaches the bundled instructions workbook.
     ##
-    ## actaApplyScrub() maps Test_Material on the stats frame, which covers the export, the report
+    ## actaApplyScrub() maps Cell_Type on the stats frame, which covers the export, the report
     ## and the submission template. The bundled Ab_Titration_Instructions.xlsx is a BYTE COPY of
     ## the operator's own file with only THIS map applied, so a site whose rules rewrite a donor
-    ## identifier out of Test_Material still shipped the RAW string in that workbook's
+    ## identifier out of Cell_Type still shipped the RAW string in that workbook's
     ## Layout_Plate. Every control reported success: the map never named the column, so there was
     ## nothing to fail, and .tpSiteTokens() seeds the leak scan from this same map -- so the gate
     ## could not see it either. A reader that cannot read reporting "clean", once more.
     ##
-    ## Mapped through actaMapTestMaterial(), the SAME function actaApplyScrub() uses, so the two
+    ## Mapped through actaMapCellType(), the SAME function actaApplyScrub() uses, so the two
     ## paths cannot disagree about what a rule means. Only values the rules actually CHANGE are
     ## added: an unmapped material is published as written, by design, and seeding it here would
     ## make .tpApplyRepl()'s "every key must hit" post-condition fail on a correct bundle.
-    if ("Test_Material" %in% names(lp) && length(actaTestMaterialRules())) {
-      tm <- unique(trimws(stats::na.omit(as.character(lp[["Test_Material"]]))))
+    if ("Cell_Type" %in% names(lp) && length(actaCellTypeRules())) {
+      tm <- unique(trimws(stats::na.omit(as.character(lp[["Cell_Type"]]))))
       tm <- tm[nzchar(tm)]
       for (z in tm) {
-        mapped <- actaMapTestMaterial(z)
+        mapped <- actaMapCellType(z)
         if (length(mapped) == 1L && !is.na(mapped) && nzchar(mapped) && !identical(mapped, z))
           repl[[z]] <- mapped
       }

@@ -132,7 +132,7 @@ chk("no prefix and no separator given behaves like the ELN/operator segments it 
     identical(h$actaTitleStamp("EXP00000001"), " | EXP00000001"))
 
 ## THE COUPLING THAT MADE THE CLONE A NO-OP, 2026-08-27. abMeta is built with
-## `distinct(Cat_Num, Vendor, Lot_Num, Clone, Test_Material, e6_cells_per_well)`, and distinct()
+## `distinct(Cat_Num, Vendor, Lot_Num, Clone, Cell_Type, e6_cells_per_well)`, and distinct()
 ## keeps ONLY the columns it is handed. A field added to the descriptor but not to that list
 ## resolves to NULL, and actaTitleStamp() -- which must stay quiet for a workbook that genuinely
 ## has no such column -- then prints nothing. The clone went missing from the facet strip, both

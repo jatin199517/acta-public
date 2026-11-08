@@ -127,8 +127,36 @@ prints the workbook's name.
 instructions workbook, the export, and the submission template's `Cell type` field, which takes the
 menu term when your wording matches one and your own words otherwise. Nothing rewrites it for you,
 so keep donor and subject identifiers out of that cell. A site that needs its own vocabulary mapped
-can set `options(acta.test_material_rules = ...)`; the rules are applied everywhere the material is
+can set `options(acta.cell_type_rules = ...)`; the rules are applied everywhere the material is
 published, including the copy of your workbook inside the bundle.
+
+**3.6.8 needs a new instructions template, and will say so.** The workbook carries
+`Info!Template_Version`, and ACTA stops with a message naming the file if it is older than 3.6.8 or
+missing. Four things moved. `Test_Material` is now `Cell_Type` and `Test_Material_Status` is now
+`Sample_Status`. `Tissue_Type` and `Culture_Status` are new `Layout_Plate` columns beside them.
+`flowjo_transformation_arg` moved from `Layout_Plate` to the Info sheet, because one transform
+covers a whole run and storing it per well meant reconciling identical cells. And the site option
+`acta.test_material_rules` is now `acta.cell_type_rules` — if you set the old name, ACTA stops
+rather than silently applying no rules. Download the current template and move your layout into it;
+there is no automatic migration, and a workbook edited to claim 3.6.8 while still carrying the old
+columns is refused too.
+
+**Tissue and cell type are separate answers.** TiterPubs has no `PBMC` option, so a material of
+`HD Human PBMCs` publishes `mononuclear cells` — which on its own could be marrow, cord blood or
+spleen. Put `Blood` in `Tissue_Type` and the pair says peripheral blood mononuclear cells in their
+own vocabulary. `Info!Tissue_Fallback` and `Info!Cell_Type_Fallback` fill a blank cell for a site
+that always titrates the same material; neither overrides an answer you gave, and both blank
+publishes blank. ACTA does not infer tissue from the material.
+
+**`Fresh or Frozen` is no longer filled in.** All four of that menu's options state both the thaw
+state and whether the cells were cultured, so a bare `Frozen` could only be published by also
+claiming no culture step. `Sample_Status` and `Culture_Status` travel in the bundled export as you
+wrote them instead.
+
+**Clonality comes from the inventory.** It is a `Clonality` column on the Master Panel Inventory's
+`Master` sheet, published as written; ACTA no longer infers `monoclonal` from a named clone. The
+inventory's optional `Lot_info` sheet supplies `Concentration for this Lot#`, matched on catalogue
+and lot. Any inventory column ACTA cannot find is skipped, not an error.
 
 **The staining protocol has its own field.** Put it in `Protocol_reference` on the Info sheet and
 it is published verbatim to the submission's `Protocol reference` column — a URL or a plain
@@ -271,11 +299,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.6.7")
+remotes::install_github("jatin199517/acta-public@v3.6.8")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.6.7 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.8 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more

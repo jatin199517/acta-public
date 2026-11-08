@@ -556,15 +556,15 @@ local({
 })
 
 ## ---------------------------------------------------------------------------------------------
-## Test_Material MAPS FREELY: a value the menu does not cover is PUBLISHED, not blanked.
+## Cell_Type MAPS FREELY: a value the menu does not cover is PUBLISHED, not blanked.
 ##
 ## The old guard replaced an unrecognised Cell type with Info!Cell_Type_Fallback, on the reasoning
 ## that it kept donor identifiers out of a submission. It did not: the same string is published
 ## verbatim twice more in the same zip -- the export's sharedStrings and the bundled Layout_Plate.
 ## So it removed a field a reader wants and prevented nothing. ACTA is run by other labs whose
-## naming it cannot dictate; confidentiality for this field is acta.test_material_rules, which is
+## naming it cannot dictate; confidentiality for this field is acta.cell_type_rules, which is
 ## site-configured and shipped empty.
-cat("\n=== Test_Material -> Cell type maps freely ===\n")
+cat("\n=== Cell_Type -> Cell type maps freely ===\n")
 local({
   ct <- .tp(".tpCellType")
   ## Recognised materials still normalise to the menu term -- that is what keeps a submission
@@ -639,16 +639,16 @@ local({
 })
 
 ## ---------------------------------------------------------------------------------------------
-## acta.test_material_rules MUST REACH THE BUNDLED WORKBOOK, not only the export and the template.
+## acta.cell_type_rules MUST REACH THE BUNDLED WORKBOOK, not only the export and the template.
 ##
-## actaApplyScrub() maps Test_Material on the stats frame, which covers the export, the report and
+## actaApplyScrub() maps Cell_Type on the stats frame, which covers the export, the report and
 ## the submission template. The bundled Ab_Titration_Instructions.xlsx is a BYTE COPY of the
 ## operator's file with only .tpScrubMap()'s map applied -- and that map named Operator, ELN_ID,
-## ELN_Name and Costain_Panel_Iteration, never Test_Material. So a site whose rules rewrite a
-## donor identifier OUT of Test_Material still shipped the raw string in that workbook, with every
+## ELN_Name and Costain_Panel_Iteration, never Cell_Type. So a site whose rules rewrite a
+## donor identifier OUT of Cell_Type still shipped the raw string in that workbook, with every
 ## control reporting success and the leak scan unable to see it, because .tpSiteTokens() seeds
 ## itself from the same map. Found by review, not by this suite.
-cat("\n=== site Test_Material rules reach the bundled workbook ===\n")
+cat("\n=== site Cell_Type rules reach the bundled workbook ===\n")
 local({
   RAW <- "DONOR-ZZ9-PBMC"; MAPPED <- "mononuclear cells"
   p <- file.path(tempdir(), paste0("tmr_", basename(tempfile(""))), "wb.xlsx")
@@ -656,8 +656,8 @@ local({
   ## Plant the raw material in Layout_Plate the way an operator would write it.
   d <- unpack(p); sf <- file.path(d, "xl", "worksheets", "sheet3.xml")
   lp <- as.data.frame(suppressMessages(readxl::read_excel(p, sheet = "Layout_Plate", col_types = "text")))
-  j  <- match("Test_Material", names(lp))
-  if (is.na(j)) { cat("  [skip] fixture has no Test_Material column\n"); return() }
+  j  <- match("Cell_Type", names(lp))
+  if (is.na(j)) { cat("  [skip] fixture has no Cell_Type column\n"); return() }
   L <- function(i){ s<-""; while(i>0){ r<-(i-1)%%26; s<-paste0(LETTERS[r+1],s); i<-(i-1)%/%26 }; s }
   sx <- paste(readLines(sf, warn = FALSE), collapse = "\n")
   for (rw in 2:(nrow(lp)+1L)) {
@@ -668,9 +668,9 @@ local({
   }
   writeLines(sx, sf, useBytes = TRUE); repack(d, p)
 
-  old <- getOption("acta.test_material_rules")
-  on.exit(options(acta.test_material_rules = old), add = TRUE)
-  options(acta.test_material_rules = list(c(pattern = "^DONOR-", replacement = MAPPED)))
+  old <- getOption("acta.cell_type_rules")
+  on.exit(options(acta.cell_type_rules = old), add = TRUE)
+  options(acta.cell_type_rules = list(c(pattern = "^DONOR-", replacement = MAPPED)))
 
   m <- .tp(".tpScrubMap")(p, eln = "EXP0001")
   chk("fixture: the raw material really is in the workbook",
@@ -688,9 +688,9 @@ local({
 
   ## With NO rules set, nothing is added -- an unmapped material is published as written, and
   ## seeding it would make .tpApplyRepl()'s "every key must hit" refuse a correct bundle.
-  options(acta.test_material_rules = NULL)
+  options(acta.cell_type_rules = NULL)
   m0 <- .tp(".tpScrubMap")(p, eln = "EXP0001")
-  chk("with no site rules, Test_Material is NOT added to the map", !(RAW %in% names(m0)))
+  chk("with no site rules, Cell_Type is NOT added to the map", !(RAW %in% names(m0)))
 })
 
 ## ---------------------------------------------------------------------------------------------
