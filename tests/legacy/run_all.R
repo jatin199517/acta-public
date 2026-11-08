@@ -67,6 +67,10 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              ## exist. Same shape as the index audit that found five defects in unchanged code.
              "test_titerpubs_tissue.R", # Info!Tissue_Type/Tissue_Fallback -> the Tissue column
              "test_schema_368.R",       # the 3.6.8 rename, version gate and site-rule firing
+             ## PINS stats_cols BESIDE the Layout_Plate column count. 3.6.8 shipped an OQ that
+             ## reported FAIL on a correct analysis because no gate here could see expected.json;
+             ## the real comparison only runs in CI on a schedule. This is the cheap tripwire.
+             "test_oq_schema_pin.R",    # Layout_Plate <-> expected.json coupling
              "test_workbook_package.R", # every .xlsx is a well-formed OPC package (Excel is strict)
              "test_dashboard_runs.R", # which folders count as runs -- the same export pooled twice
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer
