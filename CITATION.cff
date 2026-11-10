@@ -9,6 +9,9 @@ abstract: >-
 type: software
 license: AGPL-3.0-only
 repository-code: "https://github.com/jatin199517/acta-public"
+# Concept DOI: always resolves to the newest archived version. Cite a specific version's own DOI
+# (listed on the Zenodo record) when the exact behaviour matters -- v3.6.9 is 10.5281/zenodo.24094762.
+doi: "10.5281/zenodo.24094761"
 keywords:
   - flow cytometry
   - antibody titration
@@ -19,6 +22,7 @@ authors:
   - family-names: Sharma
     given-names: Jatin
     affiliation: "Lyell Immunopharma, Inc."
+    orcid: "https://orcid.org/0009-0008-2329-4781"
 
 # WHEN THE PAPER IS PUBLISHED, ADD rather than REPLACE. Keep the software entry above and append a
 # `preferred-citation:` block describing the article; GitHub's "Cite this repository" button then

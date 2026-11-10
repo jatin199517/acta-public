@@ -2,6 +2,8 @@
 
 # ACTA — Anybody Can Titrate Antibody
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24094761.svg)](https://doi.org/10.5281/zenodo.24094761)
+
 ## Overview
 
 ![](assets/overview.png)

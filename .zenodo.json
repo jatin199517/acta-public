@@ -1,0 +1,21 @@
+{
+  "upload_type": "software",
+  "title": "ACTA — Anybody Can Titrate Antibody",
+  "description": "An R workflow for analysing flow cytometry antibody titration experiments. A run reads a flowset of FCS files plus one Excel instructions workbook, gates positive and negative populations with openCyto, and reports a Stain Index per stain quantity together with a Michaelis-Menten fit, a PDF report, and an HTML dashboard across runs.",
+  "license": "AGPL-3.0-only",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Sharma, Jatin",
+      "affiliation": "Lyell Immunopharma, Inc.",
+      "orcid": "0009-0008-2329-4781"
+    }
+  ],
+  "keywords": [
+    "flow cytometry",
+    "antibody titration",
+    "stain index",
+    "openCyto",
+    "R"
+  ]
+}
