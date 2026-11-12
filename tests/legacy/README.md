@@ -1,12 +1,50 @@
 # ACTA test suite
 
-Three tiers, in the order you would use them:
+Four tiers, in the order you would use them:
 
 | Tier | What it proves | How long |
 |---|---|---|
 | **Fast gates** (`run_all.R`) | the helper library behaves — node resolution, pre-flight, metadata, the app's server logic | seconds |
 | **OQ cases** (`Diagnostics/OQ_Test1`, `OQ_Test2`, `OQ_Test3`) | the whole pipeline still produces the same numbers, exports, plots and PDF | ~2–3 min each |
+| **The scrubbed case** (`test_oq_scrub_case.R`) | `scrub_confidential = TRUE` end to end: placeholders in, real values gone, bundle clean, **and no measured value moved** | ~3 min |
 | **Regression gate** (`regression_capture.R` + `regression_compare.R`) | a refactor changed *nothing* observable, at a finer grain than the OQ assertions | ~2 min per snapshot |
+| **Metadata identity** (`check_metadata_identity.R`) | the export, its audit sheets, the **bundle** and the dashboard all PUBLISH what the workbook SAYS — run it on any finished run folder | seconds |
+| **Differential read** (`differential_read.R`) | readxl's type guessing agrees with a second, independent reader on every shipped workbook — the one boundary a single reader cannot check | ~1 min, needs `python3` + `openpyxl` |
+
+`check_metadata_identity.R` exists because the other three could not see the defect that found it.
+
+### Before publishing a dataset: read one
+
+No gate found the row-F defect. A person reading a published artefact did. The gates above have
+since been widened a long way — 22 hazards in the fixture, two independent readers, four
+apertures on the identity check — but the class they are chasing is *an authored value arriving
+changed*, and the last line of defence against it has always been somebody looking.
+
+So before a bundle goes to Zenodo or TiterPubs: open the export and the report for one dataset and
+read the metadata columns. It takes a minute and it is the step with the best track record.
+A published bundle reported the plate row of its CD62L group as `FALSE`: the group sat entirely in
+plate row F, `GatingSet()` reparsed a single-valued `"F"` column as logical, and the export said so.
+Nothing errored and no measured value moved, so the OQ cases passed, and the regression gate
+compares a run against a PREVIOUS RUN — it would have agreed with itself about `FALSE` indefinitely.
+The missing comparison was against the operator's own input:
+
+```sh
+Rscript tests/legacy/check_metadata_identity.R <run_dir> [<run_dir> ...]
+```
+
+It reads the instructions workbook and the export with `readxl`, as text on both sides so neither
+can be normalised into agreement, and requires every `Layout_Plate` cell that travels to
+`TitrationExport` / `SI_stats` / `Pop_stats` to arrive unchanged. Derived columns (`name`, `label`,
+`Panel`, …) are excluded by name, and on a `scrub_confidential` run so are the fields the scrub
+rewrites — that exclusion is read from the package, not restated here, so the next column the scrub
+gains is covered without anyone remembering this file.
+
+It keys on `Alias` + `StainType` + numeric `StainQty`, and **never on `Row`**, because `Row` is one
+of the values under test — keying on it would hide exactly the defect the script exists to find.
+`Alias` + `Column` was tried first and was worse than useless: three aliases sharing three plate
+columns matched several layout rows per key, every row was skipped, and it reported
+`0 cell(s) compared … OK`. Zero comparisons is now a hard failure for that reason. Verified to FAIL
+on the published 1460 export (31 cells, `Row` only) and to pass on every other dataset.
 
 ```sh
 Rscript 3_0/tests/run_all.R          # all fast gates, one line each, exit 0 = all passed
@@ -92,6 +130,24 @@ with no compensation; OQ_Test2 is three groups on a Bio-Rad ZE5 with a supplied 
 non-standard scatter names, `$PnS` gating dimensions, an 18-bit `$PnR` and `Downsample_to` set — so
 it is the case that proves vendor portability.
 
+### The fourth case: the same run with scrubbing on
+
+```sh
+Rscript tests/legacy/test_oq_scrub_case.R
+```
+
+All three shipped cases carry `scrub_confidential = FALSE`, so the switch this lab runs with on
+every real run was never exercised end to end. This copies **OQ_Test3** to a temp folder, flips
+`scrub_confidential` and `titerpubs_export` to `TRUE` at the XML level, runs it, and asserts three
+things: the placeholders are in the export and no real workbook value survives anywhere in it; the
+bundle is clean under `actaBundleScan()` **seeded with the real values as literals**; and the
+measured results are unchanged — the scrubbed run is checked against OQ_Test3's own
+`expected.json`, which was recorded with scrubbing off.
+
+Derived rather than shipped: a fourth fixture would be another 32 MB of FCS and a second numeric
+baseline, and deriving it buys the stronger assertion instead — that scrubbing changes **no**
+measured value. Minutes, so it is not in `run_all.R`; run it beside the other three.
+
 ## The report renders from a spaced path
 
 ```sh
@@ -148,5 +204,29 @@ Not gates. Run them only when you intend to rebuild a case, and expect the OQ ba
 |---|---|
 | `build_oq_test.R` | builds a publicly shareable case from a real run: sanitises the workbook **and** the FCS keywords. The FCS were the real exposure — they embed the company name, an operator username, the programme name, the instrument serial, a donor code and the construct marker, none of it visible from the layout sheet. |
 | `downsample_oq_fcs.R` | downsamples every OQ FCS to N events so the case is small enough for git and fast enough that people actually run it. Seeded **per file** from the well id, so a file always yields the same events — a gate whose input changes between runs cannot assert on numbers at all. |
+| `seed_canary_column.R` | writes the 22-value hazard corpus into a fixture's **`Clone`** column. Already applied to OQ_Test1. Re-run only if the column is overwritten. |
+
+### The canary column
+
+OQ_Test1's `Clone` column holds the hazard corpus — `F`, `T`, `TRUE`, `NA`, `007`, `0x1A`, `1E5`,
+`#N/A`, `=1+1`, `a\Ed`, a trailing space, XML entities, unicode, a 17-digit number. It is pure
+metadata: nothing gates, scores or plots on it, so it cannot move a number — and OQ_Test1 passes
+20/0 with it in place.
+
+It exists because **six datasets and a full regression suite never saw the row-F defect**, for the
+simple reason that every value in every fixture was benign. The corpus travels into the export's
+`Layout_Plate` audit copy, the dashboard and the bundle, and `check_metadata_identity.R` compares
+all of them — so one ordinary OQ run now probes 22 hazards across the whole published surface,
+every time, without anyone remembering to.
+
+It earned its keep on first use: seeding it found that `set_workbook_cells.R` dropped a backslash,
+because the cell value was used as an R `sub()` replacement where `\E` is syntax. That is the same
+defect `.tpApplyRepl()` already guarded against, in the tool used to edit the **shipped**
+workbooks.
+
+**Do not seed a value that also appears in a scrubbed column** (`Operator`, `ELN_ID`, `ELN_Name`,
+`SOP`, `Costain_Panel_Iteration`). `.tpScrubMap()`'s collision guard would correctly stop every
+scrubbed run. The seeder refuses rather than letting that happen — which is why the corpus uses
+`007` and not `001`, OQ_Test1's own `SOP`.
 
 After either one, rerun `verify_oq_sanitised.R` and both OQ cases, and re-record `expected.json`.

@@ -10,6 +10,7 @@
 ## feeds the export, the report, MiFlowCyt and the TiterPubs submission. That is why the override
 ## is applied there and not in four consumers.
 
+source(file.path(this.path::this.dir(), "acta_test_paths.R"))
 ok <- TRUE
 chk <- function(label, pass, detail = NULL) {
   d <- paste(as.character(detail), collapse = " ")
@@ -85,7 +86,13 @@ wbs <- c("inst/pipeline/Template/TEMPLATE_Ab_Titration_Instructions.xlsx",
          "inst/extdata/oq_small/OQ_Test1/OQ_Test1_Ab_Titration_Instructions.xlsx",
          "inst/extdata/oq_small/OQ_Test2/OQ_Test2_Ab_Titration_Instructions.xlsx",
          "inst/extdata/oq_small/OQ_Test3/OQ_Test3_Ab_Titration_Instructions.xlsx")
-root <- if (dir.exists("ACTA_package")) "ACTA_package" else "."
+## RESOLVED FROM THIS SCRIPT, NOT FROM THE CURRENT DIRECTORY. This line used to read
+##   root <- if (dir.exists("ACTA_package")) "ACTA_package" else "."
+## which is the exact contract acta_test_paths.R exists to abolish -- "every script in this folder
+## locates ITSELF", because a gate that depends on where it was launched from reports a failure
+## that has nothing to do with the code under test. It passed from the repo root and failed these
+## four assertions from anywhere else, and it was the only file in the suite still doing this.
+root <- ACTA_REPO_ROOT
 for (w in wbs) {
   p <- file.path(root, w); if (!file.exists(p)) { chk(paste("workbook present:", basename(w)), FALSE); next }
   d <- as.data.frame(suppressMessages(readxl::read_excel(p, sheet = "Info"))); names(d) <- trimws(names(d))

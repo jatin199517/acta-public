@@ -26,14 +26,178 @@ pcap       <- ACTA:::actaPanelIterationCaption
 
 SECRETS <- c("Unlisted Panel_4", "PRG001 Base Panel_1")
 
+## SOP CARRIES A DOCUMENT TITLE, NOT A NUMBER, which is why it is scrubbed at all. Three published
+## bundles went out with an internal SOP title in `Layout_Plate!SOP` and `TitrationExport!SOP`
+## before 3.6.11 added it to ACTA_SCRUB_CONFIDENTIAL. The value below is deliberately
+## title-shaped, because an SOP column holding "001" would pass a weaker test by accident.
+SOP_TITLE <- "[Reagent lot] Titration report 9.99"
+
 lay <- data.frame(
   Alias                   = c("Strep", "Strep", "CD19", "CD19"),
   Costain_Panel_Iteration = c(SECRETS[1], SECRETS[1], SECRETS[2], SECRETS[2]),
   Operator                = c("AB", "AB", "CD", "CD"),
+  SOP                     = rep(SOP_TITLE, 4L),
   stringsAsFactors = FALSE)
 
 scr <- applyScrub(lay, quiet = TRUE)
 iters <- unique(scr$Costain_Panel_Iteration)
+
+cat("=== Layout_Plate!SOP (3.6.11) ===\n")
+chk("SOP is in the shipped scrub vector at all",
+    "SOP" %in% names(ACTA:::ACTA_SCRUB_CONFIDENTIAL),
+    paste(names(ACTA:::ACTA_SCRUB_CONFIDENTIAL), collapse = ", "))
+chk("the SOP document title is replaced",
+    !any(grepl(SOP_TITLE, scr$SOP, fixed = TRUE)), paste(unique(scr$SOP), collapse = ", "))
+## BLANKED, NOT PLACEHELD. An SOP id tells a reader outside the lab nothing, so there is nothing
+## for a placeholder to preserve -- and "SOP-000" would itself be a string the value-keyed rewrite
+## could later match. Pin the blank so nobody "helpfully" restores a placeholder.
+chk("...and the column is BLANK, on every row",
+    identical(unique(scr$SOP), "") &&
+      identical(unname(ACTA:::ACTA_SCRUB_CONFIDENTIAL[["SOP"]]), ""),
+    paste(sprintf("'%s'", unique(scr$SOP)), collapse = ", "))
+chk("the title survives nowhere else in the scrubbed frame",
+    !any(grepl(SOP_TITLE, unlist(scr), fixed = TRUE)))
+## THE TOGGLE IS STILL THE TOGGLE. applyScrub() is only reached when scrub_confidential is TRUE;
+## a lab that wants its SOP published leaves it off, so assert the untouched frame still has it.
+chk("an unscrubbed layout keeps its SOP", identical(unique(lay$SOP), SOP_TITLE))
+
+
+cat("=== .tpScrubMap() refuses a value that is not unique to its column ===\n")
+## WHY THIS GATE EXISTS. The map is VALUE-keyed: each key rewrites any cell in the bundled
+## workbook whose whole text equals it. That is safe only while a confidential value is unique to
+## its own column, and SOP is free text -- OQ_Test1 and OQ_Test2 ship SOP = "001". Measured before
+## the guard: a Lot_Num of "001" was rewritten to the SOP replacement, .tpApplyRepl() returned
+## TRUE, and .tpSiteTokens() classed "001" as `short` so the leak gate never re-checked it.
+##
+## Dropping the colliding key instead of stopping would swap corruption for a LEAK, so the run
+## must STOP. Both directions are asserted below; a guard that only ever fires is as useless as
+## one that never does.
+suppressMessages(library(openxlsx))
+mkwb <- function(sop, lot) {
+  lp <- data.frame(Row = c("A", "A"), `Column (N)` = c(1, 2), Alias = c("CD3", "CD3"),
+                   Lot_Num = lot, Operator = c("AB", "AB"), SOP = sop,
+                   check.names = FALSE, stringsAsFactors = FALSE)
+  f <- file.path(tempdir(), sprintf("coll_%s.xlsx", paste(sample(letters, 8), collapse = "")))
+  w <- createWorkbook(); addWorksheet(w, "Layout_Plate"); writeData(w, "Layout_Plate", lp)
+  saveWorkbook(w, f, overwrite = TRUE); f
+}
+clean <- mkwb(sop = c("SOP-12345", "SOP-12345"), lot = c("5279781", "5279781"))
+dirty <- mkwb(sop = c("001", "001"),             lot = c("001", "5279781"))
+
+m <- tryCatch(ACTA:::.tpScrubMap(clean), error = function(e) e)
+chk("a UNIQUE confidential value still builds a map",
+    is.list(m) && identical(unname(m[["SOP-12345"]]), ""),
+    if (inherits(m, "error")) conditionMessage(m) else paste(names(m), collapse = ", "))
+
+e <- tryCatch({ ACTA:::.tpScrubMap(dirty); NULL }, error = function(e) e)
+chk("a COLLIDING confidential value stops the run", inherits(e, "error"),
+    if (is.null(e)) "no error raised -- the guard did not fire" else "")
+chk("...and the message names the offending column",
+    inherits(e, "error") && grepl("Lot_Num", conditionMessage(e), fixed = TRUE),
+    if (inherits(e, "error")) sub("\n.*", "", conditionMessage(e)) else "")
+## The stop must not be swallowed by .tpScrubMap()'s own fail-open handler, which turns any error
+## into list() -- an empty map that .tpScrubWorkbook() reads as "nothing to do" and reports
+## success for. That is why the check sits OUTSIDE the tryCatch.
+chk("...rather than being swallowed into an empty map",
+    !identical(tryCatch(ACTA:::.tpScrubMap(dirty), error = function(e) "stopped"), list()))
+
+## ---------------------------------------------------------------------------------------------
+## THE GUARD'S OWN THREE FALSE-POSITIVE / FALSE-NEGATIVE EDGES.
+##
+## A guard that stops a correct run is not "safe"; it is a different defect, and this one shipped:
+## Well_volume_uL is the NUMBER 100 in all four shipped workbooks, so an operator whose SOP read
+## "100" was refused and told to change a cell that was perfectly correct. .tpApplyRepl() rewrites
+## whole <t> elements, so a numeric cell (<v>100</v>) can never be hit by the substitution and
+## cannot collide with it.
+##
+## The narrowing must NOT be "skip keys that look numeric" -- "001" is numeric-LOOKING and
+## string-STORED, and it is the exact collision the guard exists for. Both are asserted here.
+mkwb2 <- function(cols) {
+  f <- file.path(tempdir(), sprintf("coll2_%s.xlsx", paste(sample(letters, 8), collapse = "")))
+  lp <- do.call(data.frame, c(cols, list(check.names = FALSE, stringsAsFactors = FALSE)))
+  w <- createWorkbook(); addWorksheet(w, "Layout_Plate"); writeData(w, "Layout_Plate", lp)
+  saveWorkbook(w, f, overwrite = TRUE); f
+}
+## Returns the stop message, or "" when the run was allowed. Never NA, so every assertion below
+## is a plain string test and an un-fired guard cannot pass one by accident.
+stopped <- function(f) {
+  e <- tryCatch({ ACTA:::.tpScrubMap(f); NULL }, error = function(e) e)
+  if (inherits(e, "error")) conditionMessage(e) else ""
+}
+
+numeric_wb <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2), Alias = c("CD3", "CD3"),
+                         Well_volume_uL = c(100, 100), SOP = c("100", "100")))
+chk("a NUMERIC cell equal to a confidential value does NOT stop the run",
+    !nzchar(stopped(numeric_wb)), stopped(numeric_wb))
+
+text_wb <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2), Alias = c("CD3", "CD3"),
+                      Lot_Num = c("001", "5279781"), SOP = c("001", "001")))
+chk("...while the SAME-SHAPE value in a TEXT cell still does",
+    grepl("Lot_Num", stopped(text_wb), fixed = TRUE), stopped(text_wb))
+
+## DISCRIMINATION CONTROL FOR THE NARROWING ITSELF. Same column name, same displayed value, same
+## SOP -- the ONLY difference is that the cell is stored as a string. If this passed quietly the
+## narrowing would be "skip Well_volume_uL", which is a hard-coded exemption, not a storage test.
+wvol_text <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2), Alias = c("CD3", "CD3"),
+                        Well_volume_uL = c("100", "100"), SOP = c("100", "100")))
+chk("...and the SAME column stops the run when it is stored as TEXT",
+    grepl("Well_volume_uL", stopped(wvol_text), fixed = TRUE), stopped(wvol_text))
+
+## A key that ALREADY EQUALS its placeholder is never substituted -- .tpApplyRepl() drops it by
+## name -- so there is no rewrite for another column to collide with. OQ_Test2 ships
+## ELN_Name = "ELN", which IS ACTA_SCRUB_CONFIDENTIAL[["ELN_Name"]].
+ident_wb <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2),
+                       Alias = c("ELN", "CD3"), ELN_Name = c("ELN", "ELN")))
+chk("a key that already equals its placeholder is not treated as a collision",
+    !nzchar(stopped(ident_wb)) &&
+      identical(unname(ACTA:::ACTA_SCRUB_CONFIDENTIAL[["ELN_Name"]]), "ELN"),
+    stopped(ident_wb))
+## DISCRIMINATION CONTROL. One character different -- the value is no longer its own placeholder,
+## so the rewrite is real and the collision with Alias is real. If this also passed, the exemption
+## would be "ELN_Name is never checked" rather than "an identity substitution cannot collide".
+nonident_wb <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2),
+                          Alias = c("ELNX", "CD3"), ELN_Name = c("ELNX", "ELNX")))
+chk("...while a one-character-different value in the same shape still stops the run",
+    grepl("Alias", stopped(nonident_wb), fixed = TRUE), stopped(nonident_wb))
+
+## TWO SCRUBBED COLUMNS CLAIMING ONE VALUE resolved last-writer-wins: the map held one entry and
+## the other column shipped under the wrong placeholder, with every control green.
+ambig_wb <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2), Alias = c("CD3", "CD3"),
+                       ELN_ID = c("EXP00000009", "EXP00000009"),
+                       Costain_Panel_Iteration = c("EXP00000009", "EXP00000009")))
+## ---------------------------------------------------------------------------------------------
+## .tpApplyRepl() QUOTES THE VALUE PER CHARACTER, because \Q...\E has a sentinel.
+##
+## PCRE stops quoting at the first `\E` in the value, and .tpEsc() escapes the five XML entities
+## and never touches a backslash -- so a Windows path typed into a scrubbed cell reaches the
+## pattern intact. Measured on `a\Ed`: the pattern missed its OWN value and matched `<t>ad</t>`
+## instead, rewriting an unrelated cell to the placeholder with hitKey TRUE, so the "every key
+## must hit" post-condition passed and the bundle shipped corrupted. Both halves are asserted:
+## the real cell IS scrubbed, and the decoy is NOT.
+BS      <- "\\"
+tricky  <- paste0("a", BS, "Ed")
+qe_wb   <- mkwb2(list(Row = c("A", "A"), `Column (N)` = c(1, 2), Alias = c("ad", "CD3"),
+                      Operator = c(tricky, tricky)))
+ok <- isTRUE(tryCatch(ACTA:::.tpApplyRepl(qe_wb, ACTA:::.tpScrubMap(qe_wb)),
+                      error = function(e) conditionMessage(e)))
+after <- tryCatch(suppressMessages(as.data.frame(
+           readxl::read_excel(qe_wb, sheet = "Layout_Plate", col_types = "text"))),
+         error = function(e) NULL)
+chk("a value containing a regex quote-terminator is still rewritten", ok && !is.null(after) &&
+      identical(unique(after$Operator), unname(ACTA:::ACTA_SCRUB_CONFIDENTIAL[["Operator"]])),
+    if (is.null(after)) "workbook unreadable" else paste(unique(after$Operator), collapse = ", "))
+chk("...and the cell it used to collide with is untouched",
+    !is.null(after) && identical(after$Alias, c("ad", "CD3")),
+    if (is.null(after)) "" else paste(after$Alias, collapse = ", "))
+
+chk("one value in TWO scrubbed columns stops the run",
+    nzchar(stopped(ambig_wb)), "no error raised -- last-writer-wins was accepted")
+chk("...and the message names both columns, not the value",
+    { m <- stopped(ambig_wb)
+      grepl("ELN_ID", m, fixed = TRUE) && grepl("Costain_Panel_Iteration", m, fixed = TRUE) &&
+        !grepl("EXP00000009", m, fixed = TRUE) },
+    stopped(ambig_wb))
+
 
 chk("iteration names are replaced with placeholders",
     all(grepl("^Iteration[0-9]+$", iters)), paste(iters, collapse = ", "))

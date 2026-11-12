@@ -53,6 +53,14 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_diagnostics.R",    # the three write points and the diagnostic bundle
              "test_combinatorial.R", # the Combinatorial_group declaration and its per-value test
              "test_arg_safety.R",     # no workbook cell is ever evaluated
+             ## REGISTERED WITH THE FIX, not after it. The row-F defect reached a published bundle
+             ## because the pData repair allow-listed the one mangling somebody had already met;
+             ## this drives the whole table through a real GatingSet instead.
+             "test_pdata_restore.R",  # every pData string GatingSet() rewrites comes back
+             ## ONE CORPUS, EVERY BOUNDARY. You cannot enumerate the defects of the row-F class --
+             ## nobody enumerated row F -- but you can enumerate the places a string changes
+             ## representation, and push the same 22 hazards through all of them.
+             "test_boundary_probes.R", # openxlsx, jsonlite, FCS filenames, the XML scrub
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
              "test_which_plate.R",    # the plate token is a DIRECTORY, not a substring of a date
              "test_panel_inventory_source.R", # a caption names the inventory it actually opened
@@ -60,6 +68,9 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_sample_status.R",  # Sample_Status: the column, and the menu it publishes
              "test_info_report.R",    # the Info table and its Source column
              "test_bundle_scan.R",    # the leak scan that GATES a bundle build
+             ## THE ONE CONTROL SCRUBBING CANNOT SUBSTITUTE FOR, and it had no test until 3.6.11:
+             ## a construct detection reagent is disclosed by the PANEL, not by any label.
+             "test_blocked_markers.R", # acta.bundle_blocked_markers, and its four fail-opens
              "test_titerpubs_scrub.R", # the de-identifiers themselves: NO fixture ran this path
              ## REGISTERED THE DAY IT WAS WRITTEN, and that is the point. test_titerpubs_tissue.R
              ## passed when invoked directly and was INVISIBLE here, because this list is explicit

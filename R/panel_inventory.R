@@ -365,10 +365,26 @@ actaScrubEquipmentSerial <- function(x) {
 ## Cell_Type is deliberately NOT here (user's call, 2026-10-13): it describes what was stained
 ## and a reader needs it, so a site that cannot publish its sample labels should edit them in the
 ## layout rather than have ACTA guess a substitute.
+##
+## SOP JOINED THE LIST IN 3.6.11, and the argument against it lost on evidence. The objection was
+## that another lab's SOP id need not be confidential, so scrubbing it for everyone overreaches.
+## What settled it: `SOP` is free text, labs name the document rather than numbering it, and three
+## published bundles went out carrying an internal SOP document TITLE in `Layout_Plate!SOP` and
+## `TitrationExport!SOP`. The field is near-useless to a reader either way -- an SOP id means
+## nothing to anyone outside the lab that wrote it -- so the asymmetry is total: scrubbing costs a
+## reader nothing, and not scrubbing it leaks by default. The toggle is still opt-in, so a lab that
+## wants its SOP published simply leaves scrub_confidential off.
+## SOP IS BLANKED, NOT PLACEHELD, and that is deliberate. The other three carry placeholder-shaped
+## values so a reader can see a field was substituted rather than wonder whether "JD" is somebody's
+## initials. SOP is different: an SOP identifier means NOTHING to anyone outside the lab that wrote
+## it, so there is nothing for a placeholder to preserve -- and a placeholder is actively worse
+## here, because "SOP-000" is itself a string that the value-keyed rewrite below could later match.
+## A blank says "withheld" and carries no second-order risk.
 ACTA_SCRUB_CONFIDENTIAL <- c(
   Operator                = "JD",
   ELN_ID                  = "EXP26000001",
-  ELN_Name                = "ELN")
+  ELN_Name                = "ELN",
+  SOP                     = "")
 
 ## INFO-SHEET fields scrubbed alongside the layout ones. Separate vector because these live on a
 ## different sheet and reach different artefacts: the Info sheet is copied VERBATIM into the
@@ -439,9 +455,9 @@ actaCellTypeRules <- function() {
 ##
 ##   options(acta.bundle_blocked_markers = c("<construct regex>", ...))
 ##
-## Matched against the panel AS ACQUIRED ($PnS in the FCS), not against the layout: the layout
-## names only the reagent being titrated, so a blocked marker sitting in the costain panel is
-## invisible there. The FCS is what actually went to the instrument.
+## Matched against the panel AS ACQUIRED (the $PnS and $PnN keywords in the FCS), not against the
+## layout: the layout names only the reagent being titrated, so a blocked marker sitting in the
+## costain panel is invisible there. The FCS is what actually went to the instrument.
 ACTA_BUNDLE_BLOCKED_MARKERS <- character(0)
 
 actaBundleBlockedMarkers <- function() {
@@ -450,17 +466,43 @@ actaBundleBlockedMarkers <- function() {
   as.character(o)
 }
 
-## Every $PnS in a set of FCS files. Read from the HEADER so this costs nothing and can run
-## before any data is loaded -- the whole point is to stop before the analysis, not after it.
-actaFcsMarkerNames <- function(files, max_files = 50L) {
+## Every parameter NAME in a set of FCS files. Read from the HEADER so this costs nothing and can
+## run before any data is loaded -- the whole point is to stop before the analysis, not after it.
+##
+## BOTH $PnS AND $PnN, because which one holds the marker is the acquisition template's choice,
+## not a standard. $PnS is the stain name on a BD or Bio-Rad template and is what this read; $PnN
+## is the detector, usually `BV421-A`. But a template that was never given stain names leaves $PnS
+## absent or blank and the operator types the marker into $PnN instead -- and an FCS re-exported
+## by third-party software routinely carries the marker in $PnN with $PnS empty. In either case
+## this function returned nothing for that parameter and the gate passed a panel it was written to
+## refuse. A detector name cannot match a construct regex, so reading both costs no false
+## positives and closes the only way the marker can hide.
+##
+## `files` IS READ IN FULL. It used to truncate at 50 with no word to anyone: a 96-well plate is
+## 96 files, so a blocked reagent sitting in the back half of the plate was never looked at. The
+## cap is still here as a bound on a pathological input, but exceeding it now STOPS -- a gate that
+## silently inspects part of its input is worse than one that refuses, because it reports a pass.
+## Header reads are a few milliseconds each, so a full plate costs well under a second.
+actaFcsMarkerNames <- function(files, max_files = 1000L, strict = FALSE) {
   if (!length(files)) return(character(0))
-  if (length(files) > max_files) files <- files[seq_len(max_files)]
+  if (length(files) > max_files)
+    stop(sprintf(paste0("actaFcsMarkerNames(): %d files exceeds max_files = %d. Raise max_files ",
+                        "rather than scanning part of the set -- a partial scan reports a pass."),
+                 length(files), max_files), call. = FALSE)
+  bad <- character(0)
   out <- unlist(lapply(files, function(f) {
     k <- tryCatch(flowCore::read.FCSheader(f)[[1]], error = function(e) NULL)
-    if (is.null(k)) return(character(0))
-    v <- unlist(k[grepl("^\\$P[0-9]+S$", names(k))])
+    ## A FILE THAT CANNOT BE READ IS NOT A FILE WITH NO MARKERS. Under `strict` the caller is a
+    ## gate and must hear about it; left silent, one unreadable FCS is indistinguishable from a
+    ## clean one -- the fail-open shape this package has now met ten times.
+    if (is.null(k)) { bad <<- c(bad, basename(f)); return(character(0)) }
+    v <- unlist(k[grepl("^\\$P[0-9]+[SN]$", names(k))])
     trimws(as.character(v))
   }))
+  if (strict && length(bad))
+    stop(sprintf(paste0("actaFcsMarkerNames(): could not read the FCS header of %s. The panel ",
+                        "could not be established, so it must not be reported as allowed."),
+                 paste(utils::head(bad, 5), collapse = ", ")), call. = FALSE)
   unique(out[nzchar(out) & !is.na(out)])
 }
 
@@ -491,10 +533,38 @@ actaAssertBundleAllowed <- function(files, enabled, patterns = actaBundleBlocked
                 "install.packages(\"pdftools\"), or set Info!titerpubs_export = FALSE to analyse ",
                 "this run locally."), call. = FALSE)
   if (!length(patterns)) return(invisible(NULL))
-  mk <- actaFcsMarkerNames(files)
-  if (!length(mk)) return(invisible(NULL))
+  ## strict = TRUE: from here on this function IS the gate, so an FCS whose header will not parse
+  ## stops the run rather than contributing silence to the allow decision.
+  ##
+  ## NO FILE CAP HERE, deliberately. The cap exists to bound a pathological input for ordinary
+  ## callers; for the gate, "there are a lot of files" is not a reason to skip the check, and
+  ## refusing a legitimate large run would be a worse answer than reading it (a header read is a
+  ## few milliseconds, so even several thousand files cost seconds).
+  mk <- actaFcsMarkerNames(files, max_files = Inf, strict = TRUE)
+  ## ZERO MARKERS IS NOT A CLEAN PANEL. With patterns set, an empty read means the panel could not
+  ## be established, and the old `return(invisible(NULL))` turned that into a pass. Same shape as
+  ## .bsUnread(): a reader that cannot read must not report "nothing found".
+  ##
+  ## A BACKSTOP, NOT THE LIVE PATH. Reading $PnN made this unreachable from a readable file -- the
+  ## FCS standard requires $PnN for every parameter, so a file that parses always yields at least
+  ## its detector names, and a file that does not parse is stopped on by the strict read above
+  ## with a better message (it names the file). test_blocked_markers.R pins that reasoning, so a
+  ## change narrowing the read back to $PnS makes this branch live again rather than silent.
+  if (!length(mk))
+    stop(sprintf(paste0("titerpubs_export = TRUE and blocked markers are configured, but no ",
+                        "parameter names could be read from the %d FCS file(s) in this run, so ",
+                        "the panel could not be checked. The run stopped before any output was ",
+                        "written rather than publishing an unchecked panel."), length(files)),
+         call. = FALSE)
+  ## A PATTERN THAT CANNOT BE EVALUATED IS AN ERROR, NOT A PASS -- the rule .bsHits() already
+  ## states for the leak scan. This swallowed the compile failure and returned character(0), so a
+  ## site whose construct pattern had a stray bracket published the construct with the gate green.
   hits <- unlist(lapply(patterns, function(p) {
-    m <- tryCatch(mk[grepl(p, mk, perl = TRUE, ignore.case = TRUE)], error = function(e) character(0))
+    m <- tryCatch(mk[grepl(p, mk, perl = TRUE, ignore.case = TRUE)],
+                  error = function(e) stop(sprintf(paste0(
+                    "acta.bundle_blocked_markers pattern '%s' could not be evaluated (%s). A ",
+                    "pattern that cannot run must not be read as 'this panel is publishable'."),
+                    p, conditionMessage(e)), call. = FALSE))
     if (length(m)) sprintf("%s (matched '%s')", paste(m, collapse = ", "), p) else character(0)
   }))
   if (!length(hits)) return(invisible(NULL))

@@ -30,12 +30,46 @@
 ## "one or more 5s" and matches 'lot 55'. Three of the four scanned CLEAN over a file that
 ## contained them. The natural thing to write here is a literal copied out of a leaked file, and
 ## a literal must work literally.
+## WHICH BUILT-IN PATTERNS ARE REGEXES, IN ONE PLACE.
+##
+## .bsHits() decides fixed-vs-regex BY NAME, and the name list was re-typed as a default argument
+## in five functions. A built-in regex whose name is missing from one of them is matched with
+## fixed = TRUE, so it matches nothing and that reader reports clean -- the fail-open shape this
+## file exists to prevent, reached by nothing worse than a copy-paste. One constant, five uses.
+ACTA_BUNDLE_REGEX <- c("an email address", "a UNC network path", "a non-local file:// URL")
+
 actaBundleScanPatterns <- function(extra = character(), extra_regex = character()) {
   home <- tryCatch(path.expand("~"), error = function(e) "")
   user <- tryCatch(Sys.info()[["user"]], error = function(e) "")
   node <- tryCatch(Sys.info()[["nodename"]], error = function(e) "")
+  ## EVERY SPELLING OF HOME THE DE-IDENTIFIER KNOWS, not just path.expand("~").
+  ##
+  ## This was one pattern, `path.expand("~")`. On Windows that is the DOCUMENTS folder, not the
+  ## profile root -- so the directory that actually NAMES THE ACCOUNT was not a blocking pattern
+  ## at all, and neither were the 8.3 short form or the opposite slash direction. The scanner's
+  ## notion of "home" was narrower than the de-identifier's, which meant the two controls guarding
+  ## the same value disagreed about what it is.
+  ##
+  ## actaHomePrefixes() already does this work and already guards the dangerous cases: it drops
+  ## anything 4 characters or shorter, drops the `C:\Users` / `/home` CONTAINERS (matching those
+  ## would rewrite a colleague's path and hide that it is foreign) and returns longest-first.
+  ##
+  ## DELIBERATELY NOT a blanket `[A-Za-z]:\` drive-letter pattern, which is what the security
+  ## review that prompted this first recommended. On Windows the CI workspace is `D:\a\<repo>\
+  ## <repo>` and an operator's data volume is routinely not C:, so a drive-letter rule would
+  ## refuse and DELETE every Windows bundle -- the exact incident this file already records under
+  ## "THE ROOT IS A PATH, NOT A PATTERN". A bare volume path names no person, machine or company;
+  ## the account, the node and the organisation each have their own pattern. Blocking must stay
+  ## targeted or it stops being used.
+  .homes <- tryCatch(actaHomePrefixes(), error = function(e) character(0))
+  .homes <- setdiff(.homes, c(home, ""))          # `home` keeps its own name below
+  .homes <- .homes[nchar(.homes) > 4L]
+  hp <- stats::setNames(as.list(.homes),
+                        if (length(.homes)) sprintf("home prefix %d", seq_along(.homes))
+                        else character(0))
   p <- c(
     "home directory"      = if (nzchar(home)) home else NA,
+    unlist(hp),
     "account name"        = if (nzchar(user)) user else NA,
     "machine name"        = if (nzchar(node)) node else NA,
     ## The account also appears path-encoded, with separators flattened to '-', in scratch and
@@ -56,6 +90,32 @@ actaBundleScanPatterns <- function(extra = character(), extra_regex = character(
     ## Windows syncs a shared library to `C:\Users\<u>\OneDrive - <Org>\`, which matches none of
     ## the macOS forms above, so the organisation name would have shipped unnoticed.
     "OneDrive for Windows" = "OneDrive - ",
+    ## A MAPPED NETWORK DRIVE IS THE ONE PATH SHAPE NONE OF THE ABOVE COVER, and it is the one
+    ## that names an internal SERVER rather than a local account. `\\fileserver\Flow\Titrations`
+    ## has no `C:\Users\`, no `/Users/`, no `CloudStorage` and no `OneDrive`; it is simply a
+    ## different vocabulary, and a core that keeps its FCS on a share rather than in OneDrive
+    ## would have published its file server's hostname in every FILENAME keyword with the gate
+    ## green. The .rels TargetMode="External" case is the same string by another route.
+    ##
+    ## REGEX, QUADRUPLED ON PURPOSE -- two literal backslashes, a host, a separator. Unlike the
+    ## fixed Windows path above, this one IS a pattern, so the escaping that was wrong there is
+    ## right here; it is asserted in both directions in test_bundle_scan.R rather than reasoned
+    ## about, because this file has already been bitten once in each direction.
+    ##
+    ## It also catches a DOUBLED Windows path (`C:\\Users\\...`, written by anything that escapes
+    ## its own output), which the fixed pattern above cannot match. That is a correct block under
+    ## a slightly wrong label, and better than the miss.
+    "a UNC network path"  = "\\\\\\\\[A-Za-z0-9._$-]+\\\\[A-Za-z0-9._$-]",
+    ## A file:// URL WITH AN AUTHORITY names a host. A `file://` URL whose path is a POSIX home
+    ## directory is already covered by the POSIX pattern above, and a localhost authority names
+    ## nothing, so only the third form is new -- and it is the form Excel writes into `_rels` for
+    ## a link to a share.
+    ##
+    ## DELIBERATELY NOT A GENERAL HOSTNAME RULE. Masking bare FQDNs was tried and removed twice:
+    ## .local and .internal are configuration suffixes as often as they are hosts, and the result
+    ## was two rounds of over-redaction on correct bundles. This fires only on a file:// authority,
+    ## which has no legitimate reason to be in a published artefact at all.
+    "a non-local file:// URL" = "file://(?![/?#])(?!localhost([/?#]|$))[A-Za-z0-9._%-]",
     "an email address"    = "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}")
   p <- p[!is.na(p)]
   ## Validated HERE, once, so a broken pattern stops the scan instead of quietly matching nothing.
@@ -107,7 +167,7 @@ actaBundleSeverity <- function(pattern)
 ## not one literal lot number. It is also the safer default here: a literal passed as a regex
 ## over-matches slightly (a "." matching any character), and for a leak scan over-matching costs
 ## a glance while under-matching costs a disclosure.
-.bsHits <- function(txt, pats, where, regex_names = c("an email address")) {
+.bsHits <- function(txt, pats, where, regex_names = ACTA_BUNDLE_REGEX) {
   out <- list()
   for (nm in names(pats)) {
     fx <- !(nm %in% regex_names)
@@ -149,7 +209,7 @@ actaBundleSeverity <- function(pattern)
 
 ## Every keyword of every FCS. Read as STRUCTURE: read.FCSheader() returns the TEXT segment's
 ## keywords, which is where FILENAME lives and where a text grep over a binary would miss it.
-.bsFcs <- function(f, rel, pats, rx = "an email address") {
+.bsFcs <- function(f, rel, pats, rx = ACTA_BUNDLE_REGEX) {
   k <- tryCatch(flowCore::read.FCSheader(f)[[1]], error = function(e) NULL)
   if (is.null(k)) return(.bsUnread(sprintf("%s [FCS]", rel),
                                    "read.FCSheader() could not parse this file"))
@@ -167,7 +227,7 @@ actaBundleSeverity <- function(pattern)
 }
 
 ## An xlsx is a zip: unpack it and read the XML, or the sweep is theatre.
-.bsXlsx <- function(f, rel, pats, rx = "an email address") {
+.bsXlsx <- function(f, rel, pats, rx = ACTA_BUNDLE_REGEX) {
   d <- file.path(tempdir(), sprintf("bs_%s", basename(tempfile(""))))
   on.exit(unlink(d, recursive = TRUE), add = TRUE)
   ## TEST WHAT CAME OUT, NOT WHETHER IT THREW. utils::unzip() WARNS on a corrupt archive and
@@ -193,7 +253,7 @@ actaBundleSeverity <- function(pattern)
 }
 
 ## A PDF's text is Flate-encoded; pdf_text() is the decompressed view.
-.bsPdf <- function(f, rel, pats, rx = "an email address") {
+.bsPdf <- function(f, rel, pats, rx = ACTA_BUNDLE_REGEX) {
   if (!requireNamespace("pdftools", quietly = TRUE))
     return(.bsUnread(sprintf("%s [pdf]", rel),
                      "pdftools is not installed, so this PDF's text was never read"))
@@ -210,8 +270,8 @@ actaBundleSeverity <- function(pattern)
 ## @return A data frame of findings, one row per file x pattern. Zero rows means clean.
 actaBundleScan <- function(path, extra = character(), extra_regex = character(), quiet = FALSE) {
   pats <- actaBundleScanPatterns(extra, extra_regex)
-  ## Only the built-in email rule and explicitly-declared regexes are treated as patterns.
-  rx   <- c("an email address", names(extra_regex))
+  ## Only the built-in regex rules and explicitly-declared ones are treated as patterns.
+  rx   <- c(ACTA_BUNDLE_REGEX, names(extra_regex))
   root <- path
   if (grepl("[.]zip$", path, ignore.case = TRUE)) {
     root <- file.path(tempdir(), sprintf("bscan_%s", basename(tempfile(""))))

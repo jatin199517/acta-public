@@ -4485,28 +4485,102 @@ makeGateLayoutGreatAgain <- function(gs, sc, titlePrefix, abChannel, methodLabel
 ## The flowSet's pData is still correct at this point, so it is the source of truth. Only columns
 ## that actually differ are touched, and only where both sides are character, so a legitimately
 ## numeric column is left alone. Matched on sample name rather than row order.
+## pData IN A STABLE COLUMN ORDER, because `pData(gs) <- ` does not preserve the one it is given.
+##
+## IT IS VERSION-DEPENDENT, which is the strongest reason to normalise it rather than the weakest.
+## flowWorkspace 4.22.1 (macOS, R 4.5) REORDERS on assignment; the build that ships with R release
+## on ubuntu-latest and windows-latest (checked 2026-11-12) PRESERVES the order. So without this
+## function the TitrationExport's column order depends on which flowWorkspace the operator has
+## installed, and two correct runs of the same data diff as changed across machines. With it, every
+## build produces the order GatingSet() handed out -- a no-op where the setter behaves, a repair
+## where it does not. test_pdata_restore.R reports which build it is running on.
+##
+## MEASURED on flowWorkspace 4.22.1, three seeds, identical every time: a flowSet whose pData reads
+## `name Row Lot_Num Zed Alpha` becomes `Row Zed name Lot_Num Alpha` inside GatingSet(), and ANY
+## subsequent assignment -- including handing back the exact frame that was just read -- rewrites it
+## again to `name Lot_Num Alpha Zed Row`. The second order is stable and idempotent, so it is not
+## random; it is simply a DIFFERENT order, reached only when something assigns.
+##
+## In ACTA the only thing that assigns is actaRestorePData(), and it assigns only when there was a
+## mangling to repair. pData seeds the stats frame, and the stats frame's trailing columns are the
+## export's trailing columns -- so the TitrationExport's column order depended on whether the run
+## happened to need a repair. Two runs of the same panel differing only in that one sits in plate
+## row F produced differently-ordered sheets, which is exactly the kind of difference that makes a
+## published dataset look unreproducible to someone diffing two of them.
+##
+## The setter cannot be made to honour an order (reassigning the desired order yields the same
+## rewrite), so the order is restored AT READ TIME against the order recorded before the repair.
+## Columns `order` does not name keep their relative position at the end, so this can never drop
+## or duplicate a column -- it only reorders what it is given.
+actaPData <- function(gs, order = NULL) {
+  p <- flowWorkspace::pData(gs)
+  if (is.null(order) || !length(order)) return(p)
+  keep <- c(intersect(order, names(p)), setdiff(names(p), order))
+  p[, keep, drop = FALSE]
+}
+
 actaRestorePData <- function(gs, fs, quiet = FALSE) {
   pf <- flowWorkspace::pData(fs); pg <- flowWorkspace::pData(gs)
   if (is.null(pf) || is.null(pg) || !nrow(pg)) return(invisible(gs))
   key <- if ("name" %in% names(pf) && "name" %in% names(pg)) "name" else NULL
   idx <- if (is.null(key)) match(rownames(pg), rownames(pf)) else match(pg[[key]], pf[[key]])
   if (anyNA(idx)) return(invisible(gs))
-  ## ONLY zero-padded values are restored, and only the cells that differ.
+  ## RESTORE EVERY CHANGED CELL EXCEPT A BENIGN RENUMBERING. The test is on what must be KEPT,
+  ## not on which manglings are known.
   ##
-  ## Restoring every changed cell was wrong: the layout stores small stain volumes in Excel
-  ## scientific notation ("3.90625E-2") and GatingSet's reparse NORMALISES them to "0.0390625",
-  ## which is strictly better for anyone reading the export. A blanket restore undid that, so the
-  ## fix for one cosmetic problem introduced another. Caught by the regression gate.
+  ## This guard used to allow-list ONE mangling -- zero-padding -- and that is why the row-F defect
+  ## shipped: a group sitting entirely in plate row F gives GatingSet() a pData column whose every
+  ## value is "F", it reparses the column as logical, and the export reports the plate row as
+  ## "FALSE". Found by a reader of a published bundle, not by this function, because a guard that
+  ## enumerates known faults cannot catch the one nobody enumerated.
   ##
-  ## Numeric equality cannot tell the two cases apart -- "001" and "1" are equal too -- so the
-  ## discriminator is zero-PADDING: a leading zero immediately followed by another digit. That
-  ## matches an identifier ("001", "0042", "-007") and not a decimal ("0.039") or an exponent.
-  padded <- function(x) grepl("^\\s*-?0[0-9]", x)
+  ## The failure mode was then measured rather than reasoned about: 30 single-shape character
+  ## columns through GatingSet() on flowWorkspace 4.22.1, of which SEVEN are rewritten --
+  ##
+  ##   "F","F","F"        -> "FALSE"      a plate row, a Fresh/Frozen flag, a fix/perm column
+  ##   "T","T","T"        -> "TRUE"       the same, one letter over
+  ##   "001"              -> "1"          zero-padded identifier
+  ##   "-007"             -> "-7"         ditto, signed
+  ##   "0x1A"             -> "26"         R parses hex: the identifier becomes a different string
+  ##   "+42"              -> "42"         redundant sign dropped
+  ##   "3.90625E-2"       -> "0.0390625"  Excel scientific notation normalised
+  ##
+  ## A MIXED column survives ("A","B","F" is untouched), which is why this hid for so long: it
+  ## needs a group confined to one plate row to show up at all.
+  ##
+  ## Only the last two lose nothing -- they re-render the same plain decimal number -- and the
+  ## scientific-notation one is a genuine improvement for anyone reading the export, which an
+  ## earlier blanket restore undid and the regression gate caught. So those are the exception and
+  ## everything else is corruption: restore unless `a` and `b` are both plain decimal numerals of
+  ## equal value AND `a` is not zero-padded (zero-padding is meaning, not formatting).
+  ##
+  ## `plain_num` is what keeps "0x1A" on the corruption side: as.numeric() parses it to 26 and
+  ## numeric equality alone would call that a renumbering.
+  padded    <- function(x) grepl("^\\s*[+-]?0[0-9]", x)
+  plain_num <- function(x) grepl("^\\s*[+-]?([0-9]+\\.?[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?\\s*$", x)
+  ## AND NO MORE THAN 15 DIGITS IN THE STRING -- digits, not significant digits, and the
+  ## difference is deliberate. Counting every digit means a leading "0." costs two of the budget,
+  ## so a few long decimals are restored that a significant-digit count would have kept. That errs
+  ## in the SAFE direction (over-restore, never under-restore) and needs no parsing to decide.
+  ## The bound exists because beyond it the comparison below stops being
+  ## able to tell a re-rendering from a corruption. `na == nb` is exact DOUBLE equality, and a
+  ## double represents integers exactly only up to 2^53 (~9.0e15). Above it two DIFFERENT digit
+  ## strings collapse to the same double and the mangled one would be declared benign and ship:
+  ## measured through a real GatingSet(), "20250101123456789" came back "20250101123456788" and
+  ## "1000000000000000" came back "1e+15", both of which this test called equal. 15 digits is the
+  ## most a double is guaranteed to round-trip, so anything longer is treated as an identifier and
+  ## restored. (all.equal() would be WORSE here, not better -- it calls those equal too.)
+  digits15 <- function(x) nchar(gsub("[^0-9]", "", x)) <= 15L
+  renumbered <- function(a, b) {
+    ok <- plain_num(a) & plain_num(b) & !padded(a) & digits15(a) & digits15(b)
+    na <- suppressWarnings(as.numeric(a)); nb <- suppressWarnings(as.numeric(b))
+    ok & !is.na(na) & !is.na(nb) & na == nb
+  }
   fixed <- character(0)
   for (cn in intersect(names(pf), names(pg))) {
     a <- pf[[cn]][idx]; b <- pg[[cn]]
     if (!is.character(a) || !is.character(b)) next
-    hit <- !is.na(a) & !is.na(b) & a != b & padded(a)
+    hit <- !is.na(a) & !is.na(b) & a != b & !renumbered(a, b)
     if (any(hit)) { pg[[cn]][hit] <- a[hit]; fixed <- c(fixed, cn) }
   }
   if (length(fixed)) {
@@ -7271,15 +7345,41 @@ actaDeIdentifyText <- function(x, user = tryCatch(Sys.info()[["user"]], error = 
   ## redaction below matches on: with HOME=/Users/<short>, "/Users/<short>hn/Lab/run.log" came out
   ## "~hn/Lab/run.log" with the separator eaten. The account fragment survived, the separator was swallowed, and v3.0.12
   ## rendered the same line correctly -- so it was a regression against what is already public.
-  ## \Q..\E quotes the prefix so a home containing regex metacharacters cannot misbehave.
+  ## QUOTED PER CHARACTER, NOT WITH \Q..\E -- and that distinction is the whole of a HIGH finding.
+  ##
+  ## \Q..\E stops quoting at the first `\E` IN THE VALUE. On Windows every separator is a
+  ## backslash, so any path segment beginning with E produces a literal `\E` and ends the quote
+  ## early; what follows is parsed as a regex, stays VALID, and matches nothing. The function then
+  ## returns its input unchanged WITH NO ERROR -- a redaction that silently does not redact.
+  ##
+  ## MEASURED (R 4.5, perl = TRUE):
+  ##     C:\Users\<acct>       -> redacted            C:\Users\Emma         -> NOT REDACTED
+  ##     /Users/<acct>         -> redacted            D:\Experiments\flow   -> NOT REDACTED
+  ##     /home/Emma            -> redacted            C:\Users\Eva          -> NOT REDACTED
+  ## POSIX is immune because its separator is `/`, which is why macOS and Linux testing could
+  ## never see this and why it survived into a published release.
+  ##
+  ## WHY IT MATTERS MORE HERE THAN ANYWHERE ELSE: this function is the first pass of
+  ## actaDiagScrub(), whose own header says the app "tells the operator what this file does and
+  ## does not carry, and they send it on that". That file is an UNSCANNED egress --
+  ## actaBundleScan() never sees it -- so the operator forwards their own account name, and
+  ## through the OneDrive path the company and programme, on ACTA's assurance that it is clean.
+  ##
+  ## .tpReEsc() escapes every non-alphanumeric individually, so there is no sentinel for an input
+  ## to terminate. SAME DEFECT, SAME DAY, TWO OTHER FILES: .tpApplyRepl() in
+  ## TiterPubs_template_mapper.R and the three sub() sites in tests/legacy/set_workbook_cells.R.
+  ## (The \Q..\E at ~:7530 is NOT this bug: it quotes ACTA_VOLUME_MARK, a package constant with no
+  ## backslash in it. Left as it is, and noted here so it is not "fixed" or copied by mistake.)
   for (h in actaHomePrefixes())
-    x <- gsub(paste0("\\Q", h, "\\E(?=[/\\\\]|$)"), "~", x, perl = TRUE)
+    x <- gsub(paste0(.tpReEsc(h), "(?=[/\\\\]|$)"), "~", x, perl = TRUE)
   ## AND THE MOUNT POINT, AFTER the homes so the longer, more specific prefix always wins: a path
   ## under the home becomes ~, and only what is left on the same volume becomes the marker. Same
   ## boundary lookahead, for the same reason -- a bare substring match would eat the separator and
   ## half-rewrite a sibling volume whose name starts the same way ("Data" and "Data2").
+  ## Per character, for the reason set out above: a mount prefix is backslash-separated on
+  ## Windows too, so `D:\Experiments` ends a \Q..\E quote at its own second segment.
   for (m in actaMountPrefixes())
-    x <- gsub(paste0("\\Q", m, "\\E(?=[/\\\\]|$)"), ACTA_VOLUME_MARK, x, perl = TRUE)
+    x <- gsub(paste0(.tpReEsc(m), "(?=[/\\\\]|$)"), ACTA_VOLUME_MARK, x, perl = TRUE)
   .node <- tryCatch(Sys.info()[["nodename"]], error = function(e) "")
   if (nzchar(.node) && nchar(.node) > 3L) x <- gsub(.node, "<redacted-host>", x, fixed = TRUE)
   ## AND THE LOGIN NAME, which nothing masked outside of a path. It survived only where the login
@@ -7294,7 +7394,10 @@ actaDeIdentifyText <- function(x, user = tryCatch(Sys.info()[["user"]], error = 
   ## likely to be the account than the English.
   .u <- if (length(user) == 1L && !is.na(user)) as.character(user) else ""
   if (nzchar(.u) && nchar(.u) >= 4L)
-    x <- gsub(sprintf("(?<![A-Za-z0-9])\\Q%s\\E(?![A-Za-z0-9])", .u),
+    ## AND THE LOGIN, same treatment. A Windows domain login is `DOMAIN\\user`, so this arm can
+    ## carry a backslash too -- and an account whose domain or name begins with E would have gone
+    ## unmasked by the identical mechanism.
+    x <- gsub(sprintf("(?<![A-Za-z0-9])%s(?![A-Za-z0-9])", .tpReEsc(.u)),
               "<redacted-user>", x, perl = TRUE)
   ## THE LOCAL PART IS UNICODE-AWARE TOO. It was [A-Za-z0-9._%+-], so an accented given name or an
   ## apostrophe stopped the match partway and left a FRAGMENT glued to the marker: a name with an

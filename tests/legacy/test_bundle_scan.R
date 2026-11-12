@@ -208,6 +208,51 @@ chk("a real Windows user path BLOCKS", "a Windows user path" %in% rw$pattern,
 chk("the Windows OneDrive form, which matches none of the macOS patterns, BLOCKS",
     "OneDrive for Windows" %in% rw$pattern)
 
+cat("-- a mapped network drive, the one path shape none of the above cover --\n")
+## A core that keeps its FCS on a share rather than in OneDrive writes `\\server\Flow\...` into
+## every FILENAME keyword. That string has no C:\Users\, no /Users/, no CloudStorage and no
+## OneDrive, so it passed every blocking pattern -- while naming an internal file server, which is
+## precisely what the blocking set is for. Same string reaches `_rels` as a file:// authority.
+uncDir <- file.path(tempdir(), paste0("bsunc_", basename(tempfile(""))))
+dir.create(uncDir, recursive = TRUE)
+writeLines(paste0("$FIL = ", bs, bs, "NAS01", bs, "Flow", bs, "Titrations", bs, "run.fcs"),
+           file.path(uncDir, "t.txt"))
+ru <- scan_(uncDir, quiet = TRUE)
+chk("a UNC path BLOCKS", "a UNC network path" %in% ru$pattern,
+    paste(ru$pattern, collapse = ", "))
+chk("...and nothing else in the blocking set was already catching it",
+    identical(setdiff(ru$pattern, "a UNC network path"), character(0)),
+    paste(ru$pattern, collapse = ", "))
+
+relDir <- file.path(tempdir(), paste0("bsrel_", basename(tempfile(""))))
+dir.create(relDir, recursive = TRUE)
+writeLines('<Relationship TargetMode="External" Target="file://NAS01/Flow/map.xlsx"/>',
+           file.path(relDir, "t.txt"))
+rr <- scan_(relDir, quiet = TRUE)
+chk("a file:// URL with a HOST blocks", "a non-local file:// URL" %in% rr$pattern,
+    paste(rr$pattern, collapse = ", "))
+
+## THE QUIET HALF, and the half that matters most here: general FQDN masking was added and
+## REMOVED TWICE for over-redaction, so these two patterns must fire on a host-bearing path and
+## on nothing else. file:///Users/ is already the POSIX rule's job; localhost names nothing.
+quietDir <- file.path(tempdir(), paste0("bsq_", basename(tempfile(""))))
+dir.create(quietDir, recursive = TRUE)
+writeLines(c("file://localhost/tmp/run.fcs", "file:///C:/Temp/run.fcs",
+             "CD4 BV421 clone RPA-T4", "p < 0.05", "5 / 95 split",
+             "see acta.internal for the SOP", "host flowcore.corp.example.com"),
+           file.path(quietDir, "t.txt"))
+rq <- scan_(quietDir, quiet = TRUE)
+chk("neither new pattern fires on a localhost, drive-letter or bare-hostname line",
+    !any(c("a UNC network path", "a non-local file:// URL") %in% rq$pattern),
+    paste(rq$pattern, collapse = ", "))
+
+## .bsHits() picks fixed-vs-regex BY NAME. A built-in regex missing from that list is matched
+## literally, matches nothing, and the reader reports CLEAN. Assert the list is the one constant.
+chk("every built-in regex pattern is declared in ACTA_BUNDLE_REGEX",
+    all(ACTA:::ACTA_BUNDLE_REGEX %in% names(ACTA:::actaBundleScanPatterns())),
+    paste(setdiff(ACTA:::ACTA_BUNDLE_REGEX, names(ACTA:::actaBundleScanPatterns())),
+          collapse = ", "))
+
 cat("-- the bundled workbook must not name the operator in docProps --\n")
 ## docProps/core.xml and app.xml were reached by NOTHING on the bundle path: .tpCleanWorkbook only
 ## dropped parts, and .tpApplyRepl (which both the scrub and the e-mail strip route through)

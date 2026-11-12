@@ -2075,8 +2075,18 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
   ## was ONE counter across all keys, so the replacements that DID land masked the one that did
   ## not. The bundle gate cannot compensate: it has no pattern for an operator code or an ELN ID.
   ##
-  ## \Q...\E quotes the value, so a catalogue number or panel name full of regex syntax is still
-  ## matched literally -- the property the old fixed = TRUE was there for.
+  ## The value is quoted CHARACTER BY CHARACTER (.tpReEsc), so a catalogue number or panel name
+  ## full of regex syntax is still matched literally -- the property the old fixed = TRUE was
+  ## there for.
+  ##
+  ## IT USED TO BE \Q...\E, AND \Q...\E HAS A SENTINEL. PCRE stops quoting at the first `\E` IN
+  ## THE VALUE, and .tpEsc() escapes the five XML entities -- it never touches a backslash -- so a
+  ## cell holding one reaches the pattern intact. A Windows path typed into SOP or Sample_Details
+  ## is the realistic carrier: `C:\ELN\Exports\...`. Measured on `a\Ed`: the pattern no longer
+  ## matched its OWN value, and instead matched `<t>ad</t>` -- an unrelated cell rewritten to the
+  ## confidential placeholder, with `hitKey` set TRUE so the "every key must hit" post-condition
+  ## passed and the bundle shipped. Corruption with every control green, which is the one outcome
+  ## this file is written to prevent. Per-character escaping has no sentinel to find.
   ## The strict post-condition governs the CONFIDENTIAL keys only. A `within` key is an optional
   ## pointer -- the workbook may legitimately not mention that file -- so it is excluded from the
   ## "every key must hit" rule rather than weakening that rule for everything.
@@ -2087,7 +2097,7 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
     if (!file.exists(fp)) next
     x <- paste(readLines(fp, warn = FALSE), collapse = "\n"); was <- x
     for (from in strict) {
-      pat <- sprintf("<t([^>]*)>\\s*\\Q%s\\E\\s*</t>", .tpEsc(from))
+      pat <- sprintf("<t([^>]*)>\\s*%s\\s*</t>", .tpReEsc(.tpEsc(from)))
       if (grepl(pat, x, perl = TRUE)) {
         ## Backslashes doubled: this is a replacement string, where they are backreference syntax.
         to <- gsub("\\\\", "\\\\\\\\", .tpEsc(repl[[from]]))
@@ -2227,7 +2237,7 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
 ## means, and the one that disagreed silently would be the one that leaks.
 .tpScrubMap <- function(path, eln = NULL) {
   if (!file.exists(path)) return(list())
-  tryCatch({
+  repl <- tryCatch({
     lp <- suppressMessages(readxl::read_excel(path, sheet = "Layout_Plate", col_types = "text"))
     names(lp) <- actaStripHeaderAnnotation(names(lp))
     tgt <- intersect(c(names(ACTA_SCRUB_CONFIDENTIAL), "Costain_Panel_Iteration"), names(lp))
@@ -2257,14 +2267,36 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
     if (!is.null(eln) && length(eln) == 1L && !is.na(eln) && nzchar(eln))
       scrubRepl[["ELN_ID"]] <- as.character(eln)
     repl <- list()
+    ## ONE VALUE IN TWO SCRUB COLUMNS IS AMBIGUOUS, and it resolved as last-writer-wins.
+    ##
+    ## `repl[[z]] <- ...` simply overwrites, so a value that appears in two of the scrubbed columns
+    ## produced ONE map entry and whichever column came later in `tgt` decided what it became. The
+    ## realistic form is an ELN_ID that is also typed into Costain_Panel_Iteration, which publishes
+    ## the experiment id as "Iteration1" -- or the reverse, which publishes the iteration as the ELN
+    ## placeholder and silently merges two panels in the re-run inventory. Either way the OTHER
+    ## column's value is wrong in the bundle and every control reports success, because the map is
+    ## self-consistent: .tpApplyRepl()'s post-condition only asks that each key HIT something, and
+    ## .tpSiteTokens() seeds the leak scan from this same map, so it looks for the value that WAS
+    ## replaced and never for the column that was mis-replaced.
+    ##
+    ## There is no right answer to pick -- the two columns genuinely disagree about what the value
+    ## should become -- so it is recorded and stopped on, like the cross-column collision below.
+    ## `owner` is a plain list so a value with regex or `[[`-unfriendly characters is still a key.
+    ambig <- list()
+    owner <- list()
     for (cn in tgt) {
       v <- unique(trimws(stats::na.omit(as.character(lp[[cn]]))))
       v <- v[nzchar(v)]
       if (!length(v)) next
-      if (identical(cn, "Costain_Panel_Iteration"))
-        for (i in seq_along(v)) repl[[v[i]]] <- paste0(ACTA_SCRUB_ITERATION_PREFIX, i)
-      else
-        for (z in v) repl[[z]] <- scrubRepl[[cn]]
+      for (i in seq_along(v)) {
+        z   <- v[i]
+        new <- if (identical(cn, "Costain_Panel_Iteration"))
+                 paste0(ACTA_SCRUB_ITERATION_PREFIX, i) else scrubRepl[[cn]]
+        if (!is.null(repl[[z]]) && !identical(as.character(repl[[z]]), as.character(new)))
+          ambig[[z]] <- unique(c(ambig[[z]], owner[[z]], cn))
+        repl[[z]]  <- new
+        owner[[z]] <- cn
+      }
     }
 
     ## Cell_Type, WHEN THE SITE HAS RULES FOR IT -- and this map is the only thing that
@@ -2309,8 +2341,97 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
           repl[[was]] <- unname(ACTA_SCRUB_INFO[[k]])
       }
     }
+    ## COLLISION DETECTION, recorded here and ENFORCED OUTSIDE the handler below.
+    ##
+    ## This map is VALUE-keyed: every key rewrites any cell in the bundled workbook whose whole
+    ## text equals it. That is safe only while a confidential value is unique to its own column.
+    ## It is not always: `SOP` is free text and a lab may type a bare number into it -- OQ_Test1
+    ## and OQ_Test2 ship SOP = "001" -- and `sharedStrings.xml` is DEDUPLICATED, so one edit
+    ## rewrites every column holding that value at once. Measured: with SOP in the scrub, a
+    ## Lot_Num of "001" published as the SOP replacement, .tpApplyRepl() returned TRUE, and
+    ## .tpSiteTokens() classed "001" as `short` so the leak gate never re-checked it. Lot_Num is
+    ## the identifier actaRestorePData()'s own header calls "the one that matters".
+    ##
+    ## NOT silently skipped. Dropping the key would swap data corruption for a LEAK -- the
+    ## confidential value would simply stay in the bundled workbook with every control reporting
+    ## success, which is the failure mode this file exists to prevent. The run stops instead and
+    ## names the column, because the operator can fix it in one cell and nobody else can.
+    ## ONLY COLUMNS THE REWRITE CAN ACTUALLY REACH. `.tpApplyRepl()` matches whole `<t>` elements,
+    ## so it only ever touches cells Excel stored as STRINGS. A numeric cell is `<v>100</v>` and a
+    ## boolean is `<v>1</v>`; neither can be hit, so flagging them stops a run over a collision
+    ## that cannot happen. That is not hypothetical -- `Well_volume_uL` is the number 100 in all
+    ## four shipped workbooks, so an operator whose SOP is "100" was refused and told to go and
+    ## change a cell that was perfectly correct.
+    ##
+    ## Storage type comes from reading the sheet a SECOND time with readxl's own type guessing
+    ## (the first read forces "text" to get exact values). A column readxl calls numeric, logical
+    ## or Date is stored as `<v>` throughout; one it calls character holds strings. A MIXED column
+    ## comes back character, which keeps it in scope -- the conservative direction, and the one
+    ## that matters: "001" is text-stored precisely because of the leading zero, which is the
+    ## collision this guard exists for. If the second read fails for any reason, every column
+    ## stays in scope, so a reader that cannot read falls back to stricter, never looser.
+    reach <- tryCatch({
+      lpn <- suppressMessages(readxl::read_excel(path, sheet = "Layout_Plate"))
+      names(lpn) <- actaStripHeaderAnnotation(names(lpn))
+      vapply(names(lpn), function(cn) is.character(lpn[[cn]]), logical(1))
+    }, error = function(e) NULL)
+    cols <- setdiff(names(lp), c(tgt, "Cell_Type"))
+    if (!is.null(reach)) {
+      known <- intersect(cols, names(reach))
+      cols  <- c(setdiff(cols, known), known[reach[known]])
+    }
+    ## A KEY THAT ALREADY EQUALS ITS PLACEHOLDER IS NOT A COLLISION. .tpApplyRepl() drops those
+    ## keys outright (see its own note: OQ_Test2 ships ELN_Name = "ELN", which IS the placeholder),
+    ## so there is no rewrite to collide with -- the cell is already the correct published value
+    ## wherever it appears. Scanning them refused a workbook over a substitution that never runs.
+    scan <- names(repl)[vapply(names(repl),
+                               function(k) !identical(k, as.character(repl[[k]])), TRUE)]
+    coll <- list()
+    for (k in scan) {
+      hit <- cols[vapply(cols, function(cn)
+        any(trimws(as.character(lp[[cn]])) == k, na.rm = TRUE), logical(1))]
+      if (length(hit)) coll[[k]] <- hit
+    }
+    attr(repl, "acta_collisions") <- coll
+    ## AMBIGUITY IS NOT FILTERED BY `scan`, deliberately. If the last column to claim a value hands
+    ## it a placeholder equal to itself, the key is dropped by .tpApplyRepl() and the OTHER column's
+    ## cell ships RAW -- Operator = "ELN" alongside ELN_Name = "ELN" is the measured case, and it is
+    ## the worst one, not an exemption from it.
+    attr(repl, "acta_ambiguous")  <- ambig
     repl
   }, error = function(e) list())
+
+  ## OUTSIDE the tryCatch ON PURPOSE. That handler turns any error into list(), which
+  ## .tpScrubWorkbook() reads as "nothing to do" and reports success for -- so a stop() raised
+  ## inside would bundle a wholly unscrubbed workbook while every gate said clean. Fail-open is
+  ## exactly the shape this guard exists to avoid, so the check lives where it cannot be caught.
+  amb <- attr(repl, "acta_ambiguous")
+  if (length(amb)) {
+    msg <- vapply(names(amb), function(k)
+      sprintf("  one Layout_Plate value is in both of these scrubbed columns: %s",
+              paste(amb[[k]], collapse = ", ")), character(1))
+    stop(sprintf(paste0(
+      "ACTA: the same value appears in two columns that are scrubbed to DIFFERENT placeholders, ",
+      "so one of them would be published wrong.\n%s\nGive each column its own value in ",
+      "Layout_Plate and re-run (an ELN id typed into Costain_Panel_Iteration is the usual cause). ",
+      "The run is stopped rather than publishing a value under the other column's placeholder."),
+      paste(msg, collapse = "\n")), call. = FALSE)
+  }
+  coll <- attr(repl, "acta_collisions")
+  if (length(coll)) {
+    msg <- vapply(names(coll), function(k)
+      sprintf("  the confidential value in Layout_Plate also appears in: %s",
+              paste(coll[[k]], collapse = ", ")), character(1))
+    stop(sprintf(paste0(
+      "ACTA: a value being scrubbed is not unique to its own column, so replacing it would ",
+      "rewrite unrelated cells.\n%s\nChange that cell in Layout_Plate (a Lot_Num, PlateID or ",
+      "SOP that is a bare number is the usual cause) and re-run. The run is stopped rather than ",
+      "corrupting the bundle or leaving the value unscrubbed."),
+      paste(msg, collapse = "\n")), call. = FALSE)
+  }
+  attr(repl, "acta_collisions") <- NULL
+  attr(repl, "acta_ambiguous")  <- NULL
+  repl
 }
 
 ## Apply the map to a FILE NAME, on token boundaries only.

@@ -676,9 +676,15 @@ for(q in seq_along(antibody)){
   ## generic over both, so a later migration would not touch this line.
   fs_comp<-actaCompensate(fs, compMode, wd=getwd())
   gs<-GatingSet(fs_comp) ## Declares the empty gating set
-  ## GatingSet() reparses numeric-looking pData strings and drops leading zeros ("001" -> "1"),
-  ## which corrupts identifiers -- Lot_Num above all. Restore them from the flowSet, which is still
-  ## correct here. See actaRestorePData().
+  ## GatingSet() reparses pData STRINGS and hands back different ones: "001" -> "1" corrupts an
+  ## identifier, and a column whose every value is "F" -- a group sitting entirely in plate row F --
+  ## comes back as "FALSE". That one reached a published bundle. Restore from the flowSet, which is
+  ## still correct here. See actaRestorePData() for the measured table of what is rewritten and
+  ## which two cases are kept.
+  ## CAPTURED BEFORE THE REPAIR, used when the stats frame is seeded below. `pData(gs) <- ` does
+  ## not preserve the column order it is handed, so a run that needed a repair produced a
+  ## differently-ordered TitrationExport from one that did not -- see actaPData().
+  pdataOrder<-names(pData(gs))
   gs<-actaRestorePData(gs, fs_comp, quiet=TRUE)
   gs<-transform(gs, actaTransformerList(channels, actaTrans))
   ## Transformed view of the data, for the downstream axis-limit helpers that used to be
@@ -915,7 +921,9 @@ for(q in seq_along(antibody)){
   list_channels$ab<-c(pickForwardScatter(colnames(gs)), markerChannel)
   
   key<-plotLimits(cs_comp_trans, channels)
-  temp_df<-pData(gs)  |>  mutate(median_pos=0,median_neg=0,rsd_neg=0,SI=0)
+  ## actaPData(), not pData(): the stats frame seeded here is what the TitrationExport's trailing
+  ## columns are built from, and the restore above silently reorders them. See actaPData().
+  temp_df<-actaPData(gs, pdataOrder)  |>  mutate(median_pos=0,median_neg=0,rsd_neg=0,SI=0)
   sn<-sampleNames(gs)
   ## Parent population for the marker plots/stats: the marker gate row's OWN parent, read from the
   ## template. Was hardcoded "Live", which is right only while the marker gate hangs directly off
@@ -1201,8 +1209,16 @@ for(q in seq_along(antibody)){
     left_join(temp_df_MFI) |> 
     left_join(temp_df_parent) |> 
     mutate(SI=(pos-neg)/(2*robustSD)) |> 
-    rename("name"="sample") |> 
-    left_join(pData(gs)) |> 
+    rename("name"="sample") |>
+    ## THIS IS THE ORDER-BEARING READ, and for one release it was the one that got missed.
+    ##
+    ## left_join() appends the right frame's non-key columns IN THEIR OWN ORDER, so the pData
+    ## column order lands here and travels into `stats` and then into the TitrationExport. The
+    ## first attempt at this fix went to the `temp_df` at line ~926 -- which is OVERWRITTEN by
+    ## this very assignment, so it changed nothing that reaches a published artefact. Measured
+    ## on OQ_Test1: 28 of 29 pData columns move when the repair fires, and the export came out
+    ## byte-order-identical anyway, because the frame that was fixed is discarded.
+    left_join(actaPData(gs, pdataOrder)) |>
     dplyr::filter(!is.na(Dirname)) |> ## guards against wells with no matching layout row (e.g. undocumented/extra FCS files) leaking into stats/plots
     ##dplyr::filter(StainType!="Costain") |> 
     mutate(maxSI=max(SI), maxSI_StainQty=StainQty[SI==maxSI])  |> 

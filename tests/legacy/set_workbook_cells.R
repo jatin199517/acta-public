@@ -28,6 +28,19 @@ col_index <- function(L) { n <- 0L
 esc <- function(x) { x <- gsub("&","&amp;",x,fixed=TRUE); x <- gsub("<","&lt;",x,fixed=TRUE)
                      x <- gsub(">","&gt;",x,fixed=TRUE); gsub('"',"&quot;",x,fixed=TRUE) }
 
+## A BACKSLASH IN A sub() REPLACEMENT IS SYNTAX, NOT TEXT.
+##
+## Every write below goes through sub(pattern, new, row) with the CELL VALUE inside `new`. In an R
+## replacement string \1-\9 are backreferences and \\ is one literal backslash, so a value
+## carrying a backslash is silently rewritten: MEASURED on a canary cell, `a\Ed` was stored as
+## `aEd` -- the backslash and the E both gone, no error, every structural check clean.
+##
+## This is the SAME defect .tpApplyRepl() already fixes for the scrub (it doubles backslashes
+## before using a value as a replacement), reached here by a different route. It matters because
+## this tool is how the SHIPPED workbooks are edited -- a silent character loss here is a wrong
+## value in a published artefact, which is the whole class of fault this folder exists to catch.
+repEsc <- function(x) gsub("\\\\", "\\\\\\\\", x)
+
 tmp <- file.path(tempdir(), paste0("sc_", basename(tempfile(""))))
 dir.create(tmp, recursive = TRUE)
 parts <- utils::unzip(path, list = TRUE)$Name
@@ -64,7 +77,7 @@ for (r in rows) {
     new  <- if (!nzchar(val)) "" else
       sprintf('<c r="%s"%s t="inlineStr"><is><t>%s</t></is></c>',
               ref, if (is.null(sty)) "" else sprintf(' s="%s"', sty), esc(val))
-    if (length(cur)) { row <- sub(cpat, new, row); n <- n + 1L }
+    if (length(cur)) { row <- sub(cpat, repEsc(new), row); n <- n + 1L }
     else if (nzchar(val)) {
       ## INSERTED IN COLUMN ORDER, NOT APPENDED.
       ##
@@ -80,12 +93,12 @@ for (r in rows) {
         L <- sub('<c r="([A-Z]+)[0-9]+"', "\\1", c0)
         if (col_index(L) > col_index(col)) { after <- c0; break }
       }
-      row <- if (is.na(after)) sub("</row>", paste0(new, "</row>"), row)
+      row <- if (is.na(after)) sub("</row>", repEsc(paste0(new, "</row>")), row)
              else sub(after, paste0(new, after), row, fixed = TRUE)
       n <- n + 1L
     }
   }
-  x <- sub(rpat, row, x)
+  x <- sub(rpat, repEsc(row), x)
 }
 writeLines(x, spath, useBytes = TRUE)
 

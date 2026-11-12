@@ -996,6 +996,64 @@ local({
   for (.p in c("/Users/someone", "C:\\Users\\someone", "/home/someone"))
     chk(sprintf("actaPathLabel redacts a path that IS an account (%s)", .p),
         identical(h$actaPathLabel(.p), "<redacted>"))
+
+  ## ---------------------------------------------------------------------------------------
+  ## A PREFIX WHOSE SEGMENT BEGINS WITH `E`, which is the shape that broke this for a release.
+  ##
+  ## actaDeIdentifyText() quoted the prefix with \Q..\E. PCRE ends that quote at the first `\E`
+  ## IN THE VALUE, and on Windows every separator is a backslash -- so `C:\Users\Emma` ends its
+  ## own quote at `\E`mma, the remainder parses as a VALID regex that matches nothing, and the
+  ## function returned its input unchanged with no error. A redaction that does not redact.
+  ##
+  ## EVERY FIXTURE IN THIS FILE WAS BENIGN -- someone, Smith John, RUNNER~1 -- so the whole suite
+  ## stayed green. Same lesson as the canary column in OQ_Test1: a fixture that cannot express
+  ## the hazard cannot catch it. These are the hazard.
+  ##
+  ## It matters here more than anywhere because actaDiagScrub() feeds the diagnostic file the app
+  ## tells the operator is safe to send, and no leak scan ever sees that file.
+  .deid <- function(h0, sample) h$actaDeIdentifyText(sample, user = "zzzz-not-a-match")
+  for (.h in c("C:\\Users\\Emma", "C:\\Users\\Eva", "D:\\Experiments\\flow",
+               "C:\\Users\\someone", "/home/Emma")) {
+    .sep <- if (grepl("\\", .h, fixed = TRUE)) "\\" else "/"
+    .line <- paste0(.h, .sep, "run.log")
+    .pat  <- paste0(ACTA:::.tpReEsc(.h), "(?=[/\\\\]|$)")
+    .out  <- tryCatch(gsub(.pat, "~", .line, perl = TRUE),
+                      error = function(e) paste("ERROR:", conditionMessage(e)))
+    chk(sprintf("a home prefix with an E-initial segment still redacts (%s)", .h),
+        identical(.out, paste0("~", .sep, "run.log")))
+  }
+  ## The superseded construct, re-applied here: if it would still redact `C:\Users\Emma`, this
+  ## file is not testing what it claims to.
+  .old <- function(hh, line)
+    tryCatch(gsub(paste0("\\Q", hh, "\\E(?=[/\\\\]|$)"), "~", line, perl = TRUE),
+             error = function(e) line)
+  chk("...and the superseded \\Q..\\E construct would NOT have redacted it",
+      identical(.old("C:\\Users\\Emma", "C:\\Users\\Emma\\run.log"), "C:\\Users\\Emma\\run.log"))
+  chk("...while it DID redact a benign prefix, so it was not simply inert",
+      identical(.old("C:\\Users\\someone", "C:\\Users\\someone\\run.log"), "~\\run.log"))
+  ## Escaping per character must not break on a prefix carrying regex or non-ASCII characters.
+  for (.h in c("/Volumes/\u00e9\u00e8-acct", "/Volumes/Data (2)", "/Volumes/o'acct", "D:\\a+b"))
+    chk(sprintf("a prefix with metacharacters still compiles and redacts (%s)", .h),
+        identical(tryCatch(gsub(paste0(ACTA:::.tpReEsc(.h), "(?=[/\\\\]|$)"), "~",
+                                paste0(.h, "/x.log"), perl = TRUE),
+                           error = function(e) "ERROR"), "~/x.log"))
+
+  ## M-1: the SCAN's notion of "home" must match the DE-IDENTIFIER's. It was path.expand("~")
+  ## alone, which on Windows is Documents -- so the profile root, the directory that actually
+  ## names the account, was not a blocking pattern. Seeded from actaHomePrefixes() now.
+  .pp <- ACTA:::actaBundleScanPatterns()
+  chk("the leak scan seeds its home patterns from actaHomePrefixes()",
+      sum(grepl("^home", names(.pp))) >= 1L)
+  chk("...with unique names, so none is silently never evaluated",
+      !anyDuplicated(names(.pp)))
+  ## AND NOT a blanket drive-letter rule: the Windows CI workspace is D:\a\<repo>\<repo> and an
+  ## operator's data volume is routinely not C:, so that would refuse and DELETE every Windows
+  ## bundle -- the incident bundle_scan.R already records.
+  .ciws <- "D:\\a\\acta-public\\acta-public\\run.fcs"
+  .rx <- ACTA:::ACTA_BUNDLE_REGEX
+  chk("a Windows CI workspace path is NOT blocked",
+      !any(vapply(names(.pp), function(nm)
+        isTRUE(grepl(.pp[[nm]], .ciws, fixed = !(nm %in% .rx), perl = nm %in% .rx)), TRUE)))
   ## AND THE keep = 2 PATH, which is the mechanism the whole basename fix rests on and which no
   ## test reached: deleting the ACTA_LABEL_PENULT filter left all sixteen scripts green, because
   ## the collapse pins keep = 1L explicitly and nothing else called keep = 2L. That default is
