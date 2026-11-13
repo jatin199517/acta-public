@@ -117,71 +117,14 @@ fill in a workbook, suggest gating arguments for a panel, or execute `run_acta()
 ![](assets/titerpubs-bundle.png)
 
 ACTA outputs can be shared on the [Metrdy/TiterPubs](https://metrdy.com/titerpubs) repository. ACTA
-creates a TiterPubs bundle (Zipped file containing ACTA outputs + FCS files) when you turn on
-the `titerpubs_export` toggle in the Info sheet of the instructions file. If you want certain details to stay anonymous in
-the submission, either leave them empty in the Info sheet or turn on the `scrub_confidential`
-toggle which scrubs certain details from your bundle (see image for details). It changes values
-inside your files but does not rename them, so keep confidential identifiers out of your file
-names — the FCS files, the instructions workbook, and the run folder itself, since the report
-prints the workbook's name.
-
-**`Test_Material` is published as you write it.** It reaches the bundle in three places — the
-instructions workbook, the export, and the submission template's `Cell type` field, which takes the
-menu term when your wording matches one and your own words otherwise. Nothing rewrites it for you,
-so keep donor and subject identifiers out of that cell. A site that needs its own vocabulary mapped
-can set `options(acta.cell_type_rules = ...)`; the rules are applied everywhere the material is
-published, including the copy of your workbook inside the bundle.
-
-**3.6.8 needs a new instructions template, and will say so.** The workbook carries
-`Info!Template_Version`, and ACTA stops with a message naming the file if it is older than 3.6.8 or
-missing. Four things moved. `Test_Material` is now `Cell_Type` and `Test_Material_Status` is now
-`Sample_Status`. `Tissue_Type` and `Culture_Status` are new `Layout_Plate` columns beside them.
-`flowjo_transformation_arg` moved from `Layout_Plate` to the Info sheet, because one transform
-covers a whole run and storing it per well meant reconciling identical cells. And the site option
-`acta.test_material_rules` is now `acta.cell_type_rules` — if you set the old name, ACTA stops
-rather than silently applying no rules. Download the current template and move your layout into it;
-there is no automatic migration, and a workbook edited to claim 3.6.8 while still carrying the old
-columns is refused too.
-
-**Tissue and cell type are separate answers.** TiterPubs has no `PBMC` option, so a material of
-`HD Human PBMCs` publishes `mononuclear cells` — which on its own could be marrow, cord blood or
-spleen. Put `Blood` in `Tissue_Type` and the pair says peripheral blood mononuclear cells in their
-own vocabulary. `Info!Tissue_Fallback` and `Info!Cell_Type_Fallback` fill a blank cell for a site
-that always titrates the same material; neither overrides an answer you gave, and both blank
-publishes blank. ACTA does not infer tissue from the material.
-
-**`Fresh or Frozen` is no longer filled in.** All four of that menu's options state both the thaw
-state and whether the cells were cultured, so a bare `Frozen` could only be published by also
-claiming no culture step. `Sample_Status` and `Culture_Status` travel in the bundled export as you
-wrote them instead.
-
-**Clonality comes from the inventory.** It is a `Clonality` column on the Master Panel Inventory's
-`Master` sheet, published as written; ACTA no longer infers `monoclonal` from a named clone. The
-inventory's optional `Lot_info` sheet supplies `Concentration for this Lot#`, matched on catalogue
-and lot. Any inventory column ACTA cannot find is skipped, not an error.
-
-**The staining protocol has its own field.** Put it in `Protocol_reference` on the Info sheet and
-it is published verbatim to the submission's `Protocol reference` column — a URL or a plain
-citation, whichever you have. Leave it blank and that column is empty. `Preparation_Protocol` is a
-different thing: the sample isolation method, for which TiterPubs offers a menu — ficoll, RBC
-lysis, mechanical dissociation and so on — and a value that is not on that menu is published in the
-off-menu row rather than dropped. `References` is a citation list, published as written and not
-parsed for anything. A workbook made before 3.6.7 has no `Protocol_reference` row; add one, or that
-column stays empty.
-
-The scrub replaces `ELN_ID` with one placeholder, so several scrubbed runs can read as the same
-experiment. To choose what a run publishes instead, add a row to the Info sheet with `Variable` set
-to `scrub_eln_placeholder` and your id in `Value` — the template does not ship that row, and
-without it the shipped constant is used. A set of related datasets can then be told apart without
-naming your notebook. The id becomes part of file names inside the bundle, so it may hold only
-letters, digits, dot, underscore and hyphen; anything else stops the run. It is advisable to
-fill in other information on the Info and `Layout_Plate` sheets to provide sufficient experimental
-and reagent context to the community to reproduce your titers under identical conditions. The
-bundle can be uploaded directly to the
-[TiterPubs repository](https://metrdy.com/titerpubs#contribute). More info can be found on Metrdy's
-[TiterGuide](https://metrdy.com/titerguide) webpage.
-
-`pdftools` is required for TiterPubs bundle generation. See the [installation](#installation) section for more info.
+creates a TiterPubs bundle (Zipped file containing ACTA outputs + FCS files) when you turn on the
+`titerpubs_export` toggle in the Info sheet of the instructions file. If you want certain details to
+stay anonymous in the submission, either leave them empty in the Info sheet or turn on the
+`scrub_confidential` toggle which scrubs certain details from your bundle (see image for details).
+It changes values inside your files but does not rename them, so keep confidential identifiers out
+of your file names — the FCS files, the instructions workbook, and the run folder itself, since the
+report prints the workbook's name. `pdftools` is required for TiterPubs bundle generation. See the
+[installation](#installation) section for more info.
 
 ## Components
 
