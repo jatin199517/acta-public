@@ -75,6 +75,9 @@ export("actaDiagnosticBundle")
 export("actaElnLabel")
 export("actaFirstError")
 export("actaOQRun")
+## The app's pre-flight row for the master panel inventory: which file the run will open, where
+## that choice came from, and whether the plate's declared co-stain panels are in it.
+export("actaPanelInventoryRecords")
 export("actaPrevalidateRecords")
 export("actaReadyMessage")
 export("actaRepairPath")

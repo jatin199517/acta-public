@@ -8,7 +8,7 @@ and optionally write the plots and render the PDF report.
 }
 \usage{
 run_acta(version_dir = getwd(), report = TRUE, plots = TRUE, quiet = FALSE,
-         code_dir = NULL)
+         code_dir = NULL, panel_inventory = NULL)
 }
 \arguments{
   \item{version_dir}{the working folder: the instructions workbook, \code{Titration_FCS/} and
@@ -21,6 +21,11 @@ run_acta(version_dir = getwd(), report = TRUE, plots = TRUE, quiet = FALSE,
     \code{NULL} (the default) means resolve it: \code{version_dir} when it looks like a flat
     checkout, otherwise the installed package's \code{inst/pipeline}. The fallback is announced in
     a message and recorded in \code{$code_dir} of the result, never silent.}
+  \item{panel_inventory}{a master panel inventory workbook to use for this run, outranking
+    \code{Info!master_panel_inventory_path}. \code{NULL} (the default) leaves the workbook and the
+    usual fallbacks in charge. Set for the duration of the call as
+    \code{options(acta.panel_inventory_override=)} and restored on exit, so two folders analysed
+    back to back cannot inherit each other's inventory.}
 }
 \details{
 \code{code_dir} is \emph{resolved}, not defaulted to \code{version_dir}. That was the old

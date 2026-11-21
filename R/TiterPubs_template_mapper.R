@@ -1327,12 +1327,56 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
 ##
 ## It is written with ACTA's own column names -- the same sheet shape the shipped example uses --
 ## so it is also a working starting point for a reader's own inventory.
-.tpWriteInventory <- function(panels, path) {
-  if (is.null(panels) || !length(panels)) return(invisible(NULL))
+## THE TITRATED REAGENT WAS MISSING FROM ITS OWN BUNDLE, and that is most of what this file is for.
+##
+## MEASURED 2026-11-21 across all seven deposited bundles: 0 of 15 titrated reagents appear in the
+## inventory their own bundle carries. The cause is structural rather than a slip -- this function
+## was written from `panels`, which holds CO-STAIN panel iterations, and a titrated reagent is by
+## definition not in its own co-stain panel (the rule .tpSelfCostain() now refuses on). So the one
+## reagent the submission is ABOUT was the one reagent the re-run inventory could not describe.
+##
+## What it cost, measured by re-running a deposited bundle and diffing the templates it rebuilt
+## against the ones inside it: `Antibody host species`, `Isotype` and `Clonality` went from
+## populated to BLANK on every re-run, on 3.6.11, 3.6.12 and 3.6.13 alike. Nothing published was
+## wrong -- the deposited bundle has the right values -- but the round trip lost them, which is
+## exactly the claim a bundle exists to support.
+##
+## THE TITRATED ROW CARRIES NO `Panel Iteration`, DELIBERATELY. That is what the lab master holds
+## for such a reagent, it is what keeps the row out of every co-stain composition on re-run (so
+## the self-costain refusal cannot fire on ACTA's own artefact), and .tpInvByCatalog() reads the
+## UNFILTERED rows precisely so an iteration-less row is still findable by catalogue. Giving it an
+## iteration instead would put the titrated reagent in its own panel -- the exact wrong data the
+## 3.6.12 refusal exists to catch.
+##
+## `Clonality` and `Species / Isotype` are filled for EVERY row, panel rows included: they were
+## never written at all, so even a co-stain reagent lost its isotype on re-run.
+.tpWriteInventory <- function(panels, path, stats = NULL, inv = NULL) {
+  if ((is.null(panels) || !length(panels)) && (is.null(stats) || !nrow(stats)))
+    return(invisible(NULL))
+  ## Clonality sits beside Clone, matching ACTA_PI_COLS' own order. Read back by NAME, so the
+  ## position is for a human opening the file.
   cols <- c("Antigen", "Fluorochrome", "Fluorochrome_Alias", "Marker_Alias", "Vendor", "Catalog",
-            "Supplier Cat", "Clone", "Species / Isotype", "Size", "Flow Cytometry Assay", "Type",
-            "Easy Panel name", "Easy Panel ID", "Subset Panel?", "Panel Iteration",
-            "Storage Temperature")
+            "Supplier Cat", "Clone", "Clonality", "Species / Isotype", "Size",
+            "Flow Cytometry Assay", "Type", "Easy Panel name", "Easy Panel ID", "Subset Panel?",
+            "Panel Iteration", "Storage Temperature")
+  .nz <- function(x) { x <- as.character(x); if (!length(x) || is.na(x[1])) "" else trimws(x[1]) }
+  .ck <- function(z) gsub("[^a-z0-9]", "", tolower(as.character(z)))
+  ## Fill from the inventory this run resolved, by catalogue. Never overwrites a value the panel
+  ## table already supplied -- that one came from the same inventory and has been normalised.
+  .fromInv <- function(r, catalog) {
+    if (is.null(inv) || .tpBlank(catalog)) return(r)
+    h <- tryCatch(.tpInvByCatalog(inv, catalog), error = function(e) NULL)
+    if (is.null(h) || !nrow(h)) return(r)
+    pick <- function(field, col)
+      if (!nzchar(r[[field]]) && col %in% names(h)) .nz(h[[col]][1]) else r[[field]]
+    r[["Antigen"]]           <- pick("Antigen", "antigen")
+    r[["Fluorochrome"]]      <- pick("Fluorochrome", "fluorochrome")
+    r[["Vendor"]]            <- pick("Vendor", "vendor")
+    r[["Clone"]]             <- pick("Clone", "clone")
+    r[["Clonality"]]         <- pick("Clonality", "clonality")
+    r[["Species / Isotype"]] <- pick("Species / Isotype", "isotype")
+    r
+  }
   rows <- list()
   for (nm in names(panels)) {
     tb <- panels[[nm]]$table
@@ -1363,22 +1407,91 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
       r[["Clone"]]           <- tb$Clone[i]        %||% ""
       r[["Type"]]            <- tb$Type[i]         %||% ""
       r[["Panel Iteration"]] <- nm
-      rows[[length(rows) + 1L]] <- ifelse(is.na(r), "", r)
+      r <- ifelse(is.na(r), "", r)
+      rows[[length(rows) + 1L]] <- .fromInv(r, r[["Catalog"]])
+    }
+  }
+
+  ## THE TITRATED REAGENTS, one row each, appended after the panels.
+  ##
+  ## `stats` is the same frame the per-reagent templates are built from, so the inventory and the
+  ## templates cannot disagree about which reagents this submission describes.
+  lotKeys <- list()
+  if (!is.null(stats) && nrow(stats)) {
+    have <- vapply(rows, function(z) .ck(z[["Catalog"]]), character(1))
+    for (i in seq_len(nrow(stats))) {
+      cat_ <- if ("Cat_Num" %in% names(stats)) .tpNorm(stats$Cat_Num[i]) else NA_character_
+      if (.tpBlank(cat_)) next
+      ## A reagent already written as a panel row is not duplicated. Self-costain makes this
+      ## impossible today; the guard costs nothing and keeps the file single-valued if it changes.
+      if (.ck(cat_) %in% have) next
+      r <- stats::setNames(rep("", length(cols)), cols)
+      .alias <- if ("Alias" %in% names(stats)) .tpNorm(stats$Alias[i]) else NA_character_
+      if (.tpBlank(.alias) && "Markername" %in% names(stats)) .alias <- .tpNorm(stats$Markername[i])
+      r[["Antigen"]]      <- if (.tpBlank(.alias)) "" else .alias
+      r[["Marker_Alias"]] <- r[["Antigen"]]
+      r[["Vendor"]]       <- if ("Vendor" %in% names(stats)) .nz(.tpNorm(stats$Vendor[i])) else ""
+      r[["Clone"]]        <- if ("Clone"  %in% names(stats)) .nz(.tpNorm(stats$Clone[i]))  else ""
+      r[["Catalog"]]      <- cat_
+      ## `Variable`, not `Base`: Type is what splits a titrated reagent from a co-stain, and the
+      ## published panel composition is the Base rows only.
+      r[["Type"]]            <- "Variable"
+      ## BLANK ON PURPOSE -- see the header. Not "none", not the run's iteration.
+      r[["Panel Iteration"]] <- ""
+      r <- ifelse(is.na(r), "", r)
+      r <- .fromInv(r, cat_)
+      ## The titrated reagent is the only one whose lot ACTA knows: the workbook states it. A
+      ## co-stain's lot is never recorded, so Lot_info can only ever cover these rows.
+      .lot <- if ("Lot_Num" %in% names(stats)) .tpNorm(stats$Lot_Num[i]) else NA_character_
+      if (!.tpBlank(.lot)) lotKeys[[length(lotKeys) + 1L]] <- c(cat_, .lot)
+      have <- c(have, .ck(cat_))
+      rows[[length(rows) + 1L]] <- r
     }
   }
   if (!length(rows)) return(invisible(NULL))
   m <- rbind(cols, do.call(rbind, rows))
 
+  ## The Lot_info sheet, when this run's inventory actually recorded a concentration for a lot we
+  ## are shipping. Written with ACTA_PI_LOT_COLS' own headers so .piLotInfo() reads it straight
+  ## back. No matching row means no sheet -- an inventory that does not track concentrations is
+  ## not a broken inventory, and an empty sheet would imply ACTA looked and found nothing.
+  lotM <- NULL
+  .lots <- if (is.null(inv)) NULL else attr(inv, "acta_lot_info")
+  if (!is.null(.lots) && is.data.frame(.lots) && nrow(.lots) && length(lotKeys)) {
+    keep <- list()
+    for (kk in lotKeys) {
+      h <- which(.ck(.lots$catalog) == .ck(kk[1]) & .ck(.lots$lot) == .ck(kk[2]))
+      if (!length(h)) next
+      ## A MATCHING ROW WITH A BLANK CONCENTRATION IS NOT A FACT. Measured on a real run: the lab
+      ## inventory lists both lots and records no concentration for either, which wrote a Lot_info
+      ## sheet whose only column of interest was empty -- a reader would take that as "ACTA looked
+      ## up the concentration and this is it". The value is the whole point of the sheet.
+      .cc <- .nz(.lots$concentration[h[1]])
+      if (!nzchar(.cc)) next
+      keep[[length(keep) + 1L]] <- c(.nz(.lots$catalog[h[1]]), .nz(.lots$lot[h[1]]), .cc)
+    }
+    if (length(keep))
+      lotM <- rbind(unname(ACTA_PI_LOT_COLS), do.call(rbind, keep))
+  }
+
   tmp <- file.path(tempdir(), sprintf("tpinv_%s", basename(tempfile(""))))
+  ## ONE OR TWO SHEETS, and every part that names them is derived from this list rather than
+  ## written twice. A hand-maintained second copy of the sheet order is how an OPC package ends
+  ## up internally inconsistent, which Excel reports as "repair" and every R reader shrugs at.
+  shts <- list(list(name = "Master", m = m))
+  if (!is.null(lotM)) shts[[length(shts) + 1L]] <- list(name = "Lot_info", m = lotM)
+  shPart <- sprintf("xl/worksheets/sheet%d.xml", seq_along(shts))
   parts <- c("[Content_Types].xml", "_rels/.rels", "xl/workbook.xml",
-             "xl/_rels/workbook.xml.rels", "docProps/core.xml", "xl/worksheets/sheet1.xml")
+             "xl/_rels/workbook.xml.rels", "docProps/core.xml", shPart)
   body <- list(
     '[Content_Types].xml' = paste0('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
       '<Default Extension="xml" ContentType="application/xml"/>',
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
-      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      paste0(sprintf(paste0('<Override PartName="/%s" ContentType="application/vnd.openxml',
+                            'formats-officedocument.spreadsheetml.worksheet+xml"/>'), shPart),
+             collapse = ""),
       '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>',
       '</Types>'),
     '_rels/.rels' = paste0('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
@@ -1389,10 +1502,17 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
     'xl/workbook.xml' = paste0('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ',
       'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-      '<sheets><sheet name="Master" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+      '<sheets>',
+      paste0(vapply(seq_along(shts), function(i)
+        sprintf('<sheet name="%s" sheetId="%d" r:id="rId%d"/>', shts[[i]]$name, i, i),
+        character(1)), collapse = ""),
+      '</sheets></workbook>'),
     'xl/_rels/workbook.xml.rels' = paste0('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
-      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+      paste0(vapply(seq_along(shts), function(i)
+        sprintf(paste0('<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/',
+                       'officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>'),
+                i, i), character(1)), collapse = ""),
       '</Relationships>'),
     ## A blank core.xml on purpose: a workbook with none gets one invented by a sync client, and
     ## the one it invents names whoever it was synced by.
@@ -1400,8 +1520,8 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
       '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ',
       'xmlns:dc="http://purl.org/dc/elements/1.1/">',
       '<dc:title>Panel inventory for this ACTA run</dc:title><dc:creator></dc:creator>',
-      '<cp:lastModifiedBy></cp:lastModifiedBy></cp:coreProperties>'),
-    'xl/worksheets/sheet1.xml' = .tpSheetXml(m))
+      '<cp:lastModifiedBy></cp:lastModifiedBy></cp:coreProperties>'))
+  for (i in seq_along(shts)) body[[shPart[i]]] <- .tpSheetXml(shts[[i]]$m)
   for (nm in parts) {
     f <- file.path(tmp, nm); dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
     writeLines(body[[nm]], f, useBytes = TRUE)
@@ -1746,8 +1866,14 @@ actaTiterPubsBundle <- function(stats, info, outputs_dir, template, run_dir = ou
   }
 
   ## The panel inventory this run resolved, so the bundle can resolve it again.
-  if (!is.null(panels) && length(panels)) {
-    iv <- .tpWriteInventory(panels, file.path(stage, "Master_Panel_Inventory.xlsx"))
+  ##
+  ## `stats` AND `inv` go in as well as `panels`. Without stats the TITRATED reagents -- the ones
+  ## the submission is about -- were absent from the file entirely; without inv nothing could fill
+  ## Clonality or the isotype. The guard drops the `panels` requirement for the same reason: a run
+  ## whose co-stain panel did not resolve still has reagents worth describing.
+  if ((!is.null(panels) && length(panels)) || nrow(stats)) {
+    iv <- .tpWriteInventory(panels, file.path(stage, "Master_Panel_Inventory.xlsx"),
+                            stats = stats, inv = inv)
     if (!is.null(iv)) message("  panel inventory written for re-runs (Master_Panel_Inventory.xlsx)")
   }
 

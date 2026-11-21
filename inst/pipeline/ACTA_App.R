@@ -523,7 +523,18 @@ ui <- fluidPage(
       uiOutput("dashResult")))
   ),
 
-  div(class = "facet", h4("Log"), div(class = "log", textOutput("log", container = pre))),
+  ## `shiny::pre`, NOT a bare `pre`, and the qualification is load-bearing. This is the ONE place
+  ## the UI hands a tag function to shiny as a VALUE instead of calling it, and the two lookups do
+  ## not behave the same. A CALL -- `div(...)`, `h4(...)` -- is immune to a non-function `div` in
+  ## the global environment, because R skips non-function bindings when it is looking for a
+  ## function. An ARGUMENT is not: whatever `pre` happens to be bound to is passed straight to
+  ## shiny, which then tries to call it.
+  ##
+  ## Measured 2026-11-21: an operator whose session held a character `pre` (find("pre") reported
+  ## .GlobalEnv ahead of package:shiny) could not open the app at all. It died on
+  ## `could not find function "container"` -- shiny's own internal parameter name, naming nothing
+  ## the operator wrote and nothing they could act on. A restored .RData is enough to cause it.
+  div(class = "facet", h4("Log"), div(class = "log", textOutput("log", container = shiny::pre))),
 
   ## Collapsed by default: this is a maintenance tool, not part of the daily workflow.
   div(class = "facet",
@@ -553,6 +564,14 @@ server <- function(input, output, session) {
     log = sprintf("[%s] ACTA app started in %s", format(Sys.time(), "%H:%M:%S"), WORK_DIR),
     proc = NULL, running = FALSE, result = NULL, dashResult = NULL,
     tplOverride = NULL, expOverride = NULL, dashOverride = NULL, copyOverride = NULL, oq = NULL, oqProc = NULL, oqRunning = FALSE, oqName = NULL, pct = NA, stage = NULL, t0 = NULL, compOverride = NULL, unstage = NULL,
+    ## The master panel inventory chosen for THIS session. Deliberately NOT remembered across
+    ## launches, unlike the dashboard and export folders: those are output destinations, while this
+    ## one changes what the run REPORTS about the reagents, and it outranks the workbook. A sticky
+    ## value would silently beat Info!master_panel_inventory_path in every later run, in any folder
+    ## -- which is the shape of the defect where the shipped demo inventory stood in for the lab's
+    ## and the caption named neither. The persistent setting already exists and sits at the right
+    ## precedence, BELOW the workbook: ACTA_MASTER_PANEL_INVENTORY / options(acta.master_panel_inventory=).
+    invOverride = NULL,
     ## Path to THIS run's diagnostic log. NA when the folder could not be written -- callers must
     ## tolerate that rather than assume, which is why actaDiagAppend() no-ops on NA.
     diagLog = NA_character_,
@@ -664,7 +683,65 @@ server <- function(input, output, session) {
   output$actaPaths <- renderUI(tagList(
     tags$div(class = "d", style = "margin-bottom:8px",
              tags$strong("Instructions: "), if (is.na(layout)) "not resolved" else basename(layout)),
-    uiOutput("compUI")))
+    uiOutput("compUI"),
+    uiOutput("invUI")))
+
+  ## ---- the master panel inventory ------------------------------------------------------------
+  ## WHICH FILE IS THIS RUN GOING TO OPEN? Four stacked fallbacks decide it -- a path in the
+  ## workbook, an inventory sitting in the run folder, a lab-wide default, the shipped demo -- and
+  ## until 3.6.14 the first place the answer appeared was section 6 of the PDF. That is the wrong
+  ## end of a six-hour run to find out the demo inventory stood in for the lab's.
+  ##
+  ## ONE RESOLUTION, TWO RENDERINGS. The path row below and the check rows in the instructions
+  ## panel both read this reactive. Resolving separately for display and for checking is how a
+  ## panel comes to show a file the run does not open.
+  infoSheet <- reactive({
+    if (is.na(layout) || !file.exists(layout)) return(NULL)
+    tryCatch(suppressMessages(readxl::read_excel(layout, sheet = "Info", col_types = "text",
+                                                 .name_repair = "minimal")),
+             error = function(e) NULL)
+  })
+  invOv <- reactive({
+    v <- trimws(rv$invOverride %||% "")
+    if (nzchar(v)) v else NULL
+  })
+  invRecs <- reactive(
+    actaPanelInventoryRecords(infoSheet(), version_dir = WORK_DIR, code_dir = CODE_DIR,
+                              ## As written in the workbook. The scrub renames iterations during
+                              ## the run; pre-flight reads the file on disk, where the real names
+                              ## still are -- and those are the names the inventory holds.
+                              iterations = layoutVals(layout, "Costain_Panel_Iteration"),
+                              override = invOv()))
+  ## TWO OUTPUTS, NOT ONE, and the split is about the text field rather than about tidiness.
+  ## Re-rendering a uiOutput REBUILDS the <input> inside it, which drops the caret and the focus --
+  ## so a block that both holds the field and reports the resolved file would re-create the field
+  ## on every keystroke typed into it. The field is therefore STATIC (Browse writes to it through
+  ## updateTextInput, never through a re-render) and only the resolved line is live.
+  output$invResolved <- renderUI({
+    recs <- invRecs()
+    p   <- attr(recs, "acta_inventory_path")
+    lab <- attr(recs, "acta_inventory_label")
+    got <- !is.null(p) && length(p) == 1L && !is.na(p) && nzchar(p)
+    tagList(
+      tags$div(tags$strong("Master panel inventory"),
+               tags$span(class = "src", if (!is.null(invOv())) "browsed"
+                                        else if (got) lab else "not resolved")),
+      ## THE FOLDER AS WELL AS THE FILE. Two labs' inventories are both called
+      ## Master_Panel_Inventory.xlsx, so a basename alone cannot say which one you got.
+      tags$div(class = "d", if (got) p else "— none resolved —"))
+  })
+  output$invUI <- renderUI(
+    tags$div(style = "margin-bottom:8px",
+      uiOutput("invResolved"),
+      tags$div(style = "display:flex;gap:8px;align-items:center",
+               div(style = "flex:1", textInput("invPath", NULL, width = "100%", value = "")),
+               actionButton("browse_invPath", "Browse…", class = "btn-default")),
+      tags$div(class = "muted", style = "margin-top:-6px;font-size:11px",
+               paste("(A workbook, not a folder. Blank uses Info!master_panel_inventory_path,",
+                     "then an inventory in the run folder, then the lab default. Choosing one",
+                     "here applies to this run only — it is not written back to the workbook,",
+                     "and it is not remembered after the app closes.)"))))
+  observeEvent(input$invPath, rv$invOverride <- input$invPath, ignoreInit = TRUE)
 
   ## ---- the TiterPubs mirror (see the uiOutput above for why it is read-only) ------------------
   ## A DISABLED checkbox, not a label, so the state reads at a glance alongside the real toggles.
@@ -770,6 +847,13 @@ server <- function(input, output, session) {
   browseInto("browse_tplPath", "tplPath", "file", function() file.path(CODE_DIR, "Template"))
   browseInto("browse_copyDir", "copyDir", "dir",  function() effPath(copyDirR()$value))
   browseInto("browse_compPath", "compPath", "file", function() WORK_DIR)
+  ## Starts the dialog in the folder of the inventory ALREADY resolved, not in the run folder: a
+  ## lab's inventory lives somewhere central, and the file the run would otherwise open is the best
+  ## guess at where its replacement is kept.
+  browseInto("browse_invPath", "invPath", "file", function() {
+    p <- attr(invRecs(), "acta_inventory_path")
+    if (!is.null(p) && length(p) == 1L && !is.na(p) && nzchar(p)) dirname(p) else WORK_DIR
+  })
   observeEvent(input$copyDir, rv$copyOverride <- input$copyDir, ignoreInit = TRUE)
 
   ## ---- preflight ------------------------------------------------------------------------------
@@ -821,7 +905,11 @@ server <- function(input, output, session) {
     }, error = function(e)
       list(list(id = "workbook", label = "Instructions workbook readable", status = "fail",
                 detail = conditionMessage(e), where = layout)))
-    c(recs, out)
+    ## The inventory rows last, and NEVER blocking: this is provenance, not QC -- see
+    ## actaPanelInventoryRecords(), whose hardest verdict is "warn". Appended rather than built
+    ## here, so the app keeps no second opinion about which file the run will open. c() drops the
+    ## resolution attributes, which is correct: the path row above is where those are read.
+    c(recs, out, invRecs())
   })
   dashRecs <- reactive({
     dd <- effPath(dashDirR()$value)
@@ -873,8 +961,13 @@ server <- function(input, output, session) {
               ## and a hand-written list cannot fail loudly: `titerpubs_error` was silently dropped,
               ## which is why a bundle deleted by its own leak gate read as "the bundle never
               ## produces" with no reason shown anywhere in the app.
-              sprintf(paste0(.childLoad, "r<-h$run_acta(%s,report=%s,plots=%s,quiet=FALSE,code_dir=%s);saveRDS(h$actaAppChildResult(r),%s)"),
+              ## panel_inventory is the Browse override, or the literal NULL when the field is
+              ## blank -- NOT an empty string, which run_acta() would have to special-case. .rq()
+              ## is the only way a path reaches the child's generated code; an interpolated one
+              ## containing a single quote closes the string literal early. See .rq() above.
+              sprintf(paste0(.childLoad, "r<-h$run_acta(%s,report=%s,plots=%s,quiet=FALSE,code_dir=%s,panel_inventory=%s);saveRDS(h$actaAppChildResult(r),%s)"),
                       .rq(WORK_DIR), isTRUE(input$mkReport), isTRUE(input$mkPlots), .rq(CODE_DIR),
+                      if (is.null(invOv())) "NULL" else .rq(invOv()),
                       .rq(file.path(WORK_DIR, ".acta_run_result.rds"))))
     unlink(file.path(WORK_DIR, ".acta_run_result.rds"))
     rv$pct <- NA; rv$stage <- NULL; rv$t0 <- Sys.time()
@@ -884,6 +977,9 @@ server <- function(input, output, session) {
     ov <- if (!is.null(rv$compOverride) && nzchar(rv$compOverride)) rv$compOverride else NA_character_
     rv$unstage <- actaStageCompCsv(WORK_DIR, ov)
     if (!is.na(ov)) say("Compensation: using ", basename(ov), " (staged into the run folder)")
+    ## SAID OUT LOUD, because it outranks the workbook. An operator reading the log afterwards has
+    ## to be able to tell a run that used Info!master_panel_inventory_path from one that did not.
+    if (!is.null(invOv())) say("Panel inventory: using ", invOv(), " (overrides the workbook)")
     say("Starting ACTA (report=", isTRUE(input$mkReport), ", plots=", isTRUE(input$mkPlots), ") ...")
     ## P1 -- WRITTEN BEFORE THE CHILD EXISTS. This is the only moment guaranteed to happen: if the
     ## child is OOM-killed or segfaults inside flowCore, no terminal row is ever written, and a

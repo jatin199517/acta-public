@@ -12,7 +12,9 @@
 ## of date is a documentation problem, and failing a titration over one would be the wrong trade.
 ##
 ## Info!master_panel_inventory_path points at the workbook. Blank, missing, or unreadable all mean
-## "no inventory": the table is skipped and the run is otherwise identical.
+## "no inventory": the table is skipped and the run is otherwise identical. The Shiny app can name
+## one for a single run without editing the workbook -- see `override` on actaPanelInventoryPath()
+## and the pre-flight records at the foot of this file.
 
 ## The inventory's own column names, as the shipped template writes them. Matched case- and
 ## space-insensitively so a lab that renamed a header slightly still resolves.
@@ -42,42 +44,80 @@ ACTA_PI_COLS <- c(antigen = "Antigen", fluorochrome = "Fluorochrome",
   trimws(gsub("[[:space:]]+", " ", x))
 }
 
-## WHERE THE INVENTORY LIVES. An explicit Info path wins; otherwise the shipped example template
-## is used, so the feature demonstrates itself on a fresh install instead of silently doing
-## nothing. Relative paths resolve against the run folder, which is how every other path in the
-## workbook behaves.
+## WHERE THE INVENTORY LIVES. An explicit override wins, then an explicit Info path; otherwise the
+## shipped example template is used, so the feature demonstrates itself on a fresh install instead
+## of silently doing nothing. Relative paths resolve against the run folder, which is how every
+## other path in the workbook behaves.
 ## WHERE A PATH CAME FROM DECIDES WHAT AN UNMATCHED ITERATION MEANS, so every branch below says
-## so. "info" and "run_folder" are AUTHORITATIVE -- somebody chose that file for this run, so an
-## iteration missing from it is a real discrepancy worth reporting. "example" is a FALLBACK
+## so. "override", "info" and "run_folder" are AUTHORITATIVE -- somebody chose that file for this
+## run, so an iteration missing from it is a real discrepancy worth reporting. "example" is a FALLBACK
 ## nobody chose, and an iteration missing from it says nothing at all about the lab's inventory.
 ## Collapsing the two is what made a real run report its real panel as unknown; see the
 ## unknown_iteration / example_only split in actaPanelIterationTable().
 .piSrc <- function(path, src) { attr(path, "acta_inventory_source") <- src; path }
 
-actaPanelInventoryPath <- function(info = NULL, version_dir = NULL, code_dir = NULL) {
+## THE TWO BRANCHES WHERE SOMEBODY NAMED A FILE share one implementation: the workbook's
+## Info!master_panel_inventory_path, and the explicit `override` below. Written once so the two
+## cannot drift into disagreeing about what a relative path means or about what counts as a
+## workbook -- the two-readers-of-one-cell split this codebase keeps paying for.
+##
+## file.exists() IS TRUE FOR A DIRECTORY -- the same trap the lab-default branch below has guarded
+## since it was written, and the Info branch is the one operators actually use. A folder there was
+## ACCEPTED and tagged src = "info", then produced THREE stacked warnings a long way from the
+## cause: "'raw = FALSE' but ... is not a regular file", "cannot open file ...: it is a directory",
+## and finally "panel inventory ... could not be read". Measured 2026-11-19.
+##
+## The cost of the silent skip is not cosmetic: without an inventory the bundle loses its
+## Master_Panel_Inventory.xlsx and cannot reproduce its own panel.
+##
+## FAILS TO NA RATHER THAN FALLING THROUGH, and that is the whole point of this helper being
+## separate from the branches below it. Somebody CHOSE this file for this run; quietly resolving a
+## different one instead is how the shipped demo inventory stood in for the lab's while the report
+## said the lab's panel was unknown.
+.piChosen <- function(p, version_dir, what) {
+  isFile <- function(z) file.exists(z) && !dir.exists(z)
+  if (!grepl("^(/|[A-Za-z]:)", p) && !is.null(version_dir)) {
+    cand <- file.path(version_dir, p)
+    if (isFile(cand)) return(normalizePath(cand, winslash = "/"))
+  }
+  if (isFile(p)) return(normalizePath(p, winslash = "/"))
+  ## Name WHICH of the two it is. "does not exist" sent people hunting for a typo in a path that
+  ## was spelled correctly and simply pointed one level too high.
+  warning(sprintf("%s points at '%s', which is %s; the panel inventory table is skipped.",
+                  what, p,
+                  if (dir.exists(p)) "a folder, not a workbook" else "a path that does not exist"),
+          call. = FALSE)
+  NA_character_
+}
+
+## `override` OUTRANKS THE WORKBOOK, which is the one precedence in this function that is not
+## "whatever the run folder happens to contain". It exists for the Shiny app's inventory picker:
+## the app cannot write the chosen path back into Info -- that is an Excel file on OneDrive, where
+## a lock or a sync conflict either fails the save or silently loses it -- so a Browse there has to
+## reach the run some other way, and "the same as setting Info!master_panel_inventory_path" is what
+## an operator means by picking one.
+##
+## It is TAGGED "override", not "info". The provenance tag decides what an unmatched iteration
+## means, and both are AUTHORITATIVE in that sense -- somebody chose the file -- but a report that
+## said "Info sheet" about a file the Info sheet never named would be a small lie in a provenance
+## record, which is the one place this package does not get to tell them.
+##
+## Defaulted from an OPTION rather than threaded through run_acta()'s callees. There are two call
+## sites -- the pipeline script's panel table and the TiterPubs mapper -- and threading a parameter
+## through both would make it possible for a future edit to pass it at one and not the other, which
+## is a bundle silently disagreeing with the report it ships beside.
+actaPanelInventoryPath <- function(info = NULL, version_dir = NULL, code_dir = NULL,
+                                   override = getOption("acta.panel_inventory_override",
+                                                        default = NULL)) {
+  o <- if (is.null(override)) NA_character_ else trimws(as.character(override)[1])
+  if (!is.na(o) && nzchar(o)) {
+    r <- .piChosen(o, version_dir, "The panel inventory chosen for this run")
+    return(if (is.na(r)) NA_character_ else .piSrc(r, "override"))
+  }
   p <- if (is.null(info)) NA_character_ else actaInfoValue(info, "master_panel_inventory_path")
   if (!is.na(p) && nzchar(p)) {
-    ## file.exists() IS TRUE FOR A DIRECTORY -- the same trap the lab-default branch below has
-    ## guarded since it was written, and this is the branch operators actually use. A folder here
-    ## was ACCEPTED and tagged src = "info", then produced THREE stacked warnings a long way from
-    ## the cause: "'raw = FALSE' but ... is not a regular file", "cannot open file ...: it is a
-    ## directory", and finally "panel inventory ... could not be read". Measured 2026-11-19.
-    ##
-    ## The cost of the silent skip is not cosmetic: without an inventory the bundle loses its
-    ## Master_Panel_Inventory.xlsx and cannot reproduce its own panel.
-    isFile <- function(z) file.exists(z) && !dir.exists(z)
-    if (!grepl("^(/|[A-Za-z]:)", p) && !is.null(version_dir)) {
-      cand <- file.path(version_dir, p)
-      if (isFile(cand)) return(.piSrc(normalizePath(cand, winslash = "/"), "info"))
-    }
-    if (isFile(p)) return(.piSrc(normalizePath(p, winslash = "/"), "info"))
-    ## Name WHICH of the two it is. "does not exist" sent people hunting for a typo in a path that
-    ## was spelled correctly and simply pointed one level too high.
-    warning(sprintf(paste0("Info!master_panel_inventory_path points at '%s', which is %s; ",
-                           "the panel inventory table is skipped."), p,
-                    if (dir.exists(p)) "a folder, not a workbook" else "a path that does not exist"),
-            call. = FALSE)
-    return(NA_character_)
+    r <- .piChosen(p, version_dir, "Info!master_panel_inventory_path")
+    return(if (is.na(r)) NA_character_ else .piSrc(r, "info"))
   }
   ## AN INVENTORY SITTING IN THE RUN FOLDER WINS over the shipped example. This is what makes a
   ## TiterPubs bundle self-describing: the bundle carries the panel it used, so a reader who
@@ -798,4 +838,131 @@ actaApplyScrub <- function(df, quiet = FALSE, eln = NULL) {
   if (length(hit) && !isTRUE(quiet))
     message(sprintf("[ACTA] scrub_confidential: replaced %s", paste(hit, collapse = ", ")))
   df
+}
+
+## ================= PRE-FLIGHT: WHICH INVENTORY IS THIS RUN GOING TO USE? ======================
+##
+## The Shiny app could not answer that question before 3.6.14, and the answer is decided by four
+## stacked fallbacks that the operator cannot see from the workbook. So the file the run ACTUALLY
+## opened was first visible in the PDF, after the run -- which is the wrong end of a six-hour job
+## to discover that the shipped demo inventory stood in for the lab's.
+##
+## RESOLVES THROUGH THE PIPELINE'S OWN FUNCTIONS, deliberately. actaPanelInventoryPath() decides
+## the file and actaPanelIterationCaption() writes the wording, so the pre-flight and the report
+## cannot disagree -- a check panel that says one thing and a PDF that says another is worse than
+## no check panel, because one of them is believed.
+##
+## NOTHING HERE IS EVER A `fail`. This whole file is provenance, not QC: a mismatch is reported and
+## changes no number, so blocking the Run button over one would punish the wrong thing. The hardest
+## verdict is `warn`.
+##
+## WHAT MAKES A MISS MATTER. An unresolved inventory costs nothing on a plate that declares no
+## co-stain panel and publishes no bundle, and costs the submission its reagent provenance on one
+## that does. `stakes` is that distinction, and it is why this does not go amber on every run in a
+## lab that keeps no inventory at all.
+actaPanelInventoryRecords <- function(info = NULL, version_dir = NULL, code_dir = NULL,
+                                      iterations = character(0), override = NULL) {
+  L <- "Master panel inventory"
+  its <- unique(.piNorm(iterations))
+  its <- its[!is.na(its) & nzchar(its) & toupper(its) != "NA"]
+  bundle <- isTRUE(tryCatch(actaInfoFlagTrue(actaInfoValue(info, "titerpubs_export")),
+                            error = function(e) FALSE))
+  stakes <- length(its) > 0L || bundle
+
+  ## THE OPTION IS FOLDED IN HERE, not left to the resolver's default. Passing `override = NULL`
+  ## explicitly SUPPRESSES a default argument in R, so a caller handing this function its own
+  ## (absent) override would otherwise be told about a different file from the one the run will
+  ## open. Resolve it once, pass the answer.
+  o <- if (is.null(override)) NA_character_ else trimws(as.character(override)[1])
+  if (is.na(o) || !nzchar(o)) {
+    oo <- getOption("acta.panel_inventory_override", default = NULL)
+    o <- if (is.null(oo)) NA_character_ else trimws(as.character(oo)[1])
+  }
+  chosen <- !is.na(o) && nzchar(o)
+
+  ## CAPTURED, NOT THROWN. actaPanelInventoryPath() warns about a path that does not exist or names
+  ## a folder, and those warnings are the most useful sentence this panel can show. Left to
+  ## propagate they would surface in the R console behind the browser, where nobody is looking.
+  msgs <- character(0)
+  path <- withCallingHandlers(
+    tryCatch(actaPanelInventoryPath(info, version_dir = version_dir, code_dir = code_dir,
+                                    override = if (chosen) o else NULL),
+             error = function(e) { msgs <<- c(msgs, conditionMessage(e)); NA_character_ }),
+    warning = function(w) { msgs <<- c(msgs, conditionMessage(w)); invokeRestart("muffleWarning") })
+
+  src <- attr(path, "acta_inventory_source")
+  if (is.null(src) || !length(src) || is.na(src)) src <- "unknown"
+  lab <- unname(ACTA_INFO_SOURCE_LABEL[src])
+  if (is.na(lab)) lab <- "resolved"
+  note <- paste(msgs, collapse = " ")
+
+  ## The resolved path and its provenance ride as ATTRIBUTES, under the same names
+  ## actaPanelInventory() already uses, so the app can render the path row and the check rows from
+  ## ONE resolution instead of resolving twice and risking two answers.
+  ## The HUMAN label rides along too, so the Shiny app can caption its path row without reading
+  ## ACTA_INFO_SOURCE_LABEL. Exporting that constant for the app would put the same mapping in two
+  ## places and -- worse -- a bare constant reference is invisible to test_app_exports.R, which
+  ## walks the app for CALLS. A missing export there would fail at runtime with nothing in the
+  ## suite able to see it coming.
+  out <- function(recs) { attr(recs, "acta_inventory_path") <- path
+                          attr(recs, "acta_inventory_source") <- src
+                          attr(recs, "acta_inventory_label") <- lab
+                          recs }
+
+  if (is.null(path) || !length(path) || is.na(path) || !nzchar(path))
+    return(out(list(.appRec("panel_inventory", L, if (chosen || stakes) "warn" else "skip",
+      paste(c(if (nzchar(note)) note,
+              paste("No master panel inventory resolved, so co-stain reagents cannot be named and",
+                    "a TiterPubs bundle will not carry one. Browse to one here, set",
+                    "Info!master_panel_inventory_path, or set ACTA_MASTER_PANEL_INVENTORY once for",
+                    "the lab.")), collapse = " "),
+      if (is.null(version_dir)) NA_character_ else version_dir))))
+
+  ## RESOLVED IS NOT THE SAME AS READABLE. A file that is named, exists, and cannot be parsed is
+  ## the silent case: the path row would show it, the run would skip it, and nothing would say so.
+  inv <- withCallingHandlers(
+    tryCatch(actaPanelInventory(path), error = function(e) { msgs <<- c(msgs, conditionMessage(e))
+                                                             NULL }),
+    warning = function(w) { msgs <<- c(msgs, conditionMessage(w)); invokeRestart("muffleWarning") })
+  note <- paste(msgs, collapse = " ")
+  if (is.null(inv))
+    return(out(list(.appRec("panel_inventory", L, "warn",
+      paste(c(sprintf("%s (%s) resolved but holds no readable reagent rows.", basename(path), lab),
+              if (nzchar(note)) note), collapse = " "), path))))
+
+  all  <- attr(inv, "acta_inventory_all")
+  nRow <- if (is.null(all)) nrow(inv) else nrow(all)
+  nIt  <- length(unique(inv$iteration))
+  shape <- sprintf("%s — %s; %d reagent row(s), %d panel iteration(s).",
+                   basename(path), lab, nRow, nIt)
+
+  ## The shipped example is a FALLBACK NOBODY CHOSE. Saying "pass" over it is how a report came to
+  ## describe a lab's real panel as unknown while the lab's inventory held it all along.
+  recs <- list(if (identical(src, "example"))
+    .appRec("panel_inventory", L, if (stakes) "warn" else "pass",
+            paste(shape, "This is the demonstration inventory ACTA ships, not this lab's.",
+                  if (stakes) paste("Browse to the lab's inventory, or set",
+                                    "Info!master_panel_inventory_path.") else ""), path)
+    else .appRec("panel_inventory", L, "pass", shape, path))
+
+  ## One row per DECLARED iteration. Only when the inventory read, because otherwise every one of
+  ## them would repeat the single fact the record above already states.
+  for (it in its) {
+    rg <- actaPanelReagents(inv, it)
+    if (is.null(rg) || !nrow(rg)) {
+      ## The pipeline's own wording, from the pipeline's own function, so the pre-flight sentence
+      ## and the report caption for the same condition are the same sentence.
+      cap <- actaPanelIterationCaption(list(
+        status = if (identical(src, "example")) "example_only" else "unknown_iteration",
+        iteration = it, table = NULL, source = src, file = basename(path)))
+      recs[[length(recs) + 1L]] <- .appRec(paste0("panel_iteration_", it),
+        sprintf("Co-stain panel '%s' resolves", it), "warn", cap, path)
+    } else {
+      recs[[length(recs) + 1L]] <- .appRec(paste0("panel_iteration_", it),
+        sprintf("Co-stain panel '%s' resolves", it), "pass",
+        sprintf(paste("'%s' — %d reagent(s) listed in %s. Matching them to the channels this",
+                      "run measured happens during the run."), it, nrow(rg), basename(path)), path)
+    }
+  }
+  out(recs)
 }

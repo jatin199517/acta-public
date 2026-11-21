@@ -242,6 +242,49 @@ testServer(app, {
   cr <- Filter(function(r) r$id == "compensation", ar)
   chk("compensation record is in the ACTA instructions check", length(cr) == 1)
   cat("  ", cr[[1]]$status, "--", substr(cr[[1]]$detail, 1, 62), "\n")
+  ## ---- master panel inventory (3.6.14) --------------------------------------------------------
+  ## DRIVEN THROUGH THE REAL INPUT, not by calling the resolver. The unit gate
+  ## (test_panel_inventory_app.R) proves actaPanelInventoryRecords() is right; this proves the app
+  ## is WIRED to it -- that typing into the field changes what the run would open, and that a bad
+  ## path is reported in the panel instead of being swallowed.
+  cat("\n=== master panel inventory ===\n")
+  iu <- paste(as.character(output$invUI), collapse = " ")
+  chk("the inventory row renders a text field and a Browse button",
+      grepl("invPath", iu) && grepl("browse_invPath", iu))
+  chk("...and says plainly that a choice made here is not written back to the workbook",
+      grepl("not written back to the workbook", iu))
+  ir <- Filter(function(r) r$id == "panel_inventory", actaRecs())
+  chk("the inventory record is in the ACTA instructions check", length(ir) == 1)
+  chk("...and does not block the Run button", length(ir) == 1 && ir[[1]]$status != "fail")
+  before <- attr(invRecs(), "acta_inventory_path")
+  cat("  resolved:", if (is.na(before)) "(none)" else basename(before), "\n")
+  ## A COPY, not the shipped file itself: the point is to pick something the four fallbacks would
+  ## NOT have chosen, so "the override won" cannot be confused with "it resolved there anyway".
+  pick <- file.path(tempdir(), "Smoke_Chosen_Inventory.xlsx")
+  file.copy(file.path(ACTA_REPO_ROOT, "inst", "pipeline", "Template",
+                      "TEMPLATE_Master_Panel_Inventory.xlsx"), pick, overwrite = TRUE)
+  chk("CONTROL: the picked file is not the one already resolved",
+      is.na(before) || !identical(normalizePath(pick, winslash = "/"),
+                                  as.character(before)))
+  session$setInputs(invPath = pick)
+  chk("typing a path into the field changes which file the run will open",
+      identical(as.character(attr(invRecs(), "acta_inventory_path")),
+                normalizePath(pick, winslash = "/")))
+  chk("...and the row records that the choice was made here, not in the workbook",
+      identical(attr(invRecs(), "acta_inventory_source"), "override"))
+  session$setInputs(invPath = file.path(tempdir(), "no_such_inventory.xlsx"))
+  ## NOT `[[1]]` on the Filter result. Dropping the rows from actaRecs() -- the exact regression the
+  ## check above guards -- made this subscript ABORT the smoke test, so a real failure was reported
+  ## as a crashed run instead of as a named failing assertion.
+  rl <- Filter(function(r) r$id == "panel_inventory", actaRecs())
+  ri <- if (length(rl)) rl[[1]] else list(status = "(absent)", detail = "")
+  chk("a bad path is reported in the panel rather than swallowed",
+      identical(ri$status, "warn") && grepl("no_such_inventory.xlsx", ri$detail, fixed = TRUE))
+  chk("...and still does not block the Run button", !identical(ri$status, "fail"))
+  session$setInputs(invPath = "")
+  chk("clearing the field returns to the workbook's own answer",
+      identical(as.character(attr(invRecs(), "acta_inventory_path")), as.character(before)))
+
   cat("\n=== abort with nothing running is safe ===\n")
   session$setInputs(abort = 1)
   chk("abort handled", grepl("Nothing running", rv$log))

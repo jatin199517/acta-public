@@ -146,8 +146,37 @@ if (length(ACTAFunctionFile) == 1) {
   message("ACTA: sourcing helpers from ", acta_code_dir, " (", length(.siblings), " file(s))")
   for (.f in .siblings) source(.f, local = TRUE)
 } else if (requireNamespace("ACTA", quietly=TRUE)) {
-  message("ACTA: helpers from the installed ACTA package (", utils::packageVersion("ACTA"), ")")
   library(ACTA)
+  ## THIS BRANCH ONLY WORKS FROM INSIDE run_acta(), AND IT USED TO PRETEND OTHERWISE.
+  ##
+  ## This file is the BODY of the pipeline, not an entry point. run_acta() evaluates it in
+  ## `new.env(parent = parent.env(environment()))` -- namespace:ACTA when ACTA is installed -- so
+  ## every helper resolves by lexical scoping and none of them has to be exported. That is the
+  ## design, stated at the run_acta() call site. Source this file DIRECTLY and the parent is the
+  ## global environment instead, where `library(ACTA)` has put the EXPORTS and nothing else:
+  ## measured 2026-11-21, the script references 103 names that live in the ACTA namespace and
+  ## 96 of them are internal.
+  ##
+  ## Until 3.6.13 this branch announced "helpers from the installed ACTA package" and then died
+  ## thirteen lines down on `object 'makeGateLayoutGreatAgain' not found` -- an internal nobody
+  ## outside this repo has heard of, on a line that has nothing to do with the real mistake, after
+  ## a message saying the helpers had loaded. Reported by a user running the published release out
+  ## of a downloaded clone, which is the obvious thing to try. Probe one internal; refuse legibly.
+  ##
+  ## Plain lexical lookup inside tryCatch, NOT exists() -- same reason as the guard further down.
+  if (inherits(tryCatch(makeGateLayoutGreatAgain, error = function(e) e), "error"))
+    stop("ACTA_Script.R cannot be run on its own.\n\n",
+         "  It is the body of the pipeline, not an entry point. run_acta() evaluates it with the\n",
+         "  ACTA namespace in scope; sourced directly it sees only the package's exports, so it\n",
+         "  stops here on the first of ~96 internal helpers it needs.\n\n",
+         "  Run the pipeline instead, from your run folder:\n",
+         "      library(ACTA)\n",
+         "      run_acta()                            # the analysis\n",
+         "      acta_app()                            # or the Shiny app\n\n",
+         "  To drive a SOURCE CHECKOUT with the installed package's code, point run_acta() at it:\n",
+         "      run_acta(code_dir = \"inst/pipeline\")\n",
+         call. = FALSE)
+  message("ACTA: helpers from the installed ACTA package (", utils::packageVersion("ACTA"), ")")
 } else {
   stop(sprintf(paste0("No ACTA_Function*.R in the code folder '%s' and the ACTA package is not ",
                       "installed, so the helper library cannot be loaded from either source."),

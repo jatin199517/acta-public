@@ -67,6 +67,12 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_strip_label.R",    # the strip label, and SI_stats!label staying byte-identical
              "test_which_plate.R",    # the plate token is a DIRECTORY, not a substring of a date
              "test_panel_inventory_source.R", # a caption names the inventory it actually opened
+             ## THE APP'S INVENTORY PICKER (3.6.14). The override is the only input that outranks
+             ## the workbook, so its fixture carries ALL FOUR sources at once -- a fixture with one
+             ## source could not tell "the override won" from "there was nothing to win against".
+             ## Holds the rule that a CHOSEN path which is wrong fails to NOTHING rather than
+             ## falling back, and that no pre-flight record here may ever block the Run button.
+             "test_panel_inventory_app.R",
              "test_scrub_iteration.R", # scrub_confidential removes panel names, keeps composition
              "test_sample_status.R",  # Sample_Status: the column, and the menu it publishes
              "test_info_report.R",    # the Info table and its Source column
@@ -74,7 +80,13 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              ## REGISTERED THE DAY IT WAS WRITTEN -- see the note under test_titerpubs_tissue.R.
              ## Row order IS the defect here, so the fixture puts the catalogue-less row first and
              ## carries a control proving it still triggers the old bare-logical index.
-             "test_inv_by_catalog.R", # a blank catalogue must not return a phantom all-NA row
+             "test_inv_by_catalog.R",
+             ## THE BUNDLE'S OWN INVENTORY. 0 of 15 titrated reagents appeared in the inventory
+             ## their bundle shipped, so a re-run lost Clonality, Isotype and host species on
+             ## every deposited dataset. Holds the trap too: the titrated row must carry NO panel
+             ## iteration, or a re-run reads it as its own co-stain and the self-costain gate
+             ## refuses ACTA's own artefact.
+             "test_bundle_inventory.R", # a blank catalogue must not return a phantom all-NA row
              ## REGISTERED THE DAY IT WAS WRITTEN. The shipped fixtures contain NOTHING for this
              ## gate to fire on -- 15 reagents, 0 hits -- so its fixtures are all constructed and
              ## two of its sections are CONTROLS that fail if they stop being adversarial.
@@ -121,6 +133,12 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              ## "could not find function" on the first workbook setting titerpubs_export -- i.e.
              ## every real run that builds a bundle. Found by the user on Windows, not here.
              "test_app_exports.R",    # every bare-name acta* call in the app is exported
+             ## THE TWO UNSUPPORTED ENTRY POINTS THAT LOOK SUPPORTED. A user running published
+             ## 3.6.12 from a downloaded clone could open neither file: the app died on shiny's
+             ## internal `container` (a shadowed bare `pre`), the script on an unexported internal
+             ## after announcing that the helpers had loaded. Every other gate drives ACTA the
+             ## supported way, so none of them could see either one.
+             "test_entry_points.R",   # app survives a shadowed tag fn; script refuses legibly
              "test_readme_calls.R",   # the README's own R examples resolve against this layout
              "test_man_pages.R",      # every export has a man/ topic that still matches its formals
              "test_release_pointer.R", # the published-version pointer still matches the tags

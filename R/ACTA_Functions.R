@@ -6093,8 +6093,26 @@ actaReportIntermediates <- function(dirs, ext = c("tex", "log", "aux", "out", "t
 }
 
 run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet = FALSE,
-                     code_dir = NULL) {
+                     code_dir = NULL, panel_inventory = NULL) {
   version_dir <- normalizePath(version_dir, mustWork = TRUE)
+  ## THE INVENTORY CHOSEN FOR THIS RUN, outranking Info!master_panel_inventory_path.
+  ##
+  ## Set as an OPTION rather than passed down, because two independent call sites resolve the
+  ## inventory -- the pipeline script's panel table and the TiterPubs mapper -- and a parameter
+  ## threaded to one and not the other is a bundle that disagrees with the report shipped beside
+  ## it. One option, one resolver, both call sites.
+  ##
+  ## RESTORED ON EXIT. Nothing in the app depends on that -- its run is a child process that dies
+  ## anyway -- but a console caller running two folders back to back would otherwise carry the
+  ## first folder's inventory into the second, silently and with every number still correct.
+  if (!is.null(panel_inventory)) {
+    .pinv <- trimws(as.character(panel_inventory)[1])
+    if (!is.na(.pinv) && nzchar(.pinv)) {
+      .oldPinv <- options(acta.panel_inventory_override = .pinv)
+      on.exit(options(.oldPinv), add = TRUE)
+      if (!isTRUE(quiet)) message("ACTA: panel inventory for this run -- ", .pinv)
+    }
+  }
   ## code_dir holds the script/.Rmd/generator; version_dir holds the layout, FCS and outputs. They
   ## were the same folder until 3.0 made ACTA a package, and separating them is what lets a
   ## diagnostic case carry only its inputs and be driven by the working version's code rather than

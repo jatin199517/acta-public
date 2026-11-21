@@ -121,7 +121,13 @@ actaInfoReport <- function(info, resolved = NULL) {
 
 ## How actaPanelInventoryPath()'s provenance tag reads on the page. The tags themselves are
 ## internal ("info"/"run_folder"/"example"); these are what a reader of the PDF should see.
-ACTA_INFO_SOURCE_LABEL <- c(info = "Info sheet", run_folder = "run folder",
+##
+## EVERY TAG .piSrc() CAN SET NEEDS A ROW HERE. `%||%` below is base's, which substitutes for NULL
+## and NOT for NA -- so a tag with no row resolves to a named NA and the Source column of the
+## report's Info table prints "NA", which reads as a value rather than as a missing label.
+## test_panel_inventory_app.R asserts the two lists agree.
+ACTA_INFO_SOURCE_LABEL <- c(override = "chosen for this run",
+                            info = "Info sheet", run_folder = "run folder",
                             lab_default = "lab default", example = "shipped example",
                             unknown = "resolved")
 
