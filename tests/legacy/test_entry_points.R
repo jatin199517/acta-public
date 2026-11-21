@@ -81,12 +81,49 @@ if (!file.exists(appFile)) {
 }
 
 ## ---- 2. the pipeline script refuses legibly when it is not run by run_acta() --------------------
+##
+## TWO ARMS, BECAUSE WHICH REFUSAL FIRES DEPENDS ON THE ENVIRONMENT.
+##
+## ACTA_Script.R checks `listOfLibrary` at line ~41 and stops on the first missing package. The
+## entry-point guard sits ~120 lines further down, INSIDE the branch that has already established
+## that no local ACTA_Functions.R will be sourced -- it cannot be hoisted above the dependency
+## check, because before that point the script does not yet know whether a source checkout is
+## about to supply the helpers, and a top-of-file guard would falsely refuse a legitimate
+## `run_acta(code_dir = ...)` run. So on a machine missing ANY dependency the operator gets the
+## dependency message and the entry-point guard is never reached. Both refusals are correct.
+##
+## v3.6.14's macOS CI job proved the hazard: flowMeans does not install on that runner, so the two
+## message assertions below failed while the script behaved exactly as designed. Reproduced here
+## as a controlled pair -- same machine, same script, one package shimmed absent -- and the arm is
+## the only thing that changes.
+##
+## THE ORIGINAL ASSERTION WAS MACHINE-DEPENDENT: it asserted a message without pinning which
+## refusal path the environment takes. Same shape as the actaBundleScanPatterns() login defect
+## that the first private CI run caught. PIN THE ENVIRONMENT, DO NOT INHERIT IT.
 cat("\n-- 2. ACTA_Script.R sourced directly --\n")
+## The real list, read out of the script, so this test cannot drift from it.
+libList <- if (file.exists(scrFile)) local({
+  v <- character(0)
+  for (ex in parse(scrFile))
+    if (is.call(ex) && length(ex) >= 3 && identical(deparse(ex[[2]]), "listOfLibrary"))
+      v <- eval(ex[[3]], envir = new.env())
+  v
+}) else character(0)
 if (!haveACTA) {
   cat("  [skip] ACTA is not installed; this branch needs it\n")
 } else if (!file.exists(scrFile)) {
   cat("  [skip] no ACTA_Script.R\n")
 } else {
+  chk("listOfLibrary was recovered from the script", length(libList) > 10, length(libList))
+  ## What is actually absent in the environment the subprocess will run in.
+  rm0 <- runR(c(sprintf('L <- %s', paste(deparse(libList), collapse = "")),
+                'cat("MISSING:", paste(L[!vapply(L, requireNamespace, logical(1),',
+                '      quietly = TRUE)], collapse = ","), "\n")'))
+  absent <- sub(".*MISSING: ?", "", sub("\n.*", "", sub(".*?(MISSING:)", "\\1", rm0$out)))
+  absent <- setdiff(strsplit(trimws(absent), ",")[[1]], "")
+  cat(sprintf("  [note]  %d of %d listOfLibrary package(s) absent here%s\n",
+              length(absent), length(libList),
+              if (length(absent)) paste0(": ", paste(absent, collapse = ", ")) else ""))
   ## CONTROL: the probe symbol must genuinely be unreachable under library(ACTA) but present in
   ## the namespace. If it were exported, the guard's condition would never fire and section 2
   ## would pass against a script with no guard at all.
@@ -100,19 +137,70 @@ if (!haveACTA) {
   chk("...but does exist in the namespace (so the guard tests a real thing)",
       grepl("INNAMESPACE: TRUE", rc$out, fixed = TRUE), rc$out)
 
-  r <- runR(c('suppressMessages(library(ACTA))',
-              sprintf('m <- tryCatch({ suppressMessages(source(%s)); "NO_ERROR" },', deparse(scrFile)),
-              '              error = function(e) conditionMessage(e))',
-              'cat("MSG_START\n"); cat(m); cat("\nMSG_END\n")'))
-  msg <- sub(".*MSG_START\n", "", sub("\nMSG_END.*", "", r$out))
-  chk("it refuses", !grepl("NO_ERROR", msg, fixed = TRUE))
-  chk("the message says the script is not an entry point",
-      grepl("cannot be run on its own", msg, fixed = TRUE), msg)
-  chk("...and names run_acta() as the thing to run instead",
-      grepl("run_acta()", msg, fixed = TRUE), msg)
-  ## The whole point: the operator must no longer be shown an internal they cannot act on.
-  chk("...and does NOT name an internal helper",
-      !grepl("makeGateLayoutGreatAgain", msg, fixed = TRUE), msg)
+  ## One helper for both arms: source the script directly and hand back the refusal message.
+  ## `pre` is injected BEFORE the source, which is how arm B shims a package absent -- source()
+  ## evaluates in globalenv, and the script's `vapply(listOfLibrary, requireNamespace, ...)`
+  ## resolves `requireNamespace` from there, so the shim is seen.
+  refusal <- function(pre = character(0)) {
+    r <- runR(c('suppressMessages(library(ACTA))', pre,
+                sprintf('m <- tryCatch({ suppressMessages(source(%s)); "NO_ERROR" },', deparse(scrFile)),
+                '              error = function(e) conditionMessage(e))',
+                'cat("MSG_START\n"); cat(m); cat("\nMSG_END\n")'))
+    sub(".*MSG_START\n", "", sub("\nMSG_END.*", "", r$out))
+  }
+
+  ## ARM A -- a COMPLETE environment, so the dependency check passes and the guard is reached.
+  ## This is the arm that tests the 3.6.13 fix. It cannot run where a dependency is genuinely
+  ## missing, so it reports that rather than failing: the script is not misbehaving there.
+  if (length(absent)) {
+    cat(sprintf("  [note]  entry-point arm NOT exercised here -- %s absent, so the dependency\n",
+                paste(absent, collapse = ", ")))
+    cat("          check refuses first. ubuntu and windows CI run this arm.\n")
+  } else {
+    msg <- refusal()
+    chk("it refuses", !grepl("NO_ERROR", msg, fixed = TRUE))
+    chk("the message says the script is not an entry point",
+        grepl("cannot be run on its own", msg, fixed = TRUE), msg)
+    chk("...and names run_acta() as the thing to run instead",
+        grepl("run_acta()", msg, fixed = TRUE), msg)
+    ## The whole point: the operator must no longer be shown an internal they cannot act on.
+    chk("...and does NOT name an internal helper",
+        !grepl("makeGateLayoutGreatAgain", msg, fixed = TRUE), msg)
+  }
+
+  ## ARM B -- one dependency shimmed absent. Runs on EVERY platform, macOS included, so this
+  ## section asserts something real everywhere instead of going quiet where arm A cannot run.
+  ## The package is chosen from those actually INSTALLED here, so the shim is provably the cause
+  ## of the absence rather than the environment already lacking it.
+  present <- setdiff(libList, absent)
+  if (!length(present)) {
+    cat("  [note]  no installed listOfLibrary package to shim; arm B not exercised\n")
+  } else {
+    probe <- present[1]
+    ## THE CONTROL ONLY MEANS ANYTHING WHERE NOTHING IS ALREADY MISSING. Where a dependency is
+    ## genuinely absent the environment gives the dependency message on its own, so asserting
+    ## "without the shim you do not get it" would fail for the exact reason this section was
+    ## rewritten. Assert it where it is decidable; say so plainly where it is not.
+    if (length(absent)) {
+      cat("  [note]  shim control not decidable here -- a dependency is genuinely absent, so\n")
+      cat("          the unshimmed run gives the dependency message anyway\n")
+    } else {
+      ctl <- refusal()
+      chk("control: without the shim this environment does NOT give the dependency message",
+          !grepl("required package", ctl, fixed = TRUE), ctl)
+    }
+    msgB <- refusal(sprintf(paste0('requireNamespace <- function(package, ...) ',
+                                   'if (identical(package, "%s")) FALSE else ',
+                                   'base::requireNamespace(package, ...)'), probe))
+    chk(sprintf("with %s shimmed absent, it refuses on the dependency instead", probe),
+        grepl("required package", msgB, fixed = TRUE), msgB)
+    chk("...and the dependency message names the missing package",
+        grepl(probe, msgB, fixed = TRUE), msgB)
+    chk("...and tells the operator how to install it",
+        grepl("BiocManager::install", msgB, fixed = TRUE), msgB)
+    chk("...and installs nothing by itself",
+        grepl("Nothing was installed for you", msgB, fixed = TRUE), msgB)
+  }
 }
 
 ## ---- 3. the macOS launcher is executable ------------------------------------------------------
