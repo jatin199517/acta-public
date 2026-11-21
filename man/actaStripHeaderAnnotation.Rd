@@ -6,10 +6,13 @@ Remove a trailing parenthetical annotation from \code{Layout_Plate} column names
 time.
 }
 \usage{
-actaStripHeaderAnnotation(nms)
+actaStripHeaderAnnotation(nms, where = "Layout_Plate")
 }
 \arguments{
   \item{nms}{the header names as read from the sheet.}
+  \item{where}{the sheet being read, used only to name it in the collision error. The same
+    stripping is applied to \code{Info}, which previously reported a collision there as a
+    \code{Layout_Plate} one.}
 }
 \details{
 The sheet's headers document themselves for whoever fills them in -- which FCS keyword a column is

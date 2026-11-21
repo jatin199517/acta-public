@@ -37,14 +37,14 @@ actaInfoReport <- function(info, resolved = NULL) {
     nm  <- tolower(trimws(names(info)))
     col <- function(want) { j <- match(want, nm); if (is.na(j)) rep(NA_character_, nrow(info))
                             else trimws(as.character(info[[j]])) }
-    d <- data.frame(Category = zw(col("category")), Variable = zw(col("variable")),
+    d <- data.frame(Category = zw(col("category")), Variable = actaBareName(zw(col("variable"))),
                     Value = col("value"), Description = col("description"),
                     stringsAsFactors = FALSE)
   } else {
     ## The legacy WIDE layout carries no Category or Description -- one header row, one value row.
     ## Reported anyway rather than skipped: an older workbook still deserves its settings on the
     ## page, it just gets them ungrouped and undescribed.
-    d <- data.frame(Category = "General", Variable = zw(names(info)),
+    d <- data.frame(Category = "General", Variable = actaBareName(zw(names(info))),
                     Value = trimws(as.character(unlist(info[1, ], use.names = FALSE))),
                     Description = NA_character_, stringsAsFactors = FALSE)
   }
@@ -59,9 +59,17 @@ actaInfoReport <- function(info, resolved = NULL) {
   d$Source <- ifelse(vapply(d$Value, blank, TRUE), "not set", "Info sheet")
   d$Value[vapply(d$Value, blank, TRUE)] <- NA_character_
 
-  ## A variable's bare name without the "(N)" / "(L)" type hint, so `resolved` can be keyed by
-  ## either -- the same aliasing actaInfoValue() does.
-  bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", d$Variable))
+  ## PUBLISHED BARE, as of 3.6.12. `Variable` is written verbatim into the report's Info table AND
+  ## the deposited export's Info sheet, so an annotation on a variable name used to change a
+  ## PUBLISHED value: `miflowcyt_export` would read `miflowcyt_export (L)` in every new deposit.
+  ## Stripping on the way out decouples the two -- the workbook can annotate as freely as it likes
+  ## and the published Info sheet stays byte-identical. That is what makes the 3.6.13 hint pass
+  ## output-neutral. Changes exactly two existing rows (`miflowcyt_export (L)`, `Downsample_to (N)`),
+  ## which now publish bare; that diff is intended and named.
+  ##
+  ## `bare` is therefore already equal to d$Variable. Kept as its own name because the two matching
+  ## loops below read as "either spelling" and that is still what they mean.
+  bare <- actaBareName(d$Variable)
   for (k in names(resolved %||% list())) {
     ## A NULL entry means "nothing resolved". `res[[k]] <- NULL` deletes the key so the pipeline
     ## never produces one, but list(k = NULL) does, and as.character(NULL) is character(0) --

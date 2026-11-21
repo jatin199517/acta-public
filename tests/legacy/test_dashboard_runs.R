@@ -185,14 +185,33 @@ local({
   }
   ## What the EXPORT says -- read independently, so the assertion is against the data rather than
   ## against a value this test invented.
+  ## LONG-AWARE, like the generator. This looked for a COLUMN whose name contains "tabbed", which
+  ## a long Info sheet (Category | Variable | Value | Description) never has -- so `.want` always
+  ## fell through to the default and this test never read the export's stated value at all. It
+  ## shared the exact wide-only assumption that made ACTA_Dashboard.R's infoVal() blind, so it
+  ## agreed with the bug instead of catching it. Read the row.
   .ei <- suppressMessages(readxl::read_excel(.ex[[1]], sheet = "Info"))
   .ek <- grep("tabbed", names(.ei), ignore.case = TRUE, value = TRUE)
+  .eiLong <- NULL
+  .enm <- tolower(trimws(names(.ei)))
+  if (all(c("variable", "value") %in% .enm)) {
+    .vr <- as.character(.ei[[which(.enm == "variable")[1]]])
+    .vl <- as.character(.ei[[which(.enm == "value")[1]]])
+    .h  <- which(grepl("tabbed", .vr, ignore.case = TRUE))
+    if (length(.h)) .eiLong <- trimws(.vl[.h[1]])
+  }
   ## Mirrors the dashboard's own default, which prefers ACTA_version and falls back to the
   ## pre-3.4.0 ScriptVersion so a pooled index spanning the rename still tabs by version.
   .ecols <- names(suppressMessages(readxl::read_excel(.ex[[1]], sheet = "TitrationExport", n_max = 0)))
   .dflt  <- if ("ACTA_version" %in% .ecols) "ACTA_version" else "ScriptVersion"
-  .want <- if (length(.ek)) as.character(.ei[[.ek[[1]]]][1]) else .dflt
-  if (!nzchar(.want) || is.na(.want)) .want <- .dflt
+  .want <- if (length(.ek)) as.character(.ei[[.ek[[1]]]][1])
+           else if (!is.null(.eiLong)) .eiLong else .dflt
+  if (is.na(.want) || !nzchar(.want)) .want <- .dflt
+  ## ...and mirror the generator's 3.4.0 rename: every shipped case says ScriptVersion, which is
+  ## not a column in a modern export. The generator maps it forward; so must the expectation, or
+  ## this asserts the old name and fails on correct behaviour.
+  if (identical(tolower(.want), "scriptversion") && "ACTA_version" %in% .ecols)
+    .want <- "ACTA_version"
 
   d <- file.path(tempdir(), "acta_dash_tab"); unlink(d, recursive = TRUE)
   dir.create(file.path(d, "scan", "RUN1"), recursive = TRUE); dir.create(file.path(d, "out"))

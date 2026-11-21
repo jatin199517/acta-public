@@ -121,8 +121,30 @@ if (length(ACTAFunctionFile) > 1)
   stop(sprintf("Expected at most one ACTA_Function*.R in the code folder '%s'; found %d.",
                acta_code_dir, length(ACTAFunctionFile)))
 if (length(ACTAFunctionFile) == 1) {
-  message("ACTA: sourcing helpers from ", ACTAFunctionFile)
-  source(ACTAFunctionFile, local=TRUE)
+  ## SOURCE EVERY HELPER FILE BESIDE IT, not just ACTA_Function*.R.
+  ##
+  ## Pre-3.0 that one file WAS the whole library, and this branch still assumed so. The helpers
+  ## are now split across SIX files: ACTA_Functions.R defines 239 objects, the directory defines
+  ## 348. Point `code_dir` at the package's R/ folder -- which is the obvious thing to do when
+  ## running the script without the app -- and the glob finds EXACTLY ONE file, so the
+  ## "exactly one or die" check above PASSES, a partial library is sourced, and the run dies much
+  ## later with "could not find function" for any of 16 helpers ACTA_Script.R calls directly
+  ## (actaScrubConfidential, actaPanelInventoryPath, actaInfoReport, actaAssertBundleAllowed,
+  ## actaApplyScrub, actaGatingSchemePlot, .tpScrubWorkbook, .tpWriteInventory and others).
+  ## The fail-fast guard below cannot see it either: it probes makeGateLayoutGreatAgain, which
+  ## IS in ACTA_Functions.R.
+  ##
+  ## The exclusion, not an inclusion list: everything in the folder is a helper EXCEPT this
+  ## script and the app. That keeps a real version folder behaving exactly as before -- it holds
+  ## only ACTA_Functions.R besides those two -- while making R/ work. Sourcing ACTA_Script.R into
+  ## itself is the failure this guards against, which is why it is matched by name and not by
+  ## exclusion from a pattern.
+  .siblings <- list.files(path = acta_code_dir, pattern = "\\.[Rr]$", full.names = TRUE)
+  .siblings <- .siblings[!grepl("^(ACTA_Script|ACTA_App|Setup)", basename(.siblings))]
+  ## ACTA_Functions.R FIRST: the others are free to call into it at source time.
+  .siblings <- c(ACTAFunctionFile, setdiff(.siblings, ACTAFunctionFile))
+  message("ACTA: sourcing helpers from ", acta_code_dir, " (", length(.siblings), " file(s))")
+  for (.f in .siblings) source(.f, local = TRUE)
 } else if (requireNamespace("ACTA", quietly=TRUE)) {
   message("ACTA: helpers from the installed ACTA package (", utils::packageVersion("ACTA"), ")")
   library(ACTA)
@@ -199,7 +221,11 @@ metadata_file<-read_excel(metadata_file_path, sheet="Layout_Plate")
 ## -- which are stripped here so every read site downstream uses the plain name. See
 ## actaStripHeaderAnnotation(). Excel note: the sheet is a TABLE (Cmd+T), so a header renamed in
 ## the sheet must also be renamed in xl/tables/table1.xml or Excel reports the file as damaged.
-names(metadata_file)<-actaStripHeaderAnnotation(names(metadata_file))
+names(metadata_file)<-actaStripHeaderAnnotation(names(metadata_file), where = "Layout_Plate")
+## A `#` IN THE FIRST CELL IS A COMMENT -- and until 3.6.12 that was true of gating_template only
+## (.actaTemplateLive), so the same convention an analyst learned in one sheet produced a PHANTOM
+## WELL here. Dropped at read, before anything is derived from the layout.
+metadata_file<-actaDropCommentRows(metadata_file)
 gating_template<-read_excel(metadata_file_path,sheet="gating_template")
 ## Run-level settings sheet. Only `compensation` is read from it so far; the sheet is optional so
 ## a workbook without it still runs (actaCompMode() returns "none" for a NULL info table).
@@ -207,7 +233,11 @@ infoSheet<-if ("Info" %in% excel_sheets(metadata_file_path))
              read_excel(metadata_file_path, sheet="Info") else NULL
 ## Info headers are annotated the same way Layout_Plate's are (`dashboard_creation (L)`), so they
 ## get the same strip -- otherwise a reader keyed on `compensation` would miss `compensation (T)`.
-if (!is.null(infoSheet)) names(infoSheet)<-actaStripHeaderAnnotation(names(infoSheet))
+if (!is.null(infoSheet)) names(infoSheet)<-actaStripHeaderAnnotation(names(infoSheet), where = "Info")
+## Same `#` rule. It matters MORE here than in Layout_Plate: actaInfoReport() publishes every row
+## it does not read as blank, and that table travels into the report and the deposited export, so
+## an analyst's private note would have gone out under CC BY 4.0.
+if (!is.null(infoSheet)) infoSheet<-actaDropCommentRows(infoSheet)
 
 ## ---- TEMPLATE VERSION GATE, AS EARLY AS BOTH SHEETS EXIST ------------------------------------
 ## Placed here, immediately after the two sheets are read and their headers normalised, and NOT
@@ -1477,7 +1507,10 @@ SatPlot<-stats |>
             hjust = -0.06, vjust = -0.5, size = 2.6, color = "grey20") +
   geom_jitter(width = 0, alpha = 0.8, size = 5, stroke = 1, shape = 23,height = 0) +  # Enhanced settings
   ##facet_wrap(~ paste0(Target, " ", Fl, " (", GatingMethod, ")"), scales = "free_y", ncol=3) +
-  facet_wrap(~label, scales = "free_y", ncol=siLay$ncol) +
+  ## labeller: break the strip's line 1 before the gating method. Presentation only -- `label`
+  ## itself is an exported value (SI_stats!label), so it is NOT rewritten. See actaStripLabel().
+  facet_wrap(~label, scales = "free_y", ncol=siLay$ncol,
+             labeller = ggplot2::as_labeller(actaStripLabel)) +
   scale_x_discrete(breaks = AxisLabels, labels = AxisLabelsDisp) +
   ## Matches SIPlot: 20% headroom at the top so an edge-pinned label clears the data.
   scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
@@ -1717,7 +1750,13 @@ ConcatPlot <- local({
     ## The SAME helper p_pseudo uses, so the two figures share one colour ramp and one binning
     ## behaviour -- a hand-rolled gradient here was the other half of why they did not match.
     flow_bin2d(binwidth = c(xBW, yBW)) +
-    facet_wrap(~label, ncol = siLay$ncol) +
+    ## Same strip labeller as SIPlot/SatPlot. This facet has FIXED scales, so its panels are
+    ## 2.824 in rather than 2.425 in and only the two longest line 1s clip, by 0.02-0.08 in --
+    ## not what anyone would notice. It is applied anyway so one reagent's strip reads the same
+    ## on every page of the report; a 4-line strip here beside a 5-line strip on the SI page
+    ## would be the only difference between them.
+    facet_wrap(~label, ncol = siLay$ncol,
+               labeller = ggplot2::as_labeller(actaStripLabel)) +
     coord_cartesian(ylim = c(yFloor, NA)) +
     scale_x_continuous(breaks = seq_along(AxisLabels), labels = AxisLabelsDisp) +
     labs(title = paste0("[Concatenation] ", BID), x = stainQtyLab,
@@ -1831,7 +1870,10 @@ SIPlot<-stats |>
              fill = "white", colour = MM_INK, label.size = 0.3,
              label.padding = unit(0.2, "lines"), label.r = unit(0.1, "lines")) +
   ##facet_wrap(~ paste0(Target, " ", Fl, " (", GatingMethod, ")"), scales = "free_y", ncol=3) +
-  facet_wrap(~label, scales = "free_y", ncol=siLay$ncol) +
+  ## labeller: break the strip's line 1 before the gating method. Presentation only -- `label`
+  ## itself is an exported value (SI_stats!label), so it is NOT rewritten. See actaStripLabel().
+  facet_wrap(~label, scales = "free_y", ncol=siLay$ncol,
+             labeller = ggplot2::as_labeller(actaStripLabel)) +
   scale_x_continuous(breaks = seq_along(AxisLabels), labels = AxisLabelsDisp) +
   ## 20% headroom at the top so the Michaelis-Menten annotation, which is pinned to y = Inf, clears the
   ## highest data point instead of sitting on top of it. Bottom keeps ggplot's usual 5%.
@@ -2164,6 +2206,34 @@ panelIterationInfo <- local({
   ## the provenance attribute with it. Report section 6 prints this as the row's Source.
   attr(out, "inventory_source") <- attr(invPath, "acta_inventory_source") %||% "unknown"
   out
+})
+
+## WARNED HERE, REFUSED AT THE BUNDLE. A reagent declared into a co-stain panel that contains the
+## reagent itself is a metadata error, not an analysis error: the stain indices, the gates and the
+## report are all correct either way, so stopping a six-hour run over a one-cell workbook mistake
+## would punish the wrong thing. The TiterPubs bundle does refuse, because that record is published
+## irrevocably -- see .tpSelfCostain().
+##
+## UNCONDITIONAL, not gated on titerpubs_export: the same composition is written to the export's
+## Panel_Inventory sheet and into the report's panel table, so it is wrong whether or not a bundle
+## is being built.
+##
+## THE REAL ITERATION NAME IS AVAILABLE HERE AND NOWHERE LATER. With scrub_confidential on,
+## statsForExport carries the placeholder ("Iteration1") and ACTA_ITER_MAP is what maps it back.
+## That map is deliberately NOT attached to panelIterationInfo -- that object is handed to the
+## TiterPubs bundle, and the panel's internal name is exactly what the scrub exists to withhold.
+local({
+  .sc <- .tpSelfCostain(statsForExport, panelIterationInfo)
+  if (nrow(.sc)) {
+    .sc$iteration <- vapply(.sc$iteration, function(z)
+      if (length(ACTA_ITER_MAP) && z %in% names(ACTA_ITER_MAP)) ACTA_ITER_MAP[[z]] else z, "")
+    warning(sprintf(paste0("%d reagent(s) are listed in their OWN co-stain panel:\n  %s\n",
+                           "  The analysis is unaffected, but the published panel composition ",
+                           "would misstate the experiment. Fix ",
+                           "Layout_Plate!Costain_Panel_Iteration. A TiterPubs bundle will be ",
+                           "REFUSED while this is true."),
+                   nrow(.sc), .tpSelfCostainMsg(.sc)), call. = FALSE)
+  }
 })
 
 ## THE INFO SHEET AS THIS RUN USED IT -- report section 6. Built AFTER panelIterationInfo so the

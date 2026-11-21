@@ -267,7 +267,7 @@ ACTA_TP_INSTRUMENT_MODEL <- c("EVEREST" = "ZE5", "YETI" = "ZE5", "ZE5" = "ZE5")
 
 ## "Aurora (SN0000)" is one instrument; "Aurora" is the model the menu knows. The serial sits in
 ## the parenthetical by ACTA's own convention, so dropping a trailing (...) is exact here.
-.tpModel <- function(x) trimws(sub("\\s*\\([^()]*\\)\\s*$", "", .tpNorm(x)))
+.tpModel <- function(x) actaDropTrailingParen(.tpNorm(x))
 
 ## Look up through an alias table, case-insensitively, and fall back to the input unchanged -- an
 ## unknown value is passed through to be judged against the menu, not silently blanked.
@@ -385,7 +385,7 @@ ACTA_TP_MULTI <- c("Lasers (nm)")
 ## Their menu describes the PARENT POPULATION ("live single cells"), which is a different question
 ## from ACTA's GatingMethod ("gate_auto2_costain") -- the algorithm is not the population. Walk the
 ## gating_template from the reagent's parent back to root and name what the chain selected.
-actaTiterPubsGating <- function(gating, parent = "Live") {
+actaTiterPubsGating <- function(gating, parent = NULL) {
   if (is.null(gating) || !is.data.frame(gating) || !nrow(gating)) return(NA_character_)
   nm <- tolower(trimws(names(gating)))
   ai <- which(nm == "alias"); pi <- which(nm == "parent")
@@ -394,10 +394,39 @@ actaTiterPubsGating <- function(gating, parent = "Live") {
   keep <- !is.na(alias) & nzchar(alias) & !startsWith(alias, "#")
   alias <- alias[keep]; par <- par[keep]
 
+  ## START AT THE REAGENT'S OWN PARENT, NOT AN ASSUMED ONE.
+  ##
+  ## This defaulted to the literal "Live" and the caller passed tv("Gating_Parent", "Live") -- a
+  ## column that does not exist on the TiterPubs_template sheet, so the default ALWAYS won and the
+  ## walk always began at Live. Any run whose reagent sits below a further gate therefore published
+  ## a chain that did not contain it: measured 2026-11-20 across the seven validation datasets, two
+  ## were wrong -- one gated on CD3+ and one on a dump gate -- and all 8 of their templates said
+  ## "live single cells". The CD3 case was reported by the Metrdy maintainers; the dump-gated one
+  ## nobody had noticed.
+  ##
+  ## ACTA already knows the answer: it is the `parent` of the Reagent/Antibody row. The argument
+  ## stays as an override for a future Gating_Parent column, but an absent one is now computed
+  ## rather than assumed.
+  if (is.null(parent) || .tpBlank(parent)) {
+    .mk <- which(tolower(alias) %in% c("reagent", "antibody"))
+    parent <- if (length(.mk)) par[.mk[1]] else "Live"
+  }
+
+  ## A PARENT IS A NODE NAME, AN ALIAS IS NOT. `parent` cells read `CD3+` / `DUMP-` -- the alias
+  ## plus the side of the gate -- while the alias column holds `CD3` / `DUMP`. Matching the two
+  ## directly fails, the walk breaks on its first step, and the chain ends up holding one element
+  ## with no Live or Single in it. So try the literal name first, then the name with a trailing
+  ## +/- removed; the literal attempt is kept in case a template legitimately names an alias `CD3+`.
+  .aliasRow <- function(node) {
+    h <- match(tolower(node), tolower(alias))
+    if (!is.na(h)) return(h)
+    match(tolower(sub("[+-]$", "", node)), tolower(alias))
+  }
+
   chain <- character(0); cur <- .tpNorm(parent); guard <- 0L
   while (!.tpBlank(cur) && !identical(tolower(cur), "root") && guard < 20L) {
     chain <- c(chain, cur)
-    hit <- match(tolower(cur), tolower(alias))
+    hit <- .aliasRow(cur)
     if (is.na(hit)) break
     cur <- par[hit]; guard <- guard + 1L
   }
@@ -408,6 +437,26 @@ actaTiterPubsGating <- function(gating, parent = "Live") {
   mark   <- grep("^cd[0-9]+\\+?$", chain, ignore.case = TRUE, value = TRUE)
 
   if (length(mark) && live && single) return(sprintf("live single %s", sub("\\+?$", "+", mark[1])))
+
+  ## A NEGATIVE SELECTION NAMES WHAT IT EXCLUDED. A dump gate selects by exclusion, so no `CD\d+`
+  ## token appears and the chain fell through to the bare "live single cells" -- true, but it omits
+  ## the gate the reagent was actually measured inside. One validation run gates on `DUMP-`, whose
+  ## dims are `CD14_CD16`, and published the same phrase as a dataset with no dump gate at all.
+  ##
+  ## The dims name the markers; the alias ("DUMP") is an internal label that means nothing to a
+  ## reader. TiterPubs accepts free text here and normalises it on their side (confirmed with the
+  ## maintainers 2026-11-20), so the accurate phrase is published rather than the nearest menu term.
+  if (live && single && !.tpBlank(parent) && grepl("-$", parent)) {
+    .pr <- .aliasRow(parent)
+    .di <- which(tolower(trimws(names(gating))) == "dims")
+    if (!is.na(.pr) && length(.di)) {
+      ## The gating channel, minus the scatter axis a 2-D gate carries alongside it.
+      .d <- strsplit(.tpNorm(gating[[.di[1]]][keep][.pr]), ",")[[1]]
+      .d <- trimws(.d); .d <- .d[!grepl("^(FSC|SSC)", .d, ignore.case = TRUE) & nzchar(.d)]
+      if (length(.d))
+        return(sprintf("live single %s-negative cells", gsub("_", "/", .d[1])))
+    }
+  }
   if (live && single) return("live single cells")
   if (single)         return("single cells")
   "list others below"
@@ -566,9 +615,25 @@ actaTiterPubsLasers <- function(keys) {
 ## in the costain panel, so looking it up there finds nothing. a two-reagent run titrates CD4 and CD8
 ## while its panel holds CD3 and Viability. Catalogue is the key that works in both directions.
 .tpInvByCatalog <- function(inv, catalog) {
+  ## THE UNFILTERED INVENTORY, when the reader supplied one.
+  ##
+  ## actaPanelInventory() drops every row with no `Panel Iteration`, which is right for resolving a
+  ## co-stain panel and wrong here: the TITRATED reagent is by definition not in its own co-stain
+  ## panel, so its row correctly has no iteration and was being dropped before this lookup ever ran.
+  ## That is why an HLA-DR titration published blank Clonality / Isotype / host species while the
+  ## master held all three -- the operator's workbook and inventory were both correct.
+  .allRows <- attr(inv, "acta_inventory_all")
+  if (!is.null(.allRows) && is.data.frame(.allRows) && nrow(.allRows)) inv <- .allRows
   if (is.null(inv) || !nrow(inv) || .tpBlank(catalog)) return(NULL)
   k <- function(z) gsub("[^a-z0-9]", "", tolower(as.character(z)))
-  hit <- inv[k(inv$catalog) == k(catalog), , drop = FALSE]
+  ## which(), NOT the bare logical vector. A row whose `catalog` cell is blank normalises to NA,
+  ## the comparison yields NA for it, and indexing a data frame with a logical vector CONTAINING
+  ## NA returns an ALL-NA ROW for each NA position rather than dropping it. `hit[1, ]` then reads
+  ## that phantom row whenever the catalogue-less row sorts first, and the reagent publishes blank
+  ## `Clonality`, `Isotype` and `Antibody host species` -- silently, because a row was found.
+  ## Shipped in the 2026-11-12 bundles for CD7 / CD19 / CD56 (OQ_Test2) and for an HLA-DR run.
+  ## ROW ORDER IS THE WHOLE DEFECT: a test with the blank row LAST passes against the broken code.
+  hit <- inv[which(k(inv$catalog) == k(catalog)), , drop = FALSE]
   if (!nrow(hit)) return(NULL)
   hit[1, , drop = FALSE]
 }
@@ -798,7 +863,10 @@ actaTiterPubsValues <- function(row, info, tp = NULL, gating = NULL, keys = NULL
     "Secondary Supplier"          = tv("Secondary_Supplier"),
     "Secondary Catalogue #"       = tv("Secondary_Cat_Num"),
     "Secondary Concentration used" = tv("Secondary_Concentration"),
-    "Gating"                      = actaTiterPubsGating(gating, tv("Gating_Parent", "Live")),
+    ## NA, not "Live": Gating_Parent is not a column on the TiterPubs_template sheet, so a literal
+    ## default here always won and the reagent's real parent was never consulted. NA lets
+    ## actaTiterPubsGating() read it off the Reagent row, and still lets a future column override.
+    "Gating"                      = actaTiterPubsGating(gating, tv("Gating_Parent", NA_character_)),
     ## ITS OWN INFO CELL, with Info!Tissue_Fallback behind it -- resolved above. Menu-driven, so
     ## .tpCanonicaliseAll() folds `Blood` to the menu's own `blood` before the off-menu split is
     ## computed; a tissue their menu does not list reaches row 3 rather than being discarded. See
@@ -1396,6 +1464,73 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
   out
 }
 
+## A REAGENT MUST NOT APPEAR IN ITS OWN CO-STAIN PANEL -- and nothing stopped it until 3.6.12.
+##
+## "Other antibodies and fluorophores in tube" is built from the declared iteration's `base` rows
+## (see that field above), so a workbook naming a panel that CONTAINS the titrated reagent
+## publishes that reagent as one of its own co-stains. A deposited run shipped exactly that way: it
+## declared a panel containing CD3 while CD3 was the reagent being titrated. The repair was a DATA
+## fix -- one cell, naming a panel without it -- and nothing in the code stopped a recurrence.
+##
+## THE HARM IS PUBLICATION-SHAPED, which is why the bundle REFUSES rather than degrades. The panel
+## composition is what a re-runner reads in order to reproduce the titration; it goes out under
+## CC BY 4.0 and cannot be withdrawn. The analysis itself is untouched by this -- stain indices,
+## gates and the report are all correct either way -- so the RUN only warns.
+##
+## EXACT MATCH AFTER NORMALISATION, NEVER A SUBSTRING. `CD14` must not fire against a panel row
+## called `CD14_CD16`, and `CD3` must not fire against `CD137`.
+##
+## .tpNorm() IS LOAD-BEARING HERE, not tidiness. The lab's master inventory holds two different CD3
+## spellings -- a clean `CD3`, and a `CD3` followed by a non-breaking space AND a zero-width space
+## -- and the invisible one is what Costain_3/4/5 use, i.e. exactly the panels that contain CD3. A
+## raw `==` would therefore pass on the only panels that can fail. That is the same fail-open shape
+## as a leak gate that cannot read its own input, and the test pins it with a control.
+.tpSelfCostain <- function(stats, panels) {
+  empty <- data.frame(alias = character(0), antigen = character(0), iteration = character(0),
+                      composition = character(0), stringsAsFactors = FALSE)
+  if (is.null(stats) || !nrow(stats) || is.null(panels) || !length(panels)) return(empty)
+  key <- function(x) tolower(.tpNorm(x))
+  out <- empty
+  for (i in seq_len(nrow(stats))) {
+    row <- stats[i, , drop = FALSE]
+    it <- if ("Costain_Panel_Iteration" %in% names(row))
+            .tpNorm(row[["Costain_Panel_Iteration"]][1]) else NA_character_
+    if (is.na(it) || !nzchar(it) || !it %in% names(panels)) next
+    tb <- panels[[it]]$table
+    if (is.null(tb) || !nrow(tb) || !all(c("Antigen", "Type") %in% names(tb))) next
+    b <- tb[!is.na(tb$Type) & key(tb$Type) == "base", , drop = FALSE]
+    if (!nrow(b)) next
+    ## BOTH NAMES THE RUN KNOWS THE REAGENT BY. `Alias` is what the operator typed into
+    ## Layout_Plate; `Markername` is what the FCS calls that channel's marker. .tpAntigen()
+    ## publishes one or the other depending on whether the run is combinatorial, so a check keyed
+    ## on only one of them would be blind on half the runs.
+    cand <- key(c(if ("Alias" %in% names(row))      row[["Alias"]][1]      else NA,
+                  if ("Markername" %in% names(row)) row[["Markername"]][1] else NA))
+    cand <- unique(cand[!is.na(cand) & nzchar(cand)])
+    if (!length(cand)) next
+    hit <- which(key(b$Antigen) %in% cand)
+    if (!length(hit)) next
+    fl <- if ("Fluorochrome" %in% names(b)) .tpNorm(b$Fluorochrome) else rep("", nrow(b))
+    fl[is.na(fl)] <- ""
+    out <- rbind(out, data.frame(
+      alias       = .tpNorm(if ("Alias" %in% names(row)) row[["Alias"]][1] else NA_character_),
+      antigen     = paste(unique(.tpNorm(b$Antigen[hit])), collapse = ", "),
+      iteration   = it,
+      composition = paste(trimws(sprintf("%s %s", .tpNorm(b$Antigen), fl)), collapse = "; "),
+      stringsAsFactors = FALSE))
+  }
+  out
+}
+
+## One line per offending reagent. Shared by the run's warning and the bundle's refusal so the two
+## cannot drift into describing the same fault differently.
+.tpSelfCostainMsg <- function(found) {
+  who <- ifelse(is.na(found$alias) | !nzchar(found$alias), "(unnamed reagent)", found$alias)
+  paste(sprintf("%s is listed in its own co-stain panel '%s' (matched on: %s) -- that panel resolves to: %s",
+                who, found$iteration, found$antigen, found$composition),
+        collapse = "\n  ")
+}
+
 ## ONE RUN -> one .zip, ready to upload at https://metrdy.com/titerpubs.
 ##
 ## One filled TEMPLATE PER REAGENT still, inside that single archive: the template's data row is
@@ -1450,6 +1585,30 @@ actaTiterPubsBundle <- function(stats, info, outputs_dir, template, run_dir = ou
                           "Layout_Plate and re-run, or set Info!titerpubs_export to FALSE."),
                    length(.bad), paste(.bad, collapse = "; ")), call. = FALSE)
   }
+
+  ## THE TITRATED REAGENT IS NOT ONE OF ITS OWN CO-STAINS -- see .tpSelfCostain() for why this
+  ## refuses. Checked here, with the catalogue check, so it happens BEFORE any file is staged:
+  ## build-then-delete is what made the 3.6.11 leak-scan failure unreadable, and a bundle that
+  ## never existed cannot be half-uploaded.
+  ##
+  ## The iteration is named AS THE BUNDLE SEES IT, which under scrub_confidential is the
+  ## placeholder rather than the panel's real name. That is deliberate: the real names are kept out
+  ## of this object on purpose (ACTA_Script.R scrubs them at the source), and the run ALSO warns at
+  ## the point the panels are resolved, where the real name is still in scope. The composition is
+  ## never scrubbed -- only the panel's internal name is -- so the operator can identify the panel
+  ## from the message either way.
+  .self <- .tpSelfCostain(stats, panels)
+  if (nrow(.self))
+    stop(sprintf(paste0("titerpubs_export is TRUE but %d reagent(s) are listed in their own ",
+                        "co-stain panel, so NO BUNDLE WAS WRITTEN:\n  %s\n",
+                        "  A TiterPubs submission's panel composition is the OTHER reagents that ",
+                        "were in the tube. Publishing the titrated reagent among them misstates ",
+                        "the experiment, and the record is released under CC BY 4.0 and cannot be ",
+                        "withdrawn.\n  Fix Layout_Plate!Costain_Panel_Iteration -- name a panel ",
+                        "that does not contain this reagent -- or set Info!titerpubs_export to ",
+                        "FALSE. The analysis itself is unaffected and its export is already ",
+                        "written."),
+                 nrow(.self), .tpSelfCostainMsg(.self)), call. = FALSE)
 
   menus <- actaTiterPubsMenus(template)
   if (is.null(eln)) eln <- {

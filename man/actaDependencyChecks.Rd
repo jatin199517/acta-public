@@ -8,11 +8,17 @@ app need, the LaTeX distribution, and Pandoc.
 \usage{
 actaDependencyChecks(version_dir,
                      app_pkgs = c("shiny", "processx", "this.path", "readxl",
-                                  "openxlsx", "jsonlite", "rmarkdown"))
+                                  "openxlsx", "jsonlite", "rmarkdown"),
+                     titerpubs = NA)
 }
 \arguments{
   \item{version_dir}{the folder whose pipeline script declares the analysis package list.}
   \item{app_pkgs}{packages the app itself needs, as distinct from the analysis.}
+  \item{titerpubs}{does this run's workbook ask for a TiterPubs bundle
+    (\code{Info!titerpubs_export})? \code{TRUE} promotes the \pkg{pdftools} row from
+    \code{"warn"} to \code{"fail"}, because a run with that toggle on and no \pkg{pdftools}
+    stops before writing any output. \code{NA}, the default, is for callers with no workbook
+    in hand and keeps the advisory severity.}
 }
 \details{
 Packages are reported one row per \emph{source} rather than one row per package: about

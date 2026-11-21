@@ -248,10 +248,38 @@ chk("neither new pattern fires on a localhost, drive-letter or bare-hostname lin
 
 ## .bsHits() picks fixed-vs-regex BY NAME. A built-in regex missing from that list is matched
 ## literally, matches nothing, and the reader reports CLEAN. Assert the list is the one constant.
+##
+## THE LOGIN IS PINNED, NOT INHERITED, and that is the whole lesson of this assertion.
+##
+## `account, path-encoded` is emitted ONLY when the login contains a non-alphanumeric character --
+## for an alphanumeric one it is a byte-copy of `account name`, and that duplicate was removed in
+## 3.6.12 (see the note in actaBundleScanPatterns()). The first version of this check called
+## actaBundleScanPatterns() with NO ARGUMENTS, so it inherited whoever ran it:
+##
+##   an e-mail-shaped login -> flattens to a DIFFERENT string -> pattern emitted -> PASS
+##   runner / runneradmin (both CI runners) -> unchanged      -> pattern absent  -> FAIL
+##
+## So it was green on the author's Mac and red on every ordinary account, which is the first thing
+## the private CI ever caught. A machine-dependent assertion is not an assertion; `user` and `node`
+## are arguments precisely so a rule keyed on this machine's particulars can be proven on another.
+## `first.last` is deliberately NOT e-mail-shaped: it only needs a non-alphanumeric character to
+## make the path-encoded form differ, and an address here would trip the scan's own e-mail rule
+## in a file that ships publicly. The first draft of this line did exactly that.
+.bsAllNames <- names(ACTA:::actaBundleScanPatterns(user = "first.last", node = "host"))
 chk("every built-in regex pattern is declared in ACTA_BUNDLE_REGEX",
-    all(ACTA:::ACTA_BUNDLE_REGEX %in% names(ACTA:::actaBundleScanPatterns())),
-    paste(setdiff(ACTA:::ACTA_BUNDLE_REGEX, names(ACTA:::actaBundleScanPatterns())),
-          collapse = ", "))
+    all(ACTA:::ACTA_BUNDLE_REGEX %in% .bsAllNames),
+    paste(setdiff(ACTA:::ACTA_BUNDLE_REGEX, .bsAllNames), collapse = ", "))
+## THE OTHER DIRECTION, which is the fail-open one: a pattern that IS a regex but is NOT named in
+## the constant gets matched with fixed = TRUE, finds nothing, and the reader reports clean.
+.bsRegexish <- grep("(?<!\\\\)[\\\\^$.|?*+()\\[\\]]", .bsAllNames, value = TRUE, perl = TRUE)
+chk("...and no undeclared pattern name looks like a regex",
+    !length(setdiff(.bsRegexish, ACTA:::ACTA_BUNDLE_REGEX)),
+    paste(setdiff(.bsRegexish, ACTA:::ACTA_BUNDLE_REGEX), collapse = ", "))
+## A CONTROL. If someone makes the pattern unconditional to "fix" a red build, the duplicate it was
+## removed for comes back and every account finding is reported twice again.
+chk("...and `account, path-encoded` is still CONDITIONAL on a non-alphanumeric login",
+    !("account, path-encoded" %in%
+        names(ACTA:::actaBundleScanPatterns(user = "runner", node = "host"))))
 
 cat("-- the bundled workbook must not name the operator in docProps --\n")
 ## docProps/core.xml and app.xml were reached by NOTHING on the bundle path: .tpCleanWorkbook only
@@ -288,6 +316,103 @@ if (!file.exists(tmplSrc)) {
       identical(tryCatch(readxl::excel_sheets(wb), error = function(e) character(0)),
                 c("Info", "gating_template", "Layout_Plate", "TiterPubs_template")))
 }
+
+## ---- the login is matched with a boundary and a length floor -----------------------------------
+## WHY THESE EXIST. In 3.6.11 the login was a bare fixed substring. An operator could not build
+## ANY bundle, because the shipped OQ_Test1 Info sheet carries ACTA's OWN REPOSITORY URL in
+## References, and their login was a substring of the account handle in it -- so ACTA's own URL
+## failed ACTA's own gate. Four artefacts carry that URL, each counted twice by a path-encoded
+## rule that was a byte-copy of the plain one: 8 findings, zip deleted, every one a false positive.
+##
+## The names below are GENERIC on purpose. A real login written into a tracked file is a leak in
+## its own right, and this repository's own scrub gate flags it -- which is how the first draft of
+## this test was caught. The shipped URL itself is pinned by reading the fixture, further down,
+## rather than by copying it here.
+##
+## None of this was visible to a reviewer or to CI, because on a managed machine the login is an
+## e-mail address, which is never a substring of anything innocent. That is why the patterns are
+## built from an ARGUMENT here rather than from Sys.info(): a rule keyed on this machine's
+## particulars can only be falsified with somebody else's.
+pats_ <- ACTA:::actaBundleScanPatterns
+m_ <- function(p, s) isTRUE(grepl(p, s, perl = TRUE))
+
+p_user <- pats_(user = "johndoe", node = "buildbox77")
+chk("the login yields a boundary-anchored regex, not a bare substring",
+    grepl("^\\(\\?<!\\[A-Za-z0-9\\]\\)", p_user[["account name"]]), p_user[["account name"]])
+chk("'account name' is declared a regex, or it would be matched literally and find nothing",
+    "account name" %in% ACTA:::ACTA_BUNDLE_REGEX)
+
+## THE REGRESSION ITSELF.
+chk("ACTA's own repo URL does NOT trip the gate for a login that is a substring of the handle",
+    !m_(p_user[["account name"]], "https://github.com/johndoe199517/acta-public"))
+
+## ...AND THE SAME THING AGAINST THE REAL SHIPPED VALUE, read from the fixture rather than
+## copied here. A generic re-enactment proves the regex; only this proves that THE STRING ACTA
+## ACTUALLY SHIPS is safe against a login drawn from it. The login is derived from the handle at
+## run time, so nothing identifying is written down and the check follows the URL if it moves.
+local({
+  d <- system.file("extdata/oq_small/OQ_Test1", package = "ACTA")
+  wb <- if (nzchar(d)) list.files(d, pattern = "Ab_Titration_Instructions\\.xlsx$",
+                                  full.names = TRUE) else character(0)
+  if (!length(wb)) { cat("  [skip] OQ_Test1 fixture not installed\n"); return(invisible(NULL)) }
+  ## Info is a KEY/VALUE sheet (Category | Variable | Value | Description), so References is a
+  ## ROW, not a column -- read it with the pipeline's own accessor rather than by column name.
+  inf <- tryCatch(suppressMessages(
+           readxl::read_excel(wb[[1]], sheet = "Info", .name_repair = "minimal")),
+         error = function(e) NULL)
+  ref <- if (is.null(inf)) NA_character_
+         else tryCatch(ACTA:::actaInfoValue(inf, "References"), error = function(e) NA_character_)
+  ## FAIL, don't skip, if the URL is not there: the whole point is that this value ships.
+  chk("the shipped OQ_Test1 fixture still carries a github URL in Info!References",
+      !is.na(ref) && grepl("github\\.com/[^/]+/", ref))
+  if (is.na(ref) || !grepl("github\\.com/[^/]+/", ref)) return(invisible(NULL))
+  handle <- sub("^.*github\\.com/([^/[:space:]]+).*$", "\\1", ref)
+  ## A PREFIX of the handle is exactly the shape of the incident: login ⊂ handle.
+  login  <- substr(handle, 1L, max(4L, nchar(handle) - 6L))
+  chk(sprintf("a %d-char login drawn from that handle does not trip on the shipped URL",
+              nchar(login)),
+      !m_(pats_(user = login)[["account name"]], ref))
+  ## The control: that login really is a substring, so the assertion above is not vacuous.
+  chk("...and that login genuinely IS a substring of the handle, so the check is not vacuous",
+      nchar(login) >= 4L && grepl(login, handle, fixed = TRUE))
+})
+chk("...nor does a different account that merely starts the same way",
+    !m_(p_user[["account name"]], "/Users/johndoe2/run.fcs"))
+
+## AND EVERY REAL LEAK SHAPE STILL BLOCKS -- in all of them the neighbouring character is a
+## separator, never alphanumeric, which is the whole reason the boundary is safe here.
+for (leak in c("/Users/johndoe/run.fcs", "C:\\Users\\johndoe\\run.fcs", "/home/johndoe/x.fcs",
+               "scratch johndoe-anonymouscompany-com", "FILENAME = /Users/johndoe/OneDrive/x.fcs",
+               "sent by johndoe"))
+  chk(sprintf("still blocks: %s", leak), m_(p_user[["account name"]], leak))
+
+## THE DUPLICATE.
+chk("a path-encoded rule identical to the plain one is dropped, not reported twice",
+    !("account, path-encoded" %in% names(p_user)))
+p_mail <- pats_(user = "johndoe@anonymouscompany.com", node = "buildbox77")
+chk("...but it is kept when it genuinely differs (the original FILENAME leak shape)",
+    "account, path-encoded" %in% names(p_mail) &&
+      m_(p_mail[["account, path-encoded"]], "/tmp/johndoe-anonymouscompany-com/run.fcs"))
+chk("...and the e-mail login itself still blocks",
+    m_(p_mail[["account name"]], "/Users/johndoe@anonymouscompany.com/run.fcs"))
+
+## THE LENGTH FLOOR -- this is what lets an operator with a short login publish at all.
+## Before it, a two-character login matched 18 files of a real bundle.
+for (short in c("ab", "jk", "lab"))
+  chk(sprintf("a %d-character login yields no bare-account pattern", nchar(short)),
+      !any(c("account name", "account, path-encoded") %in% names(pats_(user = short))))
+chk("a four-character login is still covered -- the floor is >= 4, not > 4",
+    "account name" %in% names(pats_(user = "emma")) &&
+      m_(pats_(user = "emma")[["account name"]], "/Users/emma/x.fcs"))
+chk("a short login is still covered in PATH form by the home prefixes",
+    any(grepl("home", names(pats_(user = "ab")))))
+
+## THE HOST HAS THE SAME FLOOR, for the same reason, and stays FIXED so the detector cannot
+## become narrower than actaDeIdentifyText(), which masks the host with fixed = TRUE.
+chk("a three-character hostname is below the floor",
+    !("machine name" %in% names(pats_(user = "someone", node = "Mac"))))
+chk("a real hostname still blocks",
+    identical(pats_(user = "someone", node = "flowbox1")[["machine name"]], "flowbox1"))
 
 cat(if (ok) "\nBUNDLE SCAN TESTS PASSED\n" else "\nFAILURES ABOVE\n")
 quit(status = if (ok) 0L else 1L)

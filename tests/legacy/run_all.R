@@ -62,12 +62,38 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              ## representation, and push the same 22 hazards through all of them.
              "test_boundary_probes.R", # openxlsx, jsonlite, FCS filenames, the XML scrub
              "test_plate_map.R",      # the Layout sheet drawn as a plate, incl. the reagent axis
+             ## MEASURES the facet strip against the panel it has to fit in, at the real device
+             ## size -- and pins the export invariant, that `label` is NOT rewritten to suit a plot.
+             "test_strip_label.R",    # the strip label, and SI_stats!label staying byte-identical
              "test_which_plate.R",    # the plate token is a DIRECTORY, not a substring of a date
              "test_panel_inventory_source.R", # a caption names the inventory it actually opened
              "test_scrub_iteration.R", # scrub_confidential removes panel names, keeps composition
              "test_sample_status.R",  # Sample_Status: the column, and the menu it publishes
              "test_info_report.R",    # the Info table and its Source column
              "test_bundle_scan.R",    # the leak scan that GATES a bundle build
+             ## REGISTERED THE DAY IT WAS WRITTEN -- see the note under test_titerpubs_tissue.R.
+             ## Row order IS the defect here, so the fixture puts the catalogue-less row first and
+             ## carries a control proving it still triggers the old bare-logical index.
+             "test_inv_by_catalog.R", # a blank catalogue must not return a phantom all-NA row
+             ## REGISTERED THE DAY IT WAS WRITTEN. The shipped fixtures contain NOTHING for this
+             ## gate to fire on -- 15 reagents, 0 hits -- so its fixtures are all constructed and
+             ## two of its sections are CONTROLS that fail if they stop being adversarial.
+             "test_self_costain.R",   # the titrated reagent is not one of its own co-stains
+             ## THE ONE REGEX THE WHOLE SELF-DOCUMENTING-HEADER SCHEME RESTS ON. It had been
+             ## retyped at five sites and two disagreed; no behavioural test could see it, because
+             ## no shipped header has a mid-string bracket yet. Pinned at SOURCE level.
+             "test_workbook_conventions.R", # annotations, `#` comment rows, and one regex one place
+             ## REGISTERED THE DAY IT WAS WRITTEN, and it found two things nothing else could see:
+             ## the app reading `Info!ELN_ID`, a row retired in 3.6.8, so every app-driven copy
+             ## archived into `<stamp>_run`; and `scrub_eln_placeholder`, read and validated and in
+             ## no template. Both are the house failure: a reader that cannot read returns a
+             ## DEFAULT, and four separate readers consume this workbook.
+             "test_column_registry.R", # every workbook column, declared once and held to it
+             ## THE FAILURE-MODE LAYER for the convention work -- the paths the change CREATED, as
+             ## opposed to the contract it promises. It caught two defects the contract tests could
+             ## not: `as.character(100000)` is "1e+05" on its way to becoming a folder name, and the
+             ## app's infoVal() reading a LONG Info sheet as empty since 3.6.0.
+             "test_convention_edge_cases.R", # zero-length, NA, absent, duplicated, wrong-typed
              ## THE ONE CONTROL SCRUBBING CANNOT SUBSTITUTE FOR, and it had no test until 3.6.11:
              ## a construct detection reagent is disclosed by the PANEL, not by any label.
              "test_blocked_markers.R", # acta.bundle_blocked_markers, and its four fail-opens
@@ -77,6 +103,10 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              ## and nobody added to it -- a gate that cannot run in CI is a gate that does not
              ## exist. Same shape as the index audit that found five defects in unchanged code.
              "test_titerpubs_tissue.R", # Info!Tissue_Type/Tissue_Fallback -> the Tissue column
+             ## NO TEST AT ALL until 2026-11-20, which is why a wrong parent population shipped in
+             ## 8 published templates across two datasets. The Metrdy maintainers found it on the
+             ## page; nothing here could, because nothing exercised the function.
+             "test_titerpubs_gating.R", # the parent population a reagent was measured inside
              "test_schema_368.R",       # the 3.6.8 rename, version gate and site-rule firing
              ## PINS stats_cols BESIDE the Layout_Plate column count. 3.6.8 shipped an OQ that
              ## reported FAIL on a correct analysis because no gate here could see expected.json;
@@ -86,9 +116,19 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              "test_dashboard_runs.R", # which folders count as runs -- the same export pooled twice
              "smoke_app.R", "test_app_package.R",           # the Shiny server logic, via testServer
              "test_install_path.R",   # what an install-only user can reach, incl. biocViews
+             ## THE APP ASKS; test_install_path.R only says what is ON OFFER. 3.6.12 called
+             ## actaInfoFlagTrue() from the app without exporting it, and the app died with
+             ## "could not find function" on the first workbook setting titerpubs_export -- i.e.
+             ## every real run that builds a bundle. Found by the user on Windows, not here.
+             "test_app_exports.R",    # every bare-name acta* call in the app is exported
              "test_readme_calls.R",   # the README's own R examples resolve against this layout
              "test_man_pages.R",      # every export has a man/ topic that still matches its formals
              "test_release_pointer.R", # the published-version pointer still matches the tags
+             ## THE PRIVATE WORKFLOW IS NOW A GATE ON PUBLICATION (flow agreed 2026-11-20), and it
+             ## is a SEPARATE FILE from the public one -- different layout, different cost profile.
+             ## Nothing else joins them, so a package added to one list and not the other means the
+             ## private gate goes green and the public one goes red AFTER you have published.
+             "test_ci_workflows.R",   # the two CI workflows have not drifted apart
              "verify_oq_sanitised.R") # the OQ cases carry nothing that cannot be published
 
 cat(sprintf("ACTA test suite -- %s\n%s\n", basename(vd), strrep("=", 62)))

@@ -189,7 +189,14 @@ local({
   ## the bare word anchored the window on line 13 and read the comment block instead of the code.
   .i   <- grep("<-[[:space:]]*actaArchiveThenCopy\\(", .app)
   chk("the copy call site was found at all", length(.i) == 1L)
-  .win <- if (length(.i)) paste(.app[max(1, .i[[1]] - 12):.i[[1]]], collapse = " ") else ""
+  ## THE WHOLE ENCLOSING FUNCTION, not a fixed number of lines above the call. A 12-line window
+  ## broke the moment a comment was added between the `src <-` assignment and the call: the window
+  ## slid off the code it was meant to read and the assertion failed on a correct file. Anchoring
+  ## on `copyThenDashboard <- function` reads strictly MORE than the old window, so this is not a
+  ## loosening -- a stray list.files(plots_dir) anywhere in the handler is still caught.
+  .f   <- grep("^[[:space:]]*copyThenDashboard[[:space:]]*<-[[:space:]]*function", .app)
+  chk("the copy handler was found at all", length(.f) == 1L && .f[[1]] < .i[[1]])
+  .win <- if (length(.i) && length(.f)) paste(.app[.f[[1]]:.i[[1]]], collapse = " ") else ""
   chk("the app passes plots_dir itself, not list.files() over it",
       grepl("rv$result$plots_dir)", .win, fixed = TRUE) &&
       !grepl("list.files(rv$result$plots_dir", .win, fixed = TRUE))
@@ -1382,6 +1389,24 @@ chk("...naming the toggle that needs it and the command that installs it",
       grepl('install.packages("pdftools")', .p2$detail, fixed = TRUE))
 chk("...and says the bundle would be refused, not silently unscanned",
     grepl("refuses|delete", .p2$detail, ignore.case = TRUE))
+## SEVERITY FOLLOWS THE WORKBOOK. `warn` is invisible to blocking(), so with titerpubs_export = TRUE
+## the app used to enable the Run button for a run that cannot possibly finish -- it stops hard in
+## R/panel_inventory.R the moment it reaches the bundle stage. The row has to read as fatal BEFORE
+## the run starts, and only when this workbook actually asks for a bundle.
+.p3 <- local({ d <- .f(vd, titerpubs = TRUE)
+               d[[match("pdftools", vapply(d, function(r) r$id, ""))]] })
+chk("pdftools FAILS, not warns, when the workbook asks for a bundle",
+    identical(.p3$status, "fail"))
+chk("...and the fatal row says so plainly",
+    grepl("titerpubs_export = TRUE", .p3$detail, fixed = TRUE))
+## ...and the three other callers, which have no workbook, must be unaffected.
+.p4 <- local({ d <- .f(vd, titerpubs = NA)
+               d[[match("pdftools", vapply(d, function(r) r$id, ""))]] })
+chk("no workbook in hand -> the advisory severity is kept", identical(.p4$status, "warn"))
+.p5 <- local({ d <- .f(vd, titerpubs = FALSE)
+               d[[match("pdftools", vapply(d, function(r) r$id, ""))]] })
+chk("a workbook that does NOT ask for a bundle -> still advisory",
+    identical(.p5$status, "warn"))
 
 ## The script-package hint must not promise an install that no longer happens.
 .sp <- .dep[[match("pkgs_script", .ids)]]

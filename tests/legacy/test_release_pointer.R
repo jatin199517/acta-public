@@ -57,8 +57,31 @@ if (length(rel)) {
               basename(ptr), kv("version"), sub("-public$", "", sub("^v", "", newest))),
       identical(kv("version"), sub("-public$", "", sub("^v", "", newest))))
   chk(sprintf("`dev_tag` names that tag (%s)", kv("dev_tag")), identical(kv("dev_tag"), newest))
-  chk(sprintf("`dev_sha` is the commit it points at (%s)", substr(kv("dev_sha"), 1, 8)),
-      identical(kv("dev_sha"), refSha(file.path("refs", "tags", newest))))
+  ## PEEL THE TAG. `refs/tags/<name>` holds the COMMIT sha for a lightweight tag and the TAG
+  ## OBJECT's sha for an annotated one, so the raw ref read below is only correct for the former --
+  ## and every -public marker was lightweight until v3.6.11-public was re-made annotated on
+  ## 2026-11-20. That change was made because `--follow-tags` carries ONLY annotated tags, which is
+  ## why the lightweight original sat unpushed for eight days while this gate could not see it.
+  ##
+  ## So: ask git to resolve the commit, and fall back to the file read when git is unavailable --
+  ## which is right for a lightweight tag and is what this script did exclusively before. If the
+  ## two disagree the message says which, rather than printing two shas and leaving the reader to
+  ## work out that one is a tag object.
+  .rawSha <- refSha(file.path("refs", "tags", newest))
+  .peeled <- tryCatch({
+    o <- suppressWarnings(system2("git", c("-C", shQuote(root), "rev-parse",
+                                           paste0(shQuote(newest), "^{commit}")),
+                                  stdout = TRUE, stderr = FALSE))
+    if (length(o) == 1L && grepl("^[0-9a-f]{40}$", trimws(o))) trimws(o) else NA_character_
+  }, error = function(e) NA_character_)
+  .sha <- if (!is.na(.peeled)) .peeled else .rawSha
+  ## chk() here takes (what, cond) only -- no detail argument -- so the diagnosis goes in the label.
+  chk(sprintf("`dev_sha` is the commit it points at (pointer %s, tag resolves to %s%s)",
+              substr(kv("dev_sha"), 1, 8),
+              if (is.na(.sha)) "NOTHING" else substr(.sha, 1, 8),
+              if (!is.na(.peeled) && !identical(.peeled, .rawSha))
+                "; annotated tag, peeled to its commit" else ""),
+      identical(kv("dev_sha"), .sha))
   chk("`tag` is the public form of `version`", identical(kv("tag"), paste0("v", kv("version"))))
 }
 cat(if (ok) "\nALL RELEASE POINTER TESTS PASS\n" else "\nFAILURES ABOVE\n")

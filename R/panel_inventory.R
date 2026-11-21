@@ -57,12 +57,25 @@ ACTA_PI_COLS <- c(antigen = "Antigen", fluorochrome = "Fluorochrome",
 actaPanelInventoryPath <- function(info = NULL, version_dir = NULL, code_dir = NULL) {
   p <- if (is.null(info)) NA_character_ else actaInfoValue(info, "master_panel_inventory_path")
   if (!is.na(p) && nzchar(p)) {
+    ## file.exists() IS TRUE FOR A DIRECTORY -- the same trap the lab-default branch below has
+    ## guarded since it was written, and this is the branch operators actually use. A folder here
+    ## was ACCEPTED and tagged src = "info", then produced THREE stacked warnings a long way from
+    ## the cause: "'raw = FALSE' but ... is not a regular file", "cannot open file ...: it is a
+    ## directory", and finally "panel inventory ... could not be read". Measured 2026-11-19.
+    ##
+    ## The cost of the silent skip is not cosmetic: without an inventory the bundle loses its
+    ## Master_Panel_Inventory.xlsx and cannot reproduce its own panel.
+    isFile <- function(z) file.exists(z) && !dir.exists(z)
     if (!grepl("^(/|[A-Za-z]:)", p) && !is.null(version_dir)) {
       cand <- file.path(version_dir, p)
-      if (file.exists(cand)) return(.piSrc(normalizePath(cand, winslash = "/"), "info"))
+      if (isFile(cand)) return(.piSrc(normalizePath(cand, winslash = "/"), "info"))
     }
-    if (file.exists(p)) return(.piSrc(normalizePath(p, winslash = "/"), "info"))
-    warning(sprintf("Info!master_panel_inventory_path points at '%s', which does not exist; the panel inventory table is skipped.", p),
+    if (isFile(p)) return(.piSrc(normalizePath(p, winslash = "/"), "info"))
+    ## Name WHICH of the two it is. "does not exist" sent people hunting for a typo in a path that
+    ## was spelled correctly and simply pointed one level too high.
+    warning(sprintf(paste0("Info!master_panel_inventory_path points at '%s', which is %s; ",
+                           "the panel inventory table is skipped."), p,
+                    if (dir.exists(p)) "a folder, not a workbook" else "a path that does not exist"),
             call. = FALSE)
     return(NA_character_)
   }
@@ -141,7 +154,25 @@ actaPanelInventory <- function(path) {
     out[[nm]] <- if (is.na(j)) rep(NA_character_, nrow(d)) else .piNorm(d[[j]])
   }
   out <- as.data.frame(out, stringsAsFactors = FALSE)
+  ## THE UNFILTERED ROWS RIDE ALONG, because one consumer must not be restricted to panel members.
+  ##
+  ## The subset below is right for PANEL RESOLUTION: a row with no `Panel Iteration` belongs to no
+  ## panel, so it cannot answer "what else was in the tube". But .tpInvByCatalog() asks a different
+  ## question -- "what IS this reagent" -- about the TITRATED one, which by definition is not in
+  ## its own co-stain panel and therefore correctly has no iteration. Handing it the filtered frame
+  ## meant the lookup could never find the very reagent it exists to describe.
+  ##
+  ## MEASURED on an HLA-DR titration: the declared co-stain panel resolves to its 6 co-stains while
+  ## HLA-DR (catalogue 568647) carries Clonality `Monoclonal` and isotype `Mouse IgG2a, κ` in the
+  ## master and published all three fields BLANK, because its own row was dropped here first. The
+  ## operator's data was correct throughout; 11 of 738 rows go this way.
+  ##
+  ## An ATTRIBUTE rather than a second return value, so every existing caller is untouched -- and
+  ## set after the subset for the same reason the three below are: `[.data.frame` keeps names and
+  ## row.names and drops everything else.
+  .all <- out
   out <- out[!is.na(out$iteration) & nzchar(out$iteration), , drop = FALSE]
+  attr(out, "acta_inventory_all") <- .all
   ## SET AFTER THE SUBSET, NOT BEFORE. `[.data.frame` keeps names and row.names and drops
   ## everything else, so attaching these any earlier loses them silently and every caption goes
   ## back to not naming its file.
@@ -346,7 +377,7 @@ actaPanelIterationCaption <- function(res) {
 ## copy would leave the serial in the PDF inside it, which is the one place nobody would look.
 actaScrubEquipmentSerial <- function(x) {
   v <- as.character(x)
-  out <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", v))
+  out <- actaDropTrailingParen(v)
   ## A value with no parenthetical is returned unchanged rather than blanked -- not every site
   ## records a serial, and an empty Equipment column is worse than one without a serial.
   ifelse(is.na(v) | !nzchar(trimws(v)), v, ifelse(nzchar(out), out, v))
@@ -614,7 +645,7 @@ actaApplyInfoScrub <- function(info, quiet = FALSE) {
       info$Value[j[1]] <- repl; hit <- c(hit, k)
     } else {
       nm <- tolower(trimws(names(info)))
-      j <- which(nm == tolower(k) | trimws(sub("\\s*\\([^()]*\\)\\s*$", "", nm)) == tolower(k))
+      j <- which(nm == tolower(k) | actaBareName(nm) == tolower(k))
       if (!length(j)) next
       was <- trimws(as.character(info[[j[1]]][1]))
       if (identical(was, repl)) next

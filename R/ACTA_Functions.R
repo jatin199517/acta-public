@@ -750,16 +750,66 @@ actaIsCombinatorialValue <- function(x) {
 ## Only a trailing `(...)` is removed, so a name that legitimately contains parentheses mid-string
 ## survives. A collision after stripping is a hard error: two columns reduced to the same name
 ## would make every downstream lookup ambiguous and silently pick one.
-actaStripHeaderAnnotation <- function(nms) {
-  out <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", nms))
+## ONE REGEX, ONE PLACE. This pattern had been retyped at five sites, and two of them disagreed:
+## four used this anchored, non-nesting form while the OQ check used a GREEDY `[[:space:]]*\(.*$`,
+## which eats from the FIRST parenthesis to the end of the string. They return different answers
+## for any name carrying a parenthesis mid-string -- and the anchored form is the documented
+## contract, so the greedy one was simply wrong. Unified here so a future convention change lands
+## once instead of four times.
+##
+## NOT used for package version constraints (`pkg (>= 1.0)`, see actaDependencyChecks) -- that is a
+## different job that genuinely wants the greedy form, and it keeps its own.
+##
+## Nested parentheses are NOT handled, by construction: `(a | b | c)` strips, `(N (0-100))` does
+## not. Keep annotations flat.
+ACTA_HEADER_ANNOTATION <- "\\s*\\([^()]*\\)\\s*$"
+
+## The bare name, with no collision check -- for read sites that must not stop.
+actaBareName <- function(x) trimws(sub(ACTA_HEADER_ANNOTATION, "", as.character(x)))
+
+## THE SAME SHAPE, DELIBERATELY NOT THE SAME FUNCTION.
+##
+## ACTA also writes a trailing parenthetical into VALUES -- `Aurora (SN0000)`, where the bracket
+## holds the instrument serial -- and two callers drop it: actaScrubEquipmentSerial(), which
+## removes an asset identifier before publication, and .tpModel(), which resolves the model for the
+## TiterPubs menu.
+##
+## Those could have shared actaBareName(). They must not. The header rule is a PARSING convenience
+## and somebody will eventually widen it (nested brackets, a second annotation); the value rule is
+## load-bearing for a scrub that keeps a serial number out of a CC BY 4.0 deposit. Coupling them
+## means a routine widening of the header rule silently weakens the scrub, with no test in between
+## to notice. Two rules, two names, one literal each.
+actaDropTrailingParen <- function(x) trimws(sub(ACTA_VALUE_ANNOTATION, "", as.character(x)))
+ACTA_VALUE_ANNOTATION <- "\\s*\\([^()]*\\)\\s*$"
+
+actaStripHeaderAnnotation <- function(nms, where = "Layout_Plate") {
+  out <- actaBareName(nms)
   dup <- unique(out[duplicated(out) & nzchar(out)])
   if (length(dup))
-    stop(sprintf(paste0("Layout_Plate headers collide once their type/slot annotations are ",
+    stop(sprintf(paste0("%s headers collide once their type/slot annotations are ",
                         "stripped: %s. Rename so each column has a distinct base name."),
+                 where,
                  paste(sprintf("'%s' <- (%s)", dup,
                                vapply(dup, function(d) paste(nms[out == d], collapse = " + "),
                                       character(1))), collapse = "; ")), call. = FALSE)
   out
+}
+
+## A ROW WHOSE FIRST CELL STARTS WITH `#` IS A COMMENT, EVERYWHERE.
+##
+## ACTA already honoured this in gating_template -- .actaTemplateLive() has excluded `#` aliases
+## for releases -- but nowhere else, so the same `#` an analyst learned to use in one sheet became
+## a phantom well in Layout_Plate and a phantom variable in Info. Worse for Info: actaInfoReport()
+## publishes every row it does not recognise as blank, and that table travels into the report AND
+## the deposited export, so a private note would have shipped under CC BY 4.0.
+##
+## Dropped at READ, not at report: a comment row filtered only on the way out is still a row for
+## every derivation in between.
+actaDropCommentRows <- function(df) {
+  if (is.null(df) || !is.data.frame(df) || !nrow(df) || !ncol(df)) return(df)
+  first <- trimws(as.character(df[[1]]))
+  keep  <- is.na(first) | !startsWith(first, "#")
+  df[keep, , drop = FALSE]
 }
 
 ## Resolve a layout column by any accepted spelling of its name.
@@ -2630,6 +2680,17 @@ actaPlateMap <- function(w, ps, eln = NULL) {
 actaTemplateFlag <- function(gt, col, default = TRUE) {
   n <- nrow(gt)
   hit <- match(tolower(col), tolower(names(gt)))
+  ## ...then against the HINT-STRIPPED header, so ACTA's own three flag columns may carry a type
+  ## annotation like every other sheet does: `Stats_Export (L)` resolves exactly as `Stats_Export`.
+  ##
+  ## SCOPED TO THIS HELPER ON PURPOSE. gating_template is read RAW -- it is the ONE sheet whose
+  ## headers are not passed through actaStripHeaderAnnotation() -- because openCyto matches its ten
+  ## columns (alias, pop, parent, dims, gating_method, gating_args, collapseDataForGating, groupBy,
+  ## preprocessing_method, preprocessing_args) by exact name, and annotating any of those would
+  ## break gating outright. Only the three columns ACTA itself reads through here become hintable.
+  ## Literal first, bare second: the same order actaInfoValue() uses, so an exact header always
+  ## wins and the fallback can never shadow a real column.
+  if (is.na(hit)) hit <- match(tolower(col), tolower(actaBareName(names(gt))))
   if (!is.na(hit)) col <- names(gt)[hit]
   if (!col %in% names(gt)) {
     out <- setNames(rep(default, n), gt$alias)
@@ -3888,6 +3949,100 @@ facetLayout <- function(n, col_w = 2.90, row_h = 3.65, over_w = 0.80, over_h = 1
   best
 }
 
+## Facet-strip PRESENTATION of `label`. Returns the same text with line 1 broken before the
+## parenthesis that opens the gating method.
+##
+## WHY IT IS A LABELLER AND NOT A CHANGE TO abLabel: `label` is not only the strip. It is written
+## into `statsExportAll` (ACTA_Script.R, `label = abLabel`) and published as the export's
+## SI_stats!label column. Rewriting abLabel would therefore change an EXPORTED VALUE on every
+## dataset -- so the break is applied at draw time, to the strip only, and the stored label stays
+## byte-identical.
+##
+## THE DEFECT. abLabel's line 1 is "<alias> <channel> (<gating method>)" and is the only one of its
+## four lines with no break opportunity; lines 2-4 are already hand-broken at semantic points. The
+## strip text is CENTRED, so when line 1 is wider than the panel it clips at BOTH ends -- EXP1460's
+## CD127 strip read "D127 Alexa Fluor 700-A (gate_mind_fmeans_costain", losing its leading "C" and
+## its closing bracket.
+##
+## WHY ONLY SOME PLOTS SHOW IT -- measured on the seven validation datasets, 8pt bold, at the
+## facetLayout() device size, not reasoned about:
+##
+##   facet                              panel width   line 1 (CD127)   verdict
+##   SIPlot / SatPlot  scales="free_y"     2.425 in       2.904 in      clipped
+##   gating scheme     fixed scales        2.824 in       2.904 in      marginal
+##
+## free_y gives EVERY panel its own y axis, and that axis costs 0.399 in of panel width. That is
+## the whole difference: same text, same ncol, same device. One validation dataset is the only one
+## that reaches 4 columns (6 reagents), which is why this survived the other six.
+##
+## IN THE RENDER -- which is the measurement that counts -- it clips 2 of its 6 strips: CD127
+## (50 chars) and CD19 (49). CD27, CD45RA, CD45RO and CD62L (40-41 chars) draw complete. The
+## grobWidth model above is CONSERVATIVE: it flags all six, because it compares bare text width
+## against panel width and ggplot's strip clips a little later than that. Treat it as an upper
+## bound on the risk, not as the count. The budget sits between 41 and 49 characters.
+##
+## Breaking before the "(" leaves a 2.216 in widest line (the "Test sample:" line, which becomes
+## the binding one) and 0 of 15 clipped. NOTE the residual: that line is only 0.05 in inside the
+## free_y panel on a 4-column grid, so a run with both many reagents and a long Cell_Type could
+## clip again. The durable fix is a budget derived from siLay$ncol, deferred -- see the queue.
+##
+## Do NOT "fix" this by shrinking strip.text: the strip carries four lines of reagent provenance
+## and is the only place the marker gating method appears on these plots.
+actaStripLabel <- function(x) {
+  x <- as.character(x)
+  ifelse(is.na(x), x, sub("^([^\n]*) \\(([^\n]*)\\)(\n|$)", "\\1\n(\\2)\\3", x))
+}
+
+## The truthiness rule for a yes/no Info cell, as the pipeline has always applied it.
+##
+## WRITTEN DOWN because the app now MIRRORS two of these cells -- Info!titerpubs_export and
+## Info!scrub_confidential -- and a mirror that parses the cell differently from the pipeline is
+## worse than no mirror: it would state, on screen, that scrubbing is on for a run that will
+## publish unscrubbed. The expression `toupper(trimws(x)) %in% c("TRUE","T","YES","1")` is spelled
+## out at four sites in ACTA_Script.R; this is that expression, once.
+##
+## NOTE for 3.7.0: the script still carries its own copies. They are byte-identical in behaviour
+## and test_info_flag.R pins them to this function, but the duplication should go -- it was left
+## alone here deliberately, to keep a manuscript-critical release free of parsing changes.
+ACTA_INFO_TRUE <- c("TRUE", "T", "YES", "1")
+actaInfoFlagTrue <- function(x) {
+  x <- toupper(trimws(as.character(x %||% "")))
+  !is.na(x) & x %in% ACTA_INFO_TRUE
+}
+
+## Known-large members of run_acta()'s result: the analysis objects and the report-facing plot
+## collections. A GatingSet or a list of ggplots is megabytes and the parent has no use for it.
+ACTA_CHILD_DROP <- c("env", "gs", "stats", "qcList", "mmFits", "antibody", "miflowcyt",
+                     "SIPlot", "SatPlot", "plotList_hist", "plotList_pseudo",
+                     "plotLayoutList", "plotExportList", "plotDims",
+                     "reportHist", "reportPseudo", "reportLayout", "reportDims",
+                     "panelList", "maxValue", "transArgs")
+
+## What the Shiny app's CHILD PROCESS sends back to the parent.
+##
+## WHY THIS IS A FUNCTION AND NOT A list(...) IN THE APP. It used to be a hand-written
+## `saveRDS(list(report_ok = r$report_ok, ...))` naming twelve fields, while run_acta() returned
+## twenty-six. A HAND-WRITTEN FIELD LIST CANNOT FAIL LOUDLY: a field added to run_acta() simply
+## never reaches the parent, and nothing anywhere reports that it went missing.
+##
+## That is not hypothetical. `titerpubs_error` was dropped, so a TiterPubs bundle that was built
+## and then DELETED by its own leak gate looked to an operator like "the bundle just never
+## produces", with no reason shown anywhere in the UI. The feature had been shipping broken from
+## the app since TiterPubs was added. `report_skipped` was dropped too -- so the app could not
+## tell "no pandoc, the report was never attempted" from "the report failed", which is the exact
+## distinction run_acta() sets that field to make.
+##
+## THE RULE IS INVERTED HERE: carry everything, drop what is known to be large, and backstop that
+## with a size test so a NEW large member cannot bloat the RDS either. A new scalar field -- which
+## is what almost every new field is -- arrives in the parent with no change to this list.
+actaAppChildResult <- function(r, max_bytes = 65536L) {
+  if (!is.list(r)) return(r)
+  r <- r[setdiff(names(r), ACTA_CHILD_DROP)]
+  keep <- vapply(r, function(z)
+    is.null(z) || isTRUE(as.numeric(utils::object.size(z)) <= max_bytes), logical(1))
+  r[keep]
+}
+
 ## Computes adaptive bin count for geom_bin2d based on median event count across
 ## samples in a given population. Uses sqrt(median_n) heuristic, clamped to
 ## [min_bins, max_bins] to stay readable at both low and high event counts.
@@ -4603,7 +4758,7 @@ actaRestorePData <- function(gs, fs, quiet = FALSE) {
 ## two value rows and a long sheet with two settings are the same size.
 actaInfoIsLong <- function(info) {
   if (is.null(info) || !is.data.frame(info) || !ncol(info)) return(FALSE)
-  bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", tolower(trimws(names(info)))))
+  bare <- actaBareName(tolower(trimws(names(info))))
   all(c("variable", "value") %in% bare)
 }
 
@@ -4616,7 +4771,7 @@ actaInfoIsLong <- function(info) {
 ## make a copy-paste slip change a run's settings with nothing on screen to say so.
 actaInfoAsWide <- function(info) {
   if (!actaInfoIsLong(info)) return(info)
-  bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", tolower(trimws(names(info)))))
+  bare <- actaBareName(tolower(trimws(names(info))))
   var <- trimws(as.character(info[[which(bare == "variable")[1]]]))
   val <- trimws(as.character(info[[which(bare == "value")[1]]]))
   keep <- !is.na(var) & nzchar(var)
@@ -4642,7 +4797,7 @@ actaInfoValue <- function(info, field) {
   if (actaInfoIsLong(info)) info <- actaInfoAsWide(info)
   if (!nrow(info)) return(NA_character_)
   nm  <- tolower(trimws(names(info)))
-  bare <- trimws(sub("\\s*\\([^()]*\\)\\s*$", "", nm))     # drop a trailing "(N)" / "(L)"
+  bare <- actaBareName(nm)                                 # drop a trailing "(N)" / "(L)"
   hit <- match(tolower(trimws(field)), nm)
   if (is.na(hit)) hit <- match(tolower(trimws(field)), bare)
   if (is.na(hit)) return(NA_character_)
@@ -6549,7 +6704,36 @@ actaRunArtefacts <- function(res) {
              else if (isTRUE(res$wrote_plots))
                list(label = "Plots", path = NA_character_,
                     skipped = if (isFALSE(res$ok)) "analysis did not complete" else "none written")
-             else list(label = "Plots", path = NA_character_, skipped = "not requested")
+             else list(label = "Plots", path = NA_character_, skipped = "not requested"),
+    ## THE TiterPubs BUNDLE. It had no row here at all, and the app did not even carry
+    ## res$titerpubs_error back from the child -- so a bundle that was BUILT AND THEN DELETED by
+    ## its own leak gate was indistinguishable, in the UI, from one that was never asked for.
+    ## An operator reported it as "I could not get the bundle to produce", which is precisely what
+    ## the app showed them: nothing.
+    ##
+    ## A DELETED BUNDLE IS NOT A MISSING BUNDLE. The gate deletes on purpose, and the reason is
+    ## the only actionable thing in the whole run -- it names what leaked -- so it is surfaced
+    ## verbatim rather than flattened to "failed".
+    titerpubs = {
+      ## as.character(%||%) FIRST. `titerpubs_bundles` is absent on every run that did not ask
+      ## for a bundle -- which is most of them -- and `file.exists(NULL)` is not FALSE, it is an
+      ## error ("invalid 'file' argument") thrown straight out of the app's results panel.
+      b <- as.character(res$titerpubs_bundles %||% character(0))
+      b <- b[!is.na(b) & nzchar(b)]
+      have <- if (length(b)) b[file.exists(b)] else character(0)
+      if (length(have))
+        list(label = sprintf("TiterPubs bundle%s", if (length(have) > 1) "s" else ""),
+             path = have[[1]], skipped = NA_character_)
+      else if (!is.na(res$titerpubs_error %||% NA_character_))
+        list(label = "TiterPubs bundle", path = NA_character_,
+             skipped = sprintf("FAILED -- %s", res$titerpubs_error))
+      ## Asked for, no bundle, no error: the run did not reach that stage.
+      else if (isFALSE(res$ok))
+        list(label = "TiterPubs bundle", path = NA_character_,
+             skipped = "analysis did not complete")
+      else list(label = "TiterPubs bundle", path = NA_character_,
+                skipped = "not requested (Info!titerpubs_export)")
+    }
   )
 }
 
@@ -8044,9 +8228,13 @@ actaLatexMissing <- function(pkgs) {
   pkgs[!vapply(pkgs, found, logical(1))]
 }
 
+## `titerpubs`: does THIS run's workbook ask for a TiterPubs bundle (Info!titerpubs_export)?
+## NA when the caller has no workbook in hand -- the pdftools row then keeps its advisory
+## severity, as it always had. See that row for why the distinction matters.
 actaDependencyChecks <- function(version_dir, app_pkgs = c("shiny", "processx", "this.path",
                                                           "readxl", "openxlsx", "jsonlite",
-                                                          "rmarkdown")) {
+                                                          "rmarkdown"),
+                                 titerpubs = NA) {
   recs <- list()
   add <- function(...) recs[[length(recs) + 1L]] <<- .appRec(...)
 
@@ -8108,14 +8296,28 @@ actaDependencyChecks <- function(version_dir, app_pkgs = c("shiny", "processx", 
   ## design, so the bundle is REFUSED AND DELETED -- correct, but baffling at the end of a run
   ## that otherwise worked. `install_github()` does not install Suggests, so the default public
   ## install does not have it, and nothing told anyone until the bundle vanished.
+  ## SEVERITY FOLLOWS THE WORKBOOK. `warn` is right for a run that will never build a bundle, and
+  ## wrong for one that will: blocking() ignores `warn`, so the app happily enabled the Run button
+  ## for a workbook with titerpubs_export = TRUE on a machine with no pdftools -- and that run
+  ## stops hard at R/panel_inventory.R, after the operator has waited for it to start. A
+  ## dependency that is FATAL FOR THIS WORKBOOK must read as fatal before the run begins.
+  ## `titerpubs` is NA when the caller has no workbook to consult, which keeps the old behaviour.
   if (requireNamespace("pdftools", quietly = TRUE))
     add("pdftools", "pdftools (to publish a TiterPubs bundle)", "pass", NA_character_,
+        NA_character_)
+  else if (isTRUE(titerpubs))
+    add("pdftools", "pdftools (required by this workbook)", "fail",
+        paste("not installed, and Info!titerpubs_export = TRUE.",
+              "The bundle's leak scan reads the report PDF, and a bundle whose PDF cannot be read",
+              "must not be published -- so this run would stop before writing any output.",
+              'Install it with install.packages("pdftools"), or set Info!titerpubs_export = FALSE',
+              "to analyse this run locally."),
         NA_character_)
   else
     add("pdftools", "pdftools (to publish a TiterPubs bundle)", "warn",
         paste("not installed -- only needed when Info!titerpubs_export = TRUE.",
               "The bundle's leak scan reads the report PDF and refuses a bundle it cannot read,",
-              'so a run with the toggle on would build a bundle and then delete it.',
+              "so a run with that toggle on stops before writing any output.",
               'To enable publishing: install.packages("pdftools")'),
         NA_character_)
 
@@ -8653,7 +8855,7 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
     ii <- suppressMessages(readxl::read_excel(file.path(oq_dir, basename(
             list.files(oq_dir, pattern = "Instructions.*[.]xlsx$")[1])), sheet = "Info",
             col_types = "text", .name_repair = "minimal"))
-    bare <- trimws(sub("[[:space:]]*\\(.*$", "", names(ii)))
+    bare <- actaBareName(names(ii))   # the ANCHORED contract, not the greedy form this once used
     j <- which(bare == "miflowcyt_export")
     length(j) > 0 && toupper(trimws(as.character(ii[[j[1]]][1]))) %in% c("TRUE", "T", "YES", "1")
   }, error = function(e) FALSE)

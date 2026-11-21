@@ -34,14 +34,21 @@ long <- data.frame(
 
 d <- rep_(long)
 chk("a blank spacer row is dropped, not reported as a variable", nrow(d) == 4L, nrow(d))
+## ⚠ LOOKED UP BARE, AND THE SHEET ANNOTATES. From 3.6.12 actaInfoReport() publishes the BARE
+## variable name: this table goes into the report and the deposited export, so an annotation on a
+## variable used to change a PUBLISHED value. Stripping on the way out is what lets the workbook
+## annotate freely without moving the export.
+chk("the published Variable is BARE even though the sheet writes the hint",
+    all(c("miflowcyt_export", "Downsample_to") %in% d$Variable) &&
+      !any(grepl("\\(", d$Variable)), paste(d$Variable, collapse = " | "))
 chk("a populated cell is sourced to the Info sheet",
-    d$Source[d$Variable == "miflowcyt_export (L)"] == "Info sheet")
+    d$Source[d$Variable == "miflowcyt_export"] == "Info sheet")
 chk("a blank cell is 'not set', NOT silently shown as a value",
-    d$Source[d$Variable == "Downsample_to (N)"] == "not set")
+    d$Source[d$Variable == "Downsample_to"] == "not set")
 chk("...and its Value is NA so the renderer can label it",
-    is.na(d$Value[d$Variable == "Downsample_to (N)"]))
+    is.na(d$Value[d$Variable == "Downsample_to"]))
 chk("Description survives for the reader to learn the fallback",
-    grepl("every event", d$Description[d$Variable == "Downsample_to (N)"]))
+    grepl("every event", d$Description[d$Variable == "Downsample_to"]))
 chk("a Category inherited from the row above is filled in",
     d$Category[d$Variable == "titerpubs_export"] == "TiterPubs", d$Category)
 chk("columns are exactly Category/Variable/Value/Source/Description",
@@ -72,8 +79,8 @@ chk("no inventory resolves to NULL, leaving the workbook's own row alone",
 ## Resolution must key off the bare name too -- the sheet writes "Downsample_to (N)".
 d3 <- rep_(long, resolved = list(Downsample_to = "20000"))
 chk("resolved matches a Variable written with its (N)/(L) type hint",
-    identical(d3$Value[d3$Variable == "Downsample_to (N)"], "20000"),
-    d3$Value[d3$Variable == "Downsample_to (N)"])
+    identical(d3$Value[d3$Variable == "Downsample_to"], "20000"),
+    d3$Value[d3$Variable == "Downsample_to"])
 
 ## A legacy WIDE Info sheet still reports, ungrouped rather than skipped.
 wide <- data.frame(working_directory = NA_character_, MM_R2_threshold = "0.9",
@@ -106,7 +113,7 @@ chk("...under a Category that says it was not on the sheet",
 chk("...with a Description saying so", grepl("Not on this workbook", r5$Description), r5$Description)
 chk("the sheet's own rows are untouched", nrow(d5) == 3L && "MM_R2_threshold" %in% d5$Variable, nrow(d5))
 chk("a resolved variable the sheet DOES carry is still overwritten, not duplicated",
-    sum(rep_(long, resolved = list(Downsample_to = "20000"))$Variable == "Downsample_to (N)") == 1L)
+    sum(rep_(long, resolved = list(Downsample_to = "20000"))$Variable == "Downsample_to") == 1L)
 chk("'lab default' is a known source label",
     identical(unname(ACTA:::ACTA_INFO_SOURCE_LABEL[["lab_default"]]), "lab default"))
 
@@ -125,8 +132,11 @@ chk("...and one whose key matches nothing is not appended",
 ## own row -- invisible in Excel, so nothing on screen explains the mismatch.
 zwl <- data.frame(Category = "General", Variable = "Downsample_to (N)\u200b", Value = "",
                   Description = "d", stringsAsFactors = FALSE)
-chk("a zero-width space in a Variable name is stripped on read",
-    rep_(zwl)$Variable == "Downsample_to (N)", rep_(zwl)$Variable)
+## ORDER MATTERS AND IS PINNED HERE: the zero-width character sits AFTER the closing bracket, so
+## it has to go FIRST -- strip the hint first and `Downsample_to (N)<ZWSP>` keeps its bracket,
+## because the annotation is no longer at the end of the string.
+chk("a zero-width space AND the type hint are both stripped, in that order",
+    rep_(zwl)$Variable == "Downsample_to", rep_(zwl)$Variable)
 chk("...so a resolved key still matches that row, instead of appending a duplicate",
     nrow(rep_(zwl, resolved = list(Downsample_to = "20000"))) == 1L &&
       rep_(zwl, resolved = list(Downsample_to = "20000"))$Value == "20000")

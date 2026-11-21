@@ -54,24 +54,55 @@ stripAnn <- function(x) trimws(sub("[^A-Za-z0-9]*\\([^()]*\\)[^A-Za-z0-9]*$", ""
 ## header that readxl, openxlsx or make.names might hand back.
 normKey <- function(x) gsub("[^a-z0-9]", "", tolower(x))
 
-## Every Info setting is optional, so a missing column returns NA rather than
-## erroring. Exact normalised match first; failing that, a UNIQUE prefix match, which
-## catches a header whose annotation survived as bare text ("miflowcyt_export..L.")
-## because make.names() turned the parentheses into dots and left nothing to strip.
+## Every Info setting is optional, so a missing setting returns NA rather than erroring.
+##
+## TWO SHEET SHAPES, AND THIS READ ONLY HANDLED ONE. The Info sheet became LONG in 3.6.0 --
+## `Category | Variable | Value | Description`, one row per setting -- and this function matched
+## the wanted name against COLUMN HEADERS, which is correct only for the older WIDE shape. So from
+## 3.6.0 it returned NA for EVERY setting on every export ACTA writes, and a standalone dashboard
+## run silently ignored `dashboard_dir`, `titration_export_dir` and `dashboard_tabbed_by`.
+##
+## Silent because NA is also the right answer for a setting nobody filled in: the dashboard still
+## rendered, into the default folder, tabbed by the default column. Reported by the Metrdy
+## maintainers from a reading of the 3.6.11 source, and confirmed here by execution -- the sibling
+## defect in ACTA_App.R's own infoVal() was found a day earlier and fixed by delegating to
+## actaInfoValue(). THAT IS NOT AVAILABLE HERE: this file is deliberately standalone (see the
+## header) and never sources ACTA_Functions.R, so it has to know both shapes itself.
+##
+## The long branch is tried FIRST and only when the sheet actually looks long, so a wide export --
+## which is what every pre-3.6.0 run wrote, and a dashboard routinely pools both -- reads exactly
+## as it did before.
 infoVal <- function(info, name) {
   if (is.null(info) || !nrow(info)) return(NA_character_)
-  keys <- normKey(stripAnn(names(info)))
   want <- normKey(name)
-  hit  <- match(want, keys)
+  .clean <- function(v) {
+    if (is.null(v) || length(v) == 0 || is.na(v)) return(NA_character_)
+    v <- trimws(as.character(v))
+    if (!nzchar(v) || toupper(v) == "NA") NA_character_ else v
+  }
+  keys <- normKey(stripAnn(names(info)))
+
+  ## LONG: find the `Variable` and `Value` columns by name, then the row whose Variable matches.
+  ## Keyed on the columns rather than on positions 2 and 3, so a sheet that gains a column ahead
+  ## of them keeps working.
+  jVar <- match("variable", keys); jVal <- match("value", keys)
+  if (!is.na(jVar) && !is.na(jVal)) {
+    vars <- normKey(stripAnn(as.character(info[[jVar]])))
+    hit  <- which(vars == want)
+    if (length(hit)) return(.clean(info[[jVal]][hit[1]]))
+    return(NA_character_)      # a long sheet that simply does not carry this setting
+  }
+
+  ## WIDE: exact normalised match first; failing that a UNIQUE prefix match, which catches a header
+  ## whose annotation survived as bare text ("miflowcyt_export..L.") because make.names() turned the
+  ## parentheses into dots and left nothing to strip.
+  hit <- match(want, keys)
   if (is.na(hit)) {
     cand <- which(startsWith(keys, want))
     hit  <- if (length(cand) == 1L) cand else NA_integer_
   }
   if (is.na(hit)) return(NA_character_)
-  v <- info[[hit]][1]
-  if (is.null(v) || length(v) == 0 || is.na(v)) return(NA_character_)
-  v <- trimws(as.character(v))
-  if (!nzchar(v) || toupper(v) == "NA") NA_character_ else v
+  .clean(info[[hit]][1])
 }
 
 ## Excel round-trips a logical column badly -- one text cell turns the whole
@@ -535,6 +566,22 @@ info <- suppressMessages(read_excel(layoutFile, sheet = "Info"))
   ## which is the right answer for a name that does not denote a real column.
   .tabCand <- names(allRows)[!startsWith(names(allRows), ".")]
   tabCol <- .tabCand[match(keyOf(tabWant), keyOf(.tabCand))]
+  ## THE RENAME APPLIES TO AN EXPLICIT SETTING TOO, not only to an unset one.
+  ##
+  ## ScriptVersion became ACTA_version in 3.4.0. The branch above already maps that when nobody
+  ## chose a column -- but a workbook that NAMED ScriptVersion was left pointing at a column that
+  ## no longer exists, so it warned and tabbed by run folder. That was invisible until 3.6.12,
+  ## because this file could not read a long Info sheet at all and every setting read as unset:
+  ## the stale name was never resolved, so it never failed to resolve. Fixing the reader is what
+  ## surfaced it, and every shipped OQ case carries exactly this value.
+  if (is.na(tabCol) && identical(keyOf(tabWant), keyOf("ScriptVersion"))) {
+    .fwd <- .tabCand[match(keyOf("ACTA_version"), keyOf(.tabCand))]
+    if (!is.na(.fwd)) {
+      message(sprintf(paste0("[ACTA] dashboard_tabbed_by says '%s', renamed to ACTA_version in ",
+                             "3.4.0; tabbing by that instead."), tabWant))
+      tabWant <- "ACTA_version"; tabCol <- .fwd
+    }
+  }
   if (is.na(tabCol)) {
     warning(sprintf(paste0("ACTA dashboard: Info!dashboard_tabbed_by names '%s', which is not a column in any ",
                            "export (%s); tabbing by run folder instead. Available: %s"),

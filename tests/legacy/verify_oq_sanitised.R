@@ -310,6 +310,21 @@ if (!length(tracked)) {
   FIXTURE_FILE <- "tests/[legacy/]test_diagnostics.R"
   FIXTURE_RE   <- "^tests/(legacy/)?test_diagnostics[.]R$"
   FIXTURE_ID   <- "someone(\\.name)?"
+  ## A SECOND FILE WITH THE SAME PROBLEM, and declared the same way. test_bundle_scan.R proves the
+  ## bundle leak scan still BLOCKS a home-directory path, so it has to contain home-directory paths
+  ## to feed it -- it trips this sweep by design, exactly as the diagnostics fixture does.
+  ##
+  ## WHAT IS ALLOWED IS THE SHAPE, NOT A NAME. Only `/Users/<x>`, `C:\Users\<x>` and `/home/<x>`
+  ## built on the SYNTHETIC logins this test uses are masked; every other identity shape in the
+  ## file is swept exactly as before, and a real login pasted in later is still a leak -- which is
+  ## how the first draft of that test was caught, carrying a real one.
+  ##
+  ## NOT excluded, and NOT built with paste0() to hide it from the grep: both were rejected here
+  ## already, for the reason written above -- a gate you teach yourself to evade stops meaning
+  ## anything. The synthetic names are listed, so adding a new one is a deliberate edit to THIS
+  ## declaration rather than something that slips in beside a test.
+  SCANTEST_RE  <- "^tests/(legacy/)?test_bundle_scan[.]R$"
+  SCANTEST_ID  <- "(?i)(/Users/|/home/|C:\\\\\\\\Users\\\\\\\\)(johndoe[0-9]*|emma|ab|jk|lab)\\b"
   ## The four files allowed to name the copyright holder, and the name itself. Anchored, so a
   ## same-named file elsewhere cannot claim the allowance.
   ## BOTH halves come from the private list: the pattern AND the files allowed to carry it. The
@@ -326,7 +341,7 @@ if (!length(tracked)) {
   ## Absent from the token list, there is simply no allowance and the declared files are swept
   ## like everything else, which fails safe.
   COPYRIGHT_ID <- if (exists("SCRUB_COPYRIGHT", inherits = TRUE)) get("SCRUB_COPYRIGHT") else NA_character_
-  nFix <- 0L; nDesc <- 0L; nCopy <- 0L
+  nFix <- 0L; nDesc <- 0L; nCopy <- 0L; nScan <- 0L
   for (rel in txt) {
     f <- file.path(vd, rel)
     if (!file.exists(f)) next
@@ -338,6 +353,12 @@ if (!length(tracked)) {
     if (grepl(FIXTURE_RE, rel)) {
       masked <- gsub(FIXTURE_ID, "<declared-fixture>", ln, perl = TRUE)
       nFix <- sum(masked != ln)
+      ln <- masked
+    }
+    ## The leak scan's own test, masked on the SHAPE + the synthetic logins only -- see above.
+    if (grepl(SCANTEST_RE, rel)) {
+      masked <- gsub(SCANTEST_ID, "<declared-synthetic-home>", ln, perl = TRUE)
+      nScan <- sum(masked != ln)
       ln <- masked
     }
     ## A SECOND DECLARED ALLOWANCE: the package DESCRIPTION. R REQUIRES a maintainer address for
@@ -383,6 +404,9 @@ if (!length(tracked)) {
   if (nFix)
     cat(sprintf("  note: %s swept with the declared fixture identity masked on %d line(s)\n",
                 FIXTURE_FILE, nFix))
+  if (nScan)
+    cat(sprintf("  note: the leak scan's own test swept with synthetic home paths masked on %d line(s)\n",
+                nScan))
 
   ## FILENAMES too: the blank template used to be named after a real-looking ELN, so the name alone
   ## was a finding even though every cell inside it was clean.

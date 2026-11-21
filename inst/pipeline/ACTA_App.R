@@ -243,18 +243,56 @@ prefsSave <- function(p) try(saveRDS(p, PREF_FILE), silent = TRUE)
 PREFS <- prefsLoad()
 pref <- function(k, default = NULL) if (!is.null(PREFS[[k]])) PREFS[[k]] else default
 
-## Workbook Info value, or NA. Header annotations are stripped the same way the script does.
+## Workbook Info value, or NA.
+##
+## DELEGATES TO actaInfoValue(). It used to match `field` against the sheet's COLUMN NAMES, which
+## is correct only for a WIDE Info sheet -- one row, every setting a column. The Info sheet became
+## LONG in 3.6.0 (Category | Variable | Value | Description), and this reader was never taught to
+## pivot. From 3.6.0 to 3.6.11 it therefore returned NA for EVERY setting on every workbook ACTA
+## shipped, silently, because NA is also what it legitimately returns for a setting nobody filled
+## in. The analysis was unaffected -- run_acta() reads through the package -- but everything the
+## APP shows or mirrors from the workbook was defaulted: the scrub_confidential and
+## titerpubs_export checkboxes, the compensation prefill, MM_R2_threshold, and the dashboard /
+## export / copy paths, which silently fell through to the remembered preference instead.
+##
+## THE FIX IS DELEGATION, NOT A SECOND PIVOT. actaInfoValue() already handles long and wide alike
+## and is the reader the pipeline uses; teaching this one to pivot too would reinstate exactly the
+## two-readers-of-one-cell split that caused the defect. It is exported for this.
 infoVal <- function(layout, field) {
   if (is.na(layout) || !file.exists(layout)) return(NA_character_)
-  v <- tryCatch({
-    d <- suppressMessages(readxl::read_excel(layout, sheet = "Info", .name_repair = "minimal"))
-    names(d) <- actaStripHeaderAnnotation(names(d))
-    if (!field %in% names(d)) return(NA_character_)
-    x <- trimws(as.character(d[[field]][1]))
-    if (!length(x) || is.na(x) || !nzchar(x) || toupper(x) == "NA") NA_character_ else x
+  tryCatch({
+    d <- suppressMessages(readxl::read_excel(layout, sheet = "Info", col_types = "text",
+                                             .name_repair = "minimal"))
+    actaInfoValue(d, field)
   }, error = function(e) NA_character_)
-  v
 }
+## One Layout_Plate COLUMN, as the vector of values the operator actually filled in.
+##
+## The sibling of infoVal() for the other sheet, and it exists because the app had no way to read
+## one: everything per-well went through actaRecs()'s full pre-validation, so a caller that wanted a
+## single column reached for the Info sheet instead and read a row that no longer exists.
+##
+## RETURNS THE WHOLE COLUMN, not the first value. Layout_Plate is per well, and the facts worth
+## reading from it here -- ELN_ID, Operator -- may legitimately differ across the plate. Collapsing
+## is the caller's decision; actaElnLabel() is how ACTA does it everywhere else.
+layoutVals <- function(layout, field) {
+  if (is.na(layout) || !file.exists(layout)) return(character(0))
+  tryCatch({
+    ## col_types = "text", and this is NOT belt-and-braces. Excel stores an all-digit ELN_ID as a
+    ## NUMBER, readxl then types the column double, and `as.character(100000)` is "1e+05" -- which
+    ## would go on to name the archive folder. readxl's own text coercion gives "100000".
+    ## Everything this reader returns is text by definition, so asking for text is also honest.
+    d <- suppressMessages(readxl::read_excel(layout, sheet = "Layout_Plate", col_types = "text",
+                                             .name_repair = "minimal"))
+    names(d) <- actaStripHeaderAnnotation(names(d), where = "Layout_Plate")
+    if (!field %in% names(d)) return(character(0))
+    v <- trimws(as.character(d[[field]]))
+    ## "NA" typed into a cell is a blank somebody wrote down, not a value -- the same rule
+    ## infoVal() applies, kept identical so the two readers cannot disagree about emptiness.
+    v[!is.na(v) & nzchar(v) & toupper(v) != "NA"]
+  }, error = function(e) character(0))
+}
+
 ## workbook -> persistence -> blank
 resolvePath <- function(layout, field, prefKey) {
   wb <- infoVal(layout, field)
@@ -430,6 +468,16 @@ ui <- fluidPage(
       checkboxInput("mkPlots",  "Generate plots (PNG)",  value = isTRUE(pref("mkPlots",  TRUE))),
       ## Sits with the artefact toggles because it is about the report, not a separate operation.
       checkboxInput("openReport", "Open report after generation", value = isTRUE(pref("openReport", TRUE))),
+      ## ---- TiterPubs: a MIRROR of the workbook, not a second control ---------------------------
+      ## Both settings are declared in Info and nowhere else. Making them clickable here would
+      ## give one fact two sources with no precedence rule -- the mistake .mfcElnRef() already
+      ## records, where duplicating ELN_ID into Info produced exactly that. So these are rendered
+      ## DISABLED: they say what the workbook says, and the workbook stays the single source.
+      ##
+      ## They exist because the alternative is worse. scrub_confidential governs whether an
+      ## operator name, an ELN id and a panel name reach a bundle that is published under CC BY
+      ## 4.0 and is IRREVOCABLE, and until now an app user could not see its state at all.
+      uiOutput("titerMirror"),
       ## Titer entry is a manual, interrupting step -- it stops the run on a modal waiting for
       ## typed values -- so it is behind a collapsed toggle rather than sitting inline where it
       ## reads like just another output switch. Native <details>: no JS, no Shiny round-trip.
@@ -528,7 +576,14 @@ server <- function(input, output, session) {
   ## about LaTeX when it had not -- so a green panel plus a failed render means the cause is NOT a
   ## missing engine, and an extra row saying the same thing would send the next person down the
   ## wrong path. The panel is left as it was; the diagnosis now comes from the render itself.
-  depRecs <- local({ cached <- NULL; function() { if (is.null(cached)) cached <<- actaDependencyChecks(CODE_DIR); cached } })
+  ## Pass the WORKBOOK'S OWN answer, so a dependency that is fatal for this run reads as fatal and
+  ## blocking() can stop the Run button -- rather than the run starting and dying inside the
+  ## pipeline. Cached alongside the rest: `layout` does not change within a session.
+  depRecs <- local({ cached <- NULL; function() {
+    if (is.null(cached))
+      cached <<- actaDependencyChecks(
+        CODE_DIR, titerpubs = actaInfoFlagTrue(infoVal(layout, "titerpubs_export")))
+    cached } })
   output$depChecks     <- renderUI(checkPanel("All dependencies installed", depRecs()))
   output$versionChecks <- renderUI(checkPanel("Files check", vf))
 
@@ -610,6 +665,37 @@ server <- function(input, output, session) {
     tags$div(class = "d", style = "margin-bottom:8px",
              tags$strong("Instructions: "), if (is.na(layout)) "not resolved" else basename(layout)),
     uiOutput("compUI")))
+
+  ## ---- the TiterPubs mirror (see the uiOutput above for why it is read-only) ------------------
+  ## A DISABLED checkbox, not a label, so the state reads at a glance alongside the real toggles.
+  ## Parsed with actaInfoFlagTrue(), which is the pipeline's own rule -- a mirror that parsed the
+  ## cell differently could tell an operator scrubbing was on for a run that publishes it raw.
+  output$titerMirror <- renderUI({
+    tp <- infoVal(layout, "titerpubs_export")
+    sc <- infoVal(layout, "scrub_confidential")
+    one <- function(id, lab, raw, danger_when_off = FALSE) {
+      on  <- actaInfoFlagTrue(raw)
+      shown <- if (is.na(raw)) "(blank)" else raw
+      tags$div(style = "margin:2px 0",
+        tags$label(style = "font-weight:400;cursor:default;opacity:.85",
+          tags$input(type = "checkbox", disabled = NA, checked = if (on) NA else NULL,
+                     style = "margin-right:6px"),
+          lab,
+          tags$span(class = "d", style = "margin-left:6px",
+                    "— Info!", id, " = ", tags$code(shown))),
+        ## Say it plainly where getting it wrong is irreversible.
+        if (danger_when_off && !on)
+          tags$div(class = "d", style = "margin-left:20px;color:#a33",
+                   "Identifiers will NOT be removed from the bundle."))
+    }
+    tags$div(style = "margin:6px 0 10px;padding:6px 8px;border-left:3px solid #ccd",
+      tags$div(class = "d", style = "margin-bottom:4px",
+               tags$strong("TiterPubs"), " — set in the workbook, shown here"),
+      one("titerpubs_export",   "Build a TiterPubs bundle", tp),
+      ## Only worth warning about when a bundle is actually going to be built.
+      one("scrub_confidential", "Remove confidential identifiers", sc,
+          danger_when_off = actaInfoFlagTrue(tp)))
+  })
 
   ## Compensation is declared in the workbook, not chosen here: the line reports what Info asks for
   ## and only offers a file when that value is 'csv'. Greying out for 'self' is the honest state --
@@ -696,10 +782,10 @@ server <- function(input, output, session) {
                        detail = "no Titration_Instructions*.xlsx found -- see Files check", where = WORK_DIR)))
     out <- tryCatch({
       md  <- suppressMessages(readxl::read_excel(layout, sheet = "Layout_Plate", .name_repair = "minimal"))
-      names(md) <- actaStripHeaderAnnotation(names(md))
+      names(md) <- actaStripHeaderAnnotation(names(md), where = "Layout_Plate")
       gt  <- suppressMessages(readxl::read_excel(layout, sheet = "gating_template", .name_repair = "minimal"))
       inf <- suppressMessages(readxl::read_excel(layout, sheet = "Info", .name_repair = "minimal"))
-      names(inf) <- actaStripHeaderAnnotation(names(inf))
+      names(inf) <- actaStripHeaderAnnotation(names(inf), where = "Info")
       mk  <- if ("Markername" %in% names(md)) "Markername" else NA_character_
       ch  <- if ("Channel" %in% names(md)) "Channel" else NA_character_
       ## The same unit of work the script loops over -- one row per TITRATED MARKER, not per folder.
@@ -782,7 +868,12 @@ server <- function(input, output, session) {
   observeEvent(input$runActa, {
     rv$result <- NULL; rv$titer <- NULL; rv$dashResult <- NULL
     args <- c("--vanilla", "-e",
-              sprintf(paste0(.childLoad, "r<-h$run_acta(%s,report=%s,plots=%s,quiet=FALSE,code_dir=%s);saveRDS(list(report_ok=r$report_ok,report_error=r$report_error,wrote_plots=r$wrote_plots,elapsed_s=r$elapsed_s,script=r$script,script_version=r$script_version,seed=r$seed,export_file=r$export_file,plots_dir=r$plots_dir,version_dir=r$version_dir,ok=r$ok,analysis_error=r$analysis_error),%s)"),
+              ## CARRY THE WHOLE RESULT, minus the known-large members -- see actaAppChildResult().
+              ## This was a hand-written list(...) of twelve fields against run_acta()'s twenty-six,
+              ## and a hand-written list cannot fail loudly: `titerpubs_error` was silently dropped,
+              ## which is why a bundle deleted by its own leak gate read as "the bundle never
+              ## produces" with no reason shown anywhere in the app.
+              sprintf(paste0(.childLoad, "r<-h$run_acta(%s,report=%s,plots=%s,quiet=FALSE,code_dir=%s);saveRDS(h$actaAppChildResult(r),%s)"),
                       .rq(WORK_DIR), isTRUE(input$mkReport), isTRUE(input$mkPlots), .rq(CODE_DIR),
                       .rq(file.path(WORK_DIR, ".acta_run_result.rds"))))
     unlink(file.path(WORK_DIR, ".acta_run_result.rds"))
@@ -1052,8 +1143,17 @@ server <- function(input, output, session) {
     ## looks like the run folder either way.
     src <- c(rv$result$export_file, reportPath(),
              if (!is.na(rv$result$plots_dir)) rv$result$plots_dir)
-    ## SANITISED HERE TOO: this is a workbook cell on its way to becoming a directory name.
-    eln <- infoVal(layout, "ELN_ID"); if (is.na(eln)) eln <- "run"
+    ## THE LAYOUT SHEET, NOT THE INFO SHEET. This read `infoVal(layout, "ELN_ID")`, and ELN_ID
+    ## moved to Layout_Plate in 3.6.8 -- no template has carried the Info row since. infoVal()
+    ## returns NA for a name it cannot find, by design, so the lookup never errored: it just always
+    ## returned NA and every app-driven copy archived into `Archived/<stamp>_run` instead of the
+    ## experiment id. The pipeline has always read the layout copy (BID is unique(stats$ELN_ID));
+    ## this was the one reader left pointing at the old location. Found by the column registry.
+    ##
+    ## A VECTOR, deliberately: ELN_ID is per well, so a run may legitimately carry more than one,
+    ## and actaElnLabel() is what collapses them to "A+B". Info could only ever hold one.
+    ## SANITISED: this is a workbook cell on its way to becoming a directory name.
+    eln <- layoutVals(layout, "ELN_ID"); if (!length(eln)) eln <- "run"
     eln <- actaElnLabel(eln, for_file = TRUE)
     r <- actaArchiveThenCopy(src, dest, eln)
     ## The FULL path, not basename(): a traversal payload's last segment looks innocuous.

@@ -36,12 +36,24 @@
 ## in five functions. A built-in regex whose name is missing from one of them is matched with
 ## fixed = TRUE, so it matches nothing and that reader reports clean -- the fail-open shape this
 ## file exists to prevent, reached by nothing worse than a copy-paste. One constant, five uses.
-ACTA_BUNDLE_REGEX <- c("an email address", "a UNC network path", "a non-local file:// URL")
+##
+## THE TWO ACCOUNT PATTERNS ARE REGEXES AS OF 3.6.12 -- they are built from the login at run time
+## rather than written out here, and they are boundary-anchored. See the long note in
+## actaBundleScanPatterns() for the incident that forced it.
+ACTA_BUNDLE_REGEX <- c("an email address", "a UNC network path", "a non-local file:// URL",
+                       "account name", "account, path-encoded")
 
-actaBundleScanPatterns <- function(extra = character(), extra_regex = character()) {
+## `user` and `node` ARE ARGUMENTS SO THEY CAN BE TESTED, which is the same seam
+## actaDeIdentifyText(x, user = ) has had since CI found that function publishing the login
+## "runner". A rule keyed on this machine's particulars can only be proven on a machine with
+## different ones, and the defect this file was just fixed for was invisible to every reviewer
+## and every CI leg precisely because none of them had a login that collided.
+actaBundleScanPatterns <- function(extra = character(), extra_regex = character(),
+                                   user = tryCatch(Sys.info()[["user"]], error = function(e) ""),
+                                   node = tryCatch(Sys.info()[["nodename"]], error = function(e) "")) {
   home <- tryCatch(path.expand("~"), error = function(e) "")
-  user <- tryCatch(Sys.info()[["user"]], error = function(e) "")
-  node <- tryCatch(Sys.info()[["nodename"]], error = function(e) "")
+  user <- if (length(user) == 1L && !is.na(user)) as.character(user) else ""
+  node <- if (length(node) == 1L && !is.na(node)) as.character(node) else ""
   ## EVERY SPELLING OF HOME THE DE-IDENTIFIER KNOWS, not just path.expand("~").
   ##
   ## This was one pattern, `path.expand("~")`. On Windows that is the DOCUMENTS folder, not the
@@ -67,14 +79,64 @@ actaBundleScanPatterns <- function(extra = character(), extra_regex = character(
   hp <- stats::setNames(as.list(.homes),
                         if (length(.homes)) sprintf("home prefix %d", seq_along(.homes))
                         else character(0))
+  ## ============ THE LOGIN IS MATCHED THE WAY actaDeIdentifyText() MATCHES IT ============
+  ##
+  ## THIS WAS A BARE `fixed = TRUE` SUBSTRING, AND IT DELETED BUNDLES THAT CONTAINED NO LEAK.
+  ## Measured 2026-11-19 on a Windows operator's own run of the released 3.6.11, OQ_Test1, default
+  ## workbook: 8 blocking findings, every one a false positive. Their login is `jatin`; the shipped
+  ## OQ_Test1 Info sheet carries `References = https://github.com/jatin199517/acta-public` -- ACTA'S
+  ## OWN REPOSITORY URL -- and `jatin` is a substring of the handle. The URL rides in four bundle
+  ## artefacts (the instructions workbook, the export, the report PDF's Info table and the mapped
+  ## TiterPubs sheet), so 4 files x 2 patterns = the 8 findings, and the gate deleted the zip.
+  ## The TiterPubs feature was therefore unusable on that machine, for any dataset.
+  ##
+  ## WHY IT SURVIVED EVERY REVIEW AND THE WHOLE CI MATRIX: on a managed machine the login IS an
+  ## e-mail address (`<name>@<company>.com`) -- long, distinctive, and never a substring of
+  ## anything innocent -- so an unanchored match could not misfire there. The same "one machine's
+  ## particulars" fault this codebase has recorded against the de-identifier three times already.
+  ##
+  ## THE TWO CONTROLS GUARDING ONE VALUE DISAGREED ABOUT WHAT IT IS, and the scanner -- the one
+  ## wired to unlink() -- was the looser. actaDeIdentifyText() has matched the login as
+  ## `(?<![A-Za-z0-9])<login>(?![A-Za-z0-9])` with a >= 4 character floor since it was written, and
+  ## its own comment says why: "A short login is a real word -- run, lab, abc". This now does the
+  ## same, so the redactor and the detector finally agree.
+  ##
+  ## NO REAL LEAK STOPS MATCHING. In every shape this pattern exists to catch, the character beside
+  ## the login is a separator, not alphanumeric: `/Users/<login>/`, `C:\Users\<login>\`,
+  ## `<login>-<company>-com`. Only a login glued to further alphanumerics stops matching, and that
+  ## is a DIFFERENT token, not the operator's identity. The home-prefix patterns above are
+  ## unchanged and still carry the whole path form.
+  ##
+  ## THE LENGTH FLOOR IS WHAT LETS A SHORT LOGIN PUBLISH AT ALL. Measured on a real bundle: a
+  ## two-character login matched 18 of its files as a bare substring. Such an operator could never
+  ## have produced a bundle. Below the floor the bare name is not a pattern; the path forms still
+  ## are, because actaHomePrefixes() returns the whole home directory and drops nothing above 4
+  ## characters.
+  .acctPat <- function(v)
+    if (nzchar(v) && nchar(v) >= 4L)
+      sprintf("(?<![A-Za-z0-9])%s(?![A-Za-z0-9])", .tpReEsc(v)) else NA_character_
+  ## AND THE DUPLICATE IS GONE. `gsub("[^A-Za-z0-9]", "-", user)` equals `user` for ANY alphanumeric
+  ## login (jatin, runner, jsmith all verified identical), so the path-encoded rule was a byte-copy
+  ## of the plain one and every account finding was reported twice -- which is how one leak read as
+  ## "8 finding(s)". The duplicate-NAME guard below could not see it: the names differ, the values
+  ## did not. It is still emitted when it genuinely differs, which is the case it was added for
+  ## (an e-mail login flattened to `<name>-<company>-com` in a scratch path).
+  .userEnc <- if (nzchar(user)) gsub("[^A-Za-z0-9]", "-", user) else ""
   p <- c(
     "home directory"      = if (nzchar(home)) home else NA,
     unlist(hp),
-    "account name"        = if (nzchar(user)) user else NA,
-    "machine name"        = if (nzchar(node)) node else NA,
+    "account name"        = .acctPat(user),
+    ## SAME FLOOR AS THE DE-IDENTIFIER USES FOR THE HOST (`nchar(.node) > 3L`), for the same
+    ## reason: a three-character hostname is a word, and matching it unanchored would delete every
+    ## bundle built on that machine exactly as the login did. Left as a FIXED match, NOT
+    ## boundary-anchored, deliberately -- actaDeIdentifyText() masks the host with fixed = TRUE, so
+    ## anchoring here would make the detector NARROWER than the redactor, which is the wrong
+    ## direction for a leak scan.
+    "machine name"        = if (nzchar(node) && nchar(node) > 3L) node else NA,
     ## The account also appears path-encoded, with separators flattened to '-', in scratch and
-    ## sandbox paths -- which is exactly the form the FILENAME leak took.
-    "account, path-encoded" = if (nzchar(user)) gsub("[^A-Za-z0-9]", "-", user) else NA,
+    ## sandbox paths -- which is exactly the form the FILENAME leak took. Emitted only when it is
+    ## not a byte-copy of the plain login; see the note above.
+    "account, path-encoded" = if (identical(.userEnc, user)) NA_character_ else .acctPat(.userEnc),
     "OneDrive library"    = "OneDrive-SharedLibraries",
     "cloud storage path"  = "CloudStorage",
     "a POSIX home path"   = "/Users/",
