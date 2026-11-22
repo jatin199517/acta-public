@@ -232,7 +232,7 @@ chk("and the combinatorial flag says so",
 
 ## FIRST-APPEARANCE ORDER. Sorting alphabetically reordered OQ_Test2's groups from CD19/CD7/CD56 to
 ## CD19/CD56/CD7 and the OQ caught it. The order is load-bearing: it sets the report's section order,
-## the export row order, and which group's FCS supplies the MiFlowCyt $PnV table.
+## the export row order, and which group's FCS supplies the MIFlowCyt $PnV table.
 chk("group order follows the LAYOUT, not the alphabet",
     identical(tg(c("CD19","CD7","CD56"))$key, c("CD19","CD7","CD56")))
 

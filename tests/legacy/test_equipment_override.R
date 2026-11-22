@@ -7,7 +7,7 @@
 ## software name as the equipment, and nothing for BD.
 ##
 ## Equipment is produced in ONE place -- fcsEquipment(), via annotate_changeParam_pdWrite() -- and
-## feeds the export, the report, MiFlowCyt and the TiterPubs submission. That is why the override
+## feeds the export, the report, MIFlowCyt and the TiterPubs submission. That is why the override
 ## is applied there and not in four consumers.
 
 source(file.path(this.path::this.dir(), "acta_test_paths.R"))

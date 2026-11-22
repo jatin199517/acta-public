@@ -111,7 +111,7 @@ actaColumnRegistry <- function() {
     r("Info", "Template_Version",         "",     FALSE, TRUE,  "Template version. Gated as a FLOOR: ACTA requires 3.6.8 or later."),
     r("Info", "working_directory",        "",     FALSE, FALSE, "Run root. Blank = the workbook's own folder."),
     r("Info", "compensation",             "",     FALSE, FALSE, "none / self / a spillover .csv path."),
-    r("Info", "miflowcyt_export",         "L",    FALSE, FALSE, "TRUE writes the MiFlowCyt metadata appendix."),
+    r("Info", "miflowcyt_export",         "L",    FALSE, FALSE, "TRUE writes the MIFlowCyt metadata appendix."),
     r("Info", "dashboard_dir",            "",     FALSE, FALSE, "Where the dashboard .html is written."),
     r("Info", "titration_export_dir",     "",     FALSE, FALSE, "Folder whose immediate subfolders are runs, for the dashboard."),
     r("Info", "dashboard_tabbed_by",      "",     FALSE, FALSE, "Export column the dashboard tabs by."),

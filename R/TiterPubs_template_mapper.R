@@ -1241,7 +1241,7 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
 ##
 ## Returns the count, with the old -> new relative paths attached as `renamed`. The caller feeds
 ## those back into the workbook scrub, because the export's `fcs_file` cells POINT AT these files
-## -- MiFlowCyt section 4.1 is explicitly "the path relative to Titration_FCS/, which is exactly
+## -- MIFlowCyt section 4.1 is explicitly "the path relative to Titration_FCS/, which is exactly
 ## what the bundle contains". Renaming the file without rewriting the pointer would trade a leak
 ## for a dangling reference, which is the same trade the hyperlink fix had to avoid.
 .tpStageFcs <- function(src, dest, scrub_serial = TRUE, keywords = NULL, rename = list()) {
@@ -1815,7 +1815,7 @@ actaTiterPubsBundle <- function(stats, info, outputs_dir, template, run_dir = ou
                         keywords = if (scrub) ACTA_SCRUB_FCS_KEYWORDS else NULL,
                         rename = fcsMap)
       ## BOTH FORMS THE WORKBOOKS USE. The export's `fcs_file` column holds the path relative to
-      ## Titration_FCS/ ("<Dirname>/<file>.fcs"); MiFlowCyt 4.1 holds the same path WITH the
+      ## Titration_FCS/ ("<Dirname>/<file>.fcs"); MIFlowCyt 4.1 holds the same path WITH the
       ## "Titration_FCS/" prefix. A whole-cell substitution has to be given the exact cell value,
       ## so both spellings are registered or the one that was missed keeps pointing at a file
       ## that is no longer there under that name.
@@ -2315,7 +2315,7 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
 ## `within` names keys in `repl` that are replaced ANYWHERE INSIDE a cell's text rather than as
 ## the whole of it, and that are allowed to match nothing.
 ##
-## ONE CELL IN THE EXPORT HOLDS A LIST. MiFlowCyt section 4.1 is written as a single sentence --
+## ONE CELL IN THE EXPORT HOLDS A LIST. MIFlowCyt section 4.1 is written as a single sentence --
 ## "11 FCS file(s): Titration_FCS/<dir>/<file>.fcs; Titration_FCS/..." -- so the whole-cell rule
 ## below cannot reach the paths inside it. Measured: after the FCS rename landed and every entry
 ## name and `fcs_file` cell was correct, that one composed cell still named all eleven original
@@ -2801,7 +2801,7 @@ actaTiterPubsTemplate <- function(code_dir = NULL) {
     ##     do what it claimed. These pointers do not share that property: the instructions
     ##     workbook has no `fcs_file` column at all, and the export names only files that produced
     ##     a statistic, so the unstained wells are legitimately absent.
-    ##   * SUBSTRING, because MiFlowCyt 4.1 joins every path into ONE cell, which a whole-cell
+    ##   * SUBSTRING, because MIFlowCyt 4.1 joins every path into ONE cell, which a whole-cell
     ##     rule cannot reach. See the note on `within` in .tpApplyRepl().
     for (k in names(extra_repl)) repl[[k]] <- extra_repl[[k]]
 

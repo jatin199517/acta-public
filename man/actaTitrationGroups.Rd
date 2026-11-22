@@ -34,7 +34,7 @@ byte-identical to before; several, and the key is the alias, because that is wha
 them.
 
 Order is first appearance, not sorted, and that is load-bearing: it decides the report's section
-order, the row order of the exports, and which group's representative FCS supplies the MiFlowCyt
+order, the row order of the exports, and which group's representative FCS supplies the MIFlowCyt
 detector-voltage table. Sorting alphabetically reordered a diagnostic case's groups, which the
 diagnostic run caught. A user orders the sheet deliberately, so it is honoured.
 }

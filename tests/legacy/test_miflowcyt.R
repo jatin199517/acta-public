@@ -1,4 +1,4 @@
-## Guards actaMiFlowCyt(), the MiFlowCyt metadata assembler.
+## Guards actaMiFlowCyt(), the MIFlowCyt metadata assembler.
 ##
 ## Why this exists: the assembler was written, left with ZERO call sites and ZERO tests, and my own
 ## notes recorded it as "tested" for a day. It is the single source for two consumers -- the report
@@ -39,13 +39,13 @@ m <- h$actaMiFlowCyt(stats = st, info = info, gating_template = gt, qcList = lis
                                         stringsAsFactors = FALSE),
                      downsample = h$actaDownsampleReport(12000L, c(a = 12000L, b = 12000L)))
 
-cat("=== the five MiFlowCyt sections, plus the standard block ===\n")
+cat("=== the five MIFlowCyt sections, plus the standard block ===\n")
 for (s in c("standard", "experiment", "specimen", "instrument", "reagents", "analysis"))
   chk(sprintf("section '%s' present", s), !is.null(m[[s]]))
 
 cat("=== honesty about completeness ===\n")
 ## The single most important field: it is what stops a consumer presenting this as a compliant
-## MiFlowCyt submission when six items are deferred to the ELN.
+## MIFlowCyt submission when six items are deferred to the ELN.
 chk("completeness says structured-not-complete",
     identical(m$standard$completeness, "structured-not-complete"))
 chk("the note says it is not self-contained", grepl("not a compliant submission", m$standard$note,
@@ -71,7 +71,7 @@ chk("no ELN anywhere -> the documented placeholder, still not blank",
     identical(m3$experiment$purpose, h$ACTA_MIFLOWCYT_DEFERRED))
 
 cat("=== specimen and analysis content ===\n")
-chk("SOP lands in specimen treatment (MiFlowCyt 2.3)", identical(m$specimen$treatment$sop, "001"))
+chk("SOP lands in specimen treatment (MIFlowCyt 2.3)", identical(m$specimen$treatment$sop, "001"))
 ## Protocol cites BOTH: the SOP is the controlled document, the ELN entry holds the run's deviations.
 ## Naming only one sends a reader to the wrong place.
 chk("protocol cites the SOP and the ELN",

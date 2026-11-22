@@ -67,7 +67,7 @@ An HTML dashboard allows quick retrieval of outputs and metadata from all past t
 
 ### Report
 
-The PDF report houses two sections — 1) MiFlowCyt-styled metadata and 2) Titration results.
+The PDF report houses two sections — 1) MIFlowCyt-styled metadata and 2) Titration results.
 Image shows the table of contents for the report.
 
 ![](assets/report_example.png)
@@ -244,11 +244,11 @@ install straight away — see *Validate your installation* below.
 That command installs the current release. To install one exact version, name its tag:
 
 ```r
-remotes::install_github("jatin199517/acta-public@v3.6.15")
+remotes::install_github("jatin199517/acta-public@v3.6.16")
 ```
 
 `packageVersion("ACTA")` tells you which version you have. The clone route pins the same way:
-`git clone --branch v3.6.15 https://github.com/jatin199517/acta-public.git`.
+`git clone --branch v3.6.16 https://github.com/jatin199517/acta-public.git`.
 
 That one call pulls in 142 packages. Most are on CRAN, but the flow stack — `flowCore`,
 `flowWorkspace`, `openCyto`, `ggcyto`, `flowMeans` — is on Bioconductor, and about sixty more

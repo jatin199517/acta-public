@@ -76,10 +76,10 @@ header-includes:
   ##
   ## The cost of dropping it is close to nothing: every per-antibody subsection is preceded by
   ## \clearpage, and a heading's before-skip is discarded at the top of a page. Only the numbered
-  ## subsections inside the MiFlowCyt part sit mid-page, and they gain a few points of air.
+  ## subsections inside the MIFlowCyt part sit mid-page, and they gain a few points of air.
 ## The "Contents" heading is HOISTED OUT of the columns, into multicols' optional pre-text argument,
 ## which is typeset at full width before the columns start. Inside the columns it was part of the left
-## column's flow, so the left column began one heading lower than the right: "MiFlowCyt metadata" sat
+## column's flow, so the left column began one heading lower than the right: "MIFlowCyt metadata" sat
 ## below "Titration results" instead of level with it. With the heading above both, the two parts start
 ## on the same line.
 ##
@@ -212,18 +212,18 @@ source(ScriptFile, local = knitr::knit_global())
 \clearpage
 ```
 ```{=tex}
-\part{A. MiFlowCyt metadata}
+\part{A. MIFlowCyt metadata}
 ```
 
 
 # 1 Experiment Overview
 
 ```{r MfcExperiment, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
-## MiFlowCyt 1, rendered FROM `actaMfc` -- the same object the FlowRepository export will serialise --
+## MIFlowCyt 1, rendered FROM `actaMfc` -- the same object the FlowRepository export will serialise --
 ## so this page and any future submission cannot disagree with each other. Items that legitimately
 ## live in the ELN are printed as the explicit reference the assembler produced, never as a blank.
 ##
-## mfcVal() and mfcTable() are defined HERE, in the first MiFlowCyt chunk, and reused by the three
+## mfcVal() and mfcTable() are defined HERE, in the first MIFlowCyt chunk, and reused by the three
 ## that follow: knitr chunks share one environment and this one runs first. A missing value reads
 ## "(not supplied)" rather than NA, because an NA in a report is indistinguishable from a field
 ## somebody left blank by accident.
@@ -236,7 +236,7 @@ mfcVal <- function(v) {
 }
 ## An ABSOLUTE width, not a fraction of \textwidth. column_spec() drops the backslash: passing
 ## "0.60\\textwidth" emitted `p{0.60textwidth}` into the .tex, and xelatex answered "Illegal unit of
-## measure (pt inserted)" pointing at the header, "MiFlowCyt item & V|alue". 15cm against a landscape
+## measure (pt inserted)" pointing at the header, "MIFlowCyt item & V|alue". 15cm against a landscape
 ## text width of roughly 23cm leaves the item column its natural size. The width is needed at all
 ## because the Value column carries whole sentences -- the ELN references -- which otherwise run off
 ## the page instead of wrapping.
@@ -246,14 +246,14 @@ mfcTable <- function(d)
   cat(kableExtra::column_spec(
         kableExtra::kable_styling(
           knitr::kable(d, format = "latex", booktabs = TRUE, row.names = FALSE,
-                       ## "Category" rather than "MiFlowCyt item": the section heading already says
-                       ## which MiFlowCyt part this is, so repeating it in every header row is noise.
+                       ## "Category" rather than "MIFlowCyt item": the section heading already says
+                       ## which MIFlowCyt part this is, so repeating it in every header row is noise.
                        col.names = c("Category", "Value")),
           latex_options = "hold_position", font_size = 9),
         2, width = "15cm"))
 
 if (!exists("actaMfc")) {
-  cat("No MiFlowCyt metadata was assembled by this run.\n\n")
+  cat("No MIFlowCyt metadata was assembled by this run.\n\n")
 } else {
   cat(sprintf("**%s %s.** %s\n\n", actaMfc$standard$name, actaMfc$standard$version,
               actaMfc$standard$note))
@@ -275,7 +275,7 @@ if (!exists("actaMfc")) {
 # 2 Flow Sample/Specimen Details
 
 ```{r MfcSpecimen, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
-## MiFlowCyt 2. The SOP belongs under sample treatment (MiFlowCyt 2.3): it IS the staining protocol
+## MIFlowCyt 2. The SOP belongs under sample treatment (MIFlowCyt 2.3): it IS the staining protocol
 ## reference, and Fix/Perm are the parts of that protocol the instructions file records per well.
 if (exists("actaMfc")) {
   s <- actaMfc$specimen
@@ -367,7 +367,7 @@ if (exists("panelIterationInfo") && !is.null(panelIterationInfo) && length(panel
 # 3 Instrument Details
 
 ```{r MfcInstrument, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
-## MiFlowCyt 3. Manufacturer/model comes from the FCS keywords, so it reports what ACQUIRED the data
+## MIFlowCyt 3. Manufacturer/model comes from the FCS keywords, so it reports what ACQUIRED the data
 ## rather than what the instructions file claims. The detector table is $PnV -- the gains actually in
 ## force -- read from one representative file of the FIRST antibody group, because voltages are per
 ## acquisition rather than per well.
@@ -397,7 +397,7 @@ if (exists("actaMfc")) {
 
 # 4 Data Analysis Details
 
-Everything below is MiFlowCyt part 4 -- what was done to the events between acquisition and the
+Everything below is MIFlowCyt part 4 -- what was done to the events between acquisition and the
 numbers in this report, in the order it happened: events read, compensation, transformation, gating,
 and the software that did it.
 
@@ -520,7 +520,7 @@ if (length(.g)) print(.g[[1]]$plot) else cat("No gating scheme was captured by t
 ## 4.4.2 Gate Statistics
 
 ```{r MfcGateStats, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
-## MiFlowCyt 4.4.2 asks for the gating statistics. They are NOT reproduced here: the table is per well AND
+## MIFlowCyt 4.4.2 asks for the gating statistics. They are NOT reproduced here: the table is per well AND
 ## per population -- 44 rows for a single group, 126 for three -- and a summarised version was neither
 ## the real numbers nor short enough to be worth a page. It pointed at StatsExport anyway, so this
 ## points there directly and says how to get a population into it.
@@ -542,7 +542,7 @@ cat(paste("In `gating_template`, mark `stats_export` as TRUE to make sure that p
 ## 4.5 Analysis software
 
 ```{r MfcSoftware, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
-## MiFlowCyt 1.0 has NO software item -- section 4 ends at 4.4.4 -- so this is labelled an
+## MIFlowCyt 1.0 has NO software item -- section 4 ends at 4.4.4 -- so this is labelled an
 ## addition rather than given a real item number. It still belongs in the report: Taken from the run itself rather than
 ## restated by hand: ACTA's version is parsed from the script FILENAME and R's from R.version.string.
 if (exists("actaMfc")) {
@@ -748,7 +748,7 @@ emitPlot <- function(code, tag, d) {
     code, "```", "")), sep = "\n")
 }
 for (q in seq_along(antibody)) {
-  ## Numbered 5.q to match the MiFlowCyt part's manual numbering. The "5" is the section number of
+  ## Numbered 5.q to match the MIFlowCyt part's manual numbering. The "5" is the section number of
   ## "Layouts for each antibody" above and is written in both places -- renumber the two together.
   cat("\n\\clearpage\n\\subsection{\\small ", sprintf("5.%d ", q),
       knitr:::escape_latex(antibody[q]), "}\n\n", sep = "")

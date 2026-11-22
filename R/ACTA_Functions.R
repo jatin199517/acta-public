@@ -1896,7 +1896,7 @@ actaTitrationGroups <- function(metadata, alias_col = "Alias", channel_col = NUL
 
   ## FIRST-APPEARANCE ORDER, not sorted. `unique(metadata_file$Dirname)` used to set this order and
   ## it is load-bearing: it decides the report's section order, the row order of the exports, and
-  ## which group's representative FCS supplies the MiFlowCyt $PnV table. Sorting alphabetically
+  ## which group's representative FCS supplies the MIFlowCyt $PnV table. Sorting alphabetically
   ## reordered OQ_Test2's groups from CD19/CD7/CD56 to CD19/CD56/CD7, which the OQ caught. A user
   ## orders the sheet deliberately; honour it.
   g <- unique(data.frame(dirname = d[keep], alias = a[keep], stringsAsFactors = FALSE))
@@ -4813,7 +4813,7 @@ actaFcsPanel <- function(path) {
   v[, c("detector", "marker"), drop = FALSE]
 }
 
-## ======================= MiFlowCyt METADATA (2_87) ==================================
+## ======================= MIFlowCyt METADATA (2_87) ==================================
 ## ONE assembler, consumed by two renderers: the report typesets from it, and the
 ## FlowRepository export serialises it. Deriving each independently would guarantee they drift the
 ## first time a field moved -- and a PDF that disagrees with the metadata submitted alongside it is
@@ -4821,10 +4821,10 @@ actaFcsPanel <- function(path) {
 ##
 ## Data only, NO formatting. Nothing here knows about LaTeX, kable or JSON.
 ##
-## COMPLETENESS. Several MiFlowCyt items legitimately live in the ELN (purpose, experiment
+## COMPLETENESS. Several MIFlowCyt items legitimately live in the ELN (purpose, experiment
 ## variables, organization, conclusions, specimen source and collection, instrument QC). They are
 ## emitted as explicit ELN references rather than silently blank, and `standard$completeness` records
-## that the result is MiFlowCyt-STRUCTURED, not MiFlowCyt-COMPLETE, so no downstream consumer can
+## that the result is MIFlowCyt-STRUCTURED, not MIFlowCyt-COMPLETE, so no downstream consumer can
 ## present it as a compliant submission document.
 ACTA_MIFLOWCYT_DEFERRED <- "See ELN"
 
@@ -4855,7 +4855,7 @@ ACTA_MIFLOWCYT_DEFERRED <- "See ELN"
   v
 }
 
-## Per-detector voltages ($PnV) from ONE representative FCS file. MiFlowCyt asks for instrument
+## Per-detector voltages ($PnV) from ONE representative FCS file. MIFlowCyt asks for instrument
 ## settings, and the detector gains are the part that actually varies between runs on the same
 ## machine -- the channel list alone does not distinguish two very different acquisitions.
 ## Returns a zero-row frame rather than failing: a missing keyword must not stop a report.
@@ -4913,7 +4913,7 @@ actaFcsVoltages <- function(path, all = FALSE) {
                         stringsAsFactors = FALSE)
   if (!is.null(panel) && nrow(panel)) {
     tm <- unique(c(titrated$marker, titrated$detector))
-    ## FLUORESCENCE reagents only. MiFlowCyt 2.4 is the reagent item (inside the SPECIMEN section --
+    ## FLUORESCENCE reagents only. MIFlowCyt 2.4 is the reagent item (inside the SPECIMEN section --
     ## NOT a section of its own, which is what an earlier version of this comment claimed), and
     ## scatter, time and
     ## pulse-shape channels are not reagents -- listing TLSW and Event Info as panel antibodies
@@ -4930,7 +4930,7 @@ actaFcsVoltages <- function(path, all = FALSE) {
   list(titrated = titrated, costain_panel = costain)
 }
 
-## MiFlowCyt appendix, as a flat Item / Description / Value table for the titration export.
+## MIFlowCyt appendix, as a flat Item / Description / Value table for the titration export.
 ##
 ## Written when Info!miflowcyt_export is TRUE. It is the submission-facing view of the same `actaMfc`
 ## object the report typesets, so the two cannot disagree about a value -- only about layout.
@@ -4994,7 +4994,7 @@ actaMiFlowCytAppendix <- function(mfc) {
                 v(s$treatment$sop), v(s$treatment$fixed), v(s$treatment$permeabilised),
                 v(s$treatment$protocol))))
   ## 2.4 is one row per reagent: the titrated antibody of each group, then the rest of the panel,
-  ## which MiFlowCyt wants described even though ACTA does not titrate it.
+  ## which MIFlowCyt wants described even though ACTA does not titrate it.
   add("2.4", "Fluorescence Reagent Description")
   ti <- mfc$reagents$titrated
   if (!is.null(ti) && nrow(ti))
@@ -5077,7 +5077,7 @@ actaMiFlowCyt <- function(stats, info, gating_template = NULL, qcList = NULL, ga
   ## than restating verdicts: one place to read them, and it cannot fall out of step.
   experiment <- list(
     purpose              = eln,
-    ## MiFlowCyt 1.2. NA rather than a guess when Info!keywords is blank: a renderer prints "not
+    ## MIFlowCyt 1.2. NA rather than a guess when Info!keywords is blank: a renderer prints "not
     ## supplied", and inventing keywords would put words in the submitter's mouth.
     keywords             = if (is.na(kw) || !nzchar(kw)) NA_character_ else kw,
     experiment_variables = sprintf("Stain volume (uL) per antibody; see Reagents. %s", eln),
@@ -5091,7 +5091,7 @@ actaMiFlowCyt <- function(stats, info, gating_template = NULL, qcList = NULL, ga
                            else ACTA_MIFLOWCYT_DEFERRED)
 
   ## 2 -- Specimen. Sample treatment is where the SOP belongs: it is the staining protocol
-  ## reference, which is exactly MiFlowCyt 2.3, and Fix/Perm are the parts of it the layout records.
+  ## reference, which is exactly MIFlowCyt 2.3, and Fix/Perm are the parts of it the layout records.
   specimen <- list(
     characteristics = list(
       test_material      = .mfcOne(stats, "Cell_Type"),
@@ -6543,7 +6543,7 @@ run_acta <- function(version_dir = getwd(), report = TRUE, plots = TRUE, quiet =
     reportHist    = pick("reportHist"),  reportPseudo = pick("reportPseudo"),
     reportLayout  = pick("reportLayout"), reportDims  = pick("reportDims"),
     panelList     = pick("panelList"),   panelStr     = pick("panelStr"),
-    ## MiFlowCyt metadata, data only -- the report typesets it and the FlowRepository export will
+    ## MIFlowCyt metadata, data only -- the report typesets it and the FlowRepository export will
     ## serialise it. Surfaced here so the OQ can assert on the object rather than on rendered prose.
     miflowcyt     = pick("actaMfc"),
     ## artefacts on disk
@@ -8719,10 +8719,10 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
                      length(off), paste(sprintf("%s=%d", off, ev[off]), collapse = ", ")))
   }
 
-  ## MiFlowCyt metadata: assembled, structurally complete, and HONEST about what it is. Asserted on
+  ## MIFlowCyt metadata: assembled, structurally complete, and HONEST about what it is. Asserted on
   ## the OBJECT rather than on rendered prose, so the check survives any reformatting of the report.
   ## The completeness flag is the one that matters most -- it is what stops a consumer presenting this
-  ## as a compliant MiFlowCyt submission -- so a change there must fail the OQ, not pass quietly.
+  ## as a compliant MIFlowCyt submission -- so a change there must fail the OQ, not pass quietly.
   m <- res$miflowcyt
   if (is.null(m)) {
     add("miflowcyt", "MiFlowCyt metadata assembled", "fail", "run_acta() returned no $miflowcyt")
@@ -8864,10 +8864,10 @@ actaOQRun <- function(oq_dir, quiet = TRUE, progress = function(...) invisible()
     add("collect", "Artefacts collected into Outputs/", "fail",
         sprintf("could not move into %s: %s", basename(outDir), paste(lost, collapse = ", ")))
 
-  ## The MiFlowCyt appendix sheet, when the case asks for one. Both OQ cases set
+  ## The MIFlowCyt appendix sheet, when the case asks for one. Both OQ cases set
   ## Info!miflowcyt_export TRUE, so this is the check that the flag is actually WIRED -- it sat unread
   ## in all four instructions files until 2026-08-19. Asserted on the sheet's own structure rather than
-  ## on a row count, so rewording a value cannot fail it but losing a whole MiFlowCyt section will.
+  ## on a row count, so rewording a value cannot fail it but losing a whole MIFlowCyt section will.
   .expForMfc <- list.files(outDir, pattern = "TitrationExport.*[.]xlsx$", full.names = TRUE)
   .wantMfc <- tryCatch({
     ii <- suppressMessages(readxl::read_excel(file.path(oq_dir, basename(

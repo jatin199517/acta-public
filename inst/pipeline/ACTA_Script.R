@@ -1440,7 +1440,7 @@ if (!length(ScriptVersion) || is.na(ScriptVersion) || !nzchar(ScriptVersion))
   .lab <- panelList[[antibody[q]]][panelList[[antibody[q]]]$Markername != "\u2014", , drop = FALSE]
   panelStr[[antibody[q]]] <- if (nrow(.lab))
     paste(sprintf("%s (%s)", .lab$Markername, .lab$Channel), collapse = ", ") else NA_character_
-  ## FIRST group's first stained file, kept for the MiFlowCyt Instrument section ($PnV detector
+  ## FIRST group's first stained file, kept for the MIFlowCyt Instrument section ($PnV detector
   ## voltages) and the panel. Any file in the run would do -- voltages and panel are per acquisition,
   ## not per well -- but pinning the first makes the metadata reproducible instead of depending on
   ## whichever group happened to run last.
@@ -2120,17 +2120,17 @@ statsForExport<-stats |> dplyr::filter(SI==maxSI) |>
   left_join(mmFits[, c("Titration","MM_R2","MM_Vmax","MM_Kd","MM_90pct_Vmax","MM_note")],
             by="Titration") |>
   relocate(any_of(c("MM_R2","MM_Vmax","MM_Kd","MM_90pct_Vmax","MM_note")), .after = last_col())
-## MOVED ahead of the titration export on 2026-08-19: the export's MiFlowCyt appendix sheet reads
+## MOVED ahead of the titration export on 2026-08-19: the export's MIFlowCyt appendix sheet reads
 ## `actaMfc`, so assembling it afterwards left the sheet looking for an object that did not exist
 ## yet ("object 'actaMfc' not found"). Everything it needs -- stats, statsExportAll, panelList,
 ## the transform arguments, the resolved compensation mode -- is complete by this point.
-## ---- MiFlowCyt metadata ---------------------------------------------------------------------
+## ---- MIFlowCyt metadata ---------------------------------------------------------------------
 ## ONE assembler, data only, consumed by the report (which typesets it) and later by the
 ## FlowRepository export (which serialises it) -- see actaMiFlowCyt(). Built HERE because this is the
 ## first point where every input exists: `stats` (per well), `statsExportAll` (per population),
 ## panelList, the transform arguments and the resolved compensation mode.
 ##
-## It is MiFlowCyt-STRUCTURED, not MiFlowCyt-COMPLETE: purpose, experiment variables, organization,
+## It is MIFlowCyt-STRUCTURED, not MIFlowCyt-COMPLETE: purpose, experiment variables, organization,
 ## conclusions, specimen source/collection and instrument QC legitimately live in the ELN and are
 ## emitted as explicit references rather than blanks. `standard$completeness` records that, so no
 ## consumer can present the result as a compliant submission on its own.
@@ -2140,7 +2140,7 @@ actaMfc <- actaMiFlowCyt(
   gating_template    = gating_template,
   qcList             = qcList,
   ## Per-population count / percent / MeFI / robustSD -- the same table StatsExport writes, which is
-  ## MiFlowCyt's "gating statistics" and was the one argument with no producer.
+  ## MIFlowCyt's "gating statistics" and was the one argument with no producer.
   gate_stats         = statsExportAll,
   comp               = list(mode = compMode, raw = compLabel),
   trans_args         = actaTransEff,
@@ -2358,7 +2358,7 @@ if (!is.null(panelIterationInfo) && length(panelIterationInfo)) {
     message("[ACTA] wrote ", basename(.invOut),
             " -- point Info!master_panel_inventory_path at it to reproduce this run's panel.")
 }
-## Info!miflowcyt_export = TRUE adds a MiFlowCyt appendix sheet, FIRST among the extra sheets because
+## Info!miflowcyt_export = TRUE adds a MIFlowCyt appendix sheet, FIRST among the extra sheets because
 ## it is the substantive one -- the other three are verbatim copies of the workbook. This is the first
 ## thing that has ever READ that flag: it has sat in all four instructions files unconsumed.
 ##
@@ -2375,7 +2375,7 @@ if (actaMfcExport) {
   .app <- actaMiFlowCytAppendix(actaMfc)
   if (!is.null(.app) && nrow(.app)) {
     auditSheets <- c(list(MiFlowCyt_metadata = .app), auditSheets)
-    message(sprintf("[ACTA] Info!miflowcyt_export = TRUE -- MiFlowCyt appendix sheet added (%d rows).",
+    message(sprintf("[ACTA] Info!miflowcyt_export = TRUE -- MIFlowCyt appendix sheet added (%d rows).",
                     nrow(.app)))
   }
 }
