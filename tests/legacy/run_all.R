@@ -87,6 +87,13 @@ SCRIPTS <- c("test_marker_nodes.R",   # marker +/- node resolution from the temp
              ## iteration, or a re-run reads it as its own co-stain and the self-costain gate
              ## refuses ACTA's own artefact.
              "test_bundle_inventory.R", # a blank catalogue must not return a phantom all-NA row
+             ## REGISTERED THE DAY IT WAS WRITTEN. The written inventory must be able to STAND IN
+             ## for the one it was read from: seven columns were emitted always-empty (six of them
+             ## one lab's own fields), every column outside ACTA_PI_COLS was discarded on read, and
+             ## Fluorochrome_Alias was read to match reagents and never written back. Section 2.2
+             ## is the one that must not be relaxed -- there is NO deny-list of column names in
+             ## ACTA, so a lab keeping a column the template no longer offers gets it back.
+             "test_inventory_carry.R",
              ## REGISTERED THE DAY IT WAS WRITTEN. The shipped fixtures contain NOTHING for this
              ## gate to fire on -- 15 reagents, 0 hits -- so its fixtures are all constructed and
              ## two of its sections are CONTROLS that fail if they stop being adversarial.

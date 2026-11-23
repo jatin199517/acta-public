@@ -7,7 +7,8 @@ choice came from, and whether the co-stain panels the plate declares are actuall
 }
 \usage{
 actaPanelInventoryRecords(info = NULL, version_dir = NULL, code_dir = NULL,
-                          iterations = character(0), override = NULL)
+                          iterations = character(0), override = NULL,
+                          catalogs = character(0))
 }
 \arguments{
   \item{info}{the \code{Info} sheet as a data frame, or \code{NULL}. Read for
@@ -19,6 +20,12 @@ actaPanelInventoryRecords(info = NULL, version_dir = NULL, code_dir = NULL,
     written in \code{Layout_Plate}. One record is returned per distinct value.}
   \item{override}{an inventory chosen for this run, outranking the workbook. \code{NULL} for none,
     in which case \code{getOption("acta.panel_inventory_override")} is consulted instead.}
+  \item{catalogs}{the \code{Cat_Num} values the plate declares, as written in \code{Layout_Plate}.
+    One record reports those the inventory does not hold: a catalogue that is absent publishes the
+    reagent's clonality, isotype and host species blank, and before this the first reader to
+    notice was the maintainer the bundle was sent to. Matching is on the inventory's
+    \code{Catalog} column only, not \code{Supplier Cat}, and ignores punctuation and case. A blank
+    catalogue is not reported -- nothing was looked up, so nothing failed to be found.}
 }
 \details{
 The file is resolved by \code{actaPanelInventoryPath()} and the per-iteration wording comes from

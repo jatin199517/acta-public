@@ -354,6 +354,20 @@ if (exists("panelIterationInfo") && !is.null(panelIterationInfo) && length(panel
     cat("\n\n\\vspace{10pt}\n\n")
   }
 }
+## THE TITRATED REAGENTS THAT THE INVENTORY DOES NOT HOLD.
+##
+## OUTSIDE the panelIterationInfo loop above on purpose: this fact is about the reagents the run
+## titrated, not about a co-stain panel, so it must still be reported on a plate that declares no
+## panel at all. Same sentence as the pre-flight and the bundle, from actaCatalogMissCaption().
+if (exists("actaRunInventory") && exists("statsForExport")) {
+  .miss <- tryCatch(actaCatalogMisses(actaRunInventory, statsForExport),
+                    error = function(e) character(0))
+  if (length(.miss)) {
+    .cap <- actaCatalogMissCaption(.miss, if (exists("actaRunInventoryPath"))
+                                            actaRunInventoryPath else NULL)
+    cat(sprintf("\\textit{\\small %s}\n\n\\vspace{10pt}\n\n", texEsc(.cap)))
+  }
+}
 ```
 
 ```{=tex}

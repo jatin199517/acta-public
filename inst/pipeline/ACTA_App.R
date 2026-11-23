@@ -711,6 +711,12 @@ server <- function(input, output, session) {
                               ## the run; pre-flight reads the file on disk, where the real names
                               ## still are -- and those are the names the inventory holds.
                               iterations = layoutVals(layout, "Costain_Panel_Iteration"),
+                              ## THE TITRATED REAGENTS' CATALOGUES, read the same way and for the
+                              ## same reason: a catalogue the inventory does not hold costs the
+                              ## submission that reagent's clonality, isotype and host species,
+                              ## and before this the first reader to notice was the maintainer
+                              ## the bundle was sent to.
+                              catalogs = layoutVals(layout, "Cat_Num"),
                               override = invOv()))
   ## TWO OUTPUTS, NOT ONE, and the split is about the text field rather than about tidiness.
   ## Re-rendering a uiOutput REBUILDS the <input> inside it, which drops the caret and the focus --

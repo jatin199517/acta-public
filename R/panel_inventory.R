@@ -194,6 +194,32 @@ actaPanelInventory <- function(path) {
     out[[nm]] <- if (is.na(j)) rep(NA_character_, nrow(d)) else .piNorm(d[[j]])
   }
   out <- as.data.frame(out, stringsAsFactors = FALSE)
+  ## EVERY OTHER COLUMN THE LAB KEEPS RIDES ALONG UNDER ITS OWN NAME.
+  ##
+  ## ACTA understood these eleven and silently discarded the rest, so the inventory it WRITES could
+  ## never stand in for the one it READ: a lab's own fields -- a storage temperature, an assay, a
+  ## note -- vanished on every round trip, and a reader re-running a bundle got a thinner file than
+  ## the operator had. Nothing here interprets them; they are carried verbatim.
+  ##
+  ## WHAT COUNTS AS "EXTRA" IS DECIDED BY THE SHIPPED TEMPLATE'S HEADERS, which are exactly these
+  ## eleven. There is deliberately NO deny-list of column names anywhere in ACTA: a lab that keeps
+  ## a column ACTA's template once shipped gets it carried like any other, because the template is
+  ## a suggestion about what to record and never a statement about what ACTA will tolerate.
+  ##
+  ## ACTA ASSERTS NOTHING ABOUT THE CONTENTS. Withholding a site's own fields from a published
+  ## artefact is a site policy, not a tool behaviour, and is deliberately not done here.
+  .known <- unname(vapply(ACTA_PI_COLS, key, ""))
+  .extra <- character(0)
+  for (j in which(!(have %in% .known))) {
+    nmj <- .piNorm(names(d)[j])
+    ## readxl names a header-less column "...3". That is an empty column, not a field.
+    if (!nzchar(nmj) || grepl("^[.]{3}[0-9]+$", nmj)) next
+    ## A duplicate name, or one colliding with an internal column, is SKIPPED rather than renamed.
+    ## make.unique() would publish a header the lab never wrote, which is worse than omitting it.
+    if (nmj %in% names(out)) next
+    out[[nmj]] <- .piNorm(d[[j]])
+    .extra <- c(.extra, nmj)
+  }
   ## THE UNFILTERED ROWS RIDE ALONG, because one consumer must not be restricted to panel members.
   ##
   ## The subset below is right for PANEL RESOLUTION: a row with no `Panel Iteration` belongs to no
@@ -217,6 +243,9 @@ actaPanelInventory <- function(path) {
   ## everything else, so attaching these any earlier loses them silently and every caption goes
   ## back to not naming its file.
   attr(out, "acta_inventory_path") <- as.character(path)
+  ## THE EXTRA COLUMNS' NAMES, IN SOURCE ORDER, so the writer emits them without having to work out
+  ## which of the frame's columns ACTA understands. Same after-the-subset rule as its siblings.
+  attr(out, "acta_inventory_extra") <- .extra
   src <- attr(path, "acta_inventory_source")
   attr(out, "acta_inventory_source") <- if (is.null(src)) "unknown" else src
   ## PER-LOT DETAIL RIDES ALONG AS AN ATTRIBUTE, not a second argument threaded through four
@@ -402,6 +431,61 @@ actaPanelIterationCaption <- function(res) {
                                 if (length(res$reagents))
                                   sprintf(" Titrated here: %s.", paste(res$reagents, collapse = ", ")) else ""),
     NA_character_)
+}
+
+
+## WHICH TITRATED REAGENTS ARE NOT IN THE INVENTORY, by catalogue.
+##
+## The reagent a run is ABOUT is looked up in the master by catalogue number, and a miss publishes
+## its clonality, isotype and host species BLANK. Blank is a legitimate answer -- a reagent may
+## genuinely not be in any inventory -- which is exactly why the miss has to be SAID. It was found
+## by a submission maintainer reading our columns, not by us, and nothing in ACTA mentioned it.
+##
+## Returns "Alias (catalogue)" descriptors, or character(0). `stats` is the export frame; `Cat_Num`
+## is the key and `Alias`/`Markername` only labels it for a human.
+actaCatalogMisses <- function(inv, stats) {
+  if (is.null(inv) || is.null(stats) || !is.data.frame(stats) || !nrow(stats)) return(character(0))
+  if (!"Cat_Num" %in% names(stats)) return(character(0))
+  ## THE UNFILTERED ROWS, for the same reason .tpInvByCatalog() reads them: the titrated reagent is
+  ## by definition not in its own co-stain panel, so it legitimately carries no Panel Iteration and
+  ## the filtered frame cannot contain it. Asking the wrong frame would report every run as a miss.
+  pool <- attr(inv, "acta_inventory_all")
+  if (is.null(pool) || !is.data.frame(pool) || !nrow(pool)) pool <- inv
+  if (is.null(pool) || !nrow(pool) || !"catalog" %in% names(pool)) return(character(0))
+  k <- function(z) gsub("[^a-z0-9]", "", tolower(as.character(z)))
+  have <- k(pool$catalog)
+  lab <- if ("Alias" %in% names(stats)) stats$Alias
+         else if ("Markername" %in% names(stats)) stats$Markername else rep(NA, nrow(stats))
+  out <- character(0)
+  seen <- character(0)
+  for (i in seq_len(nrow(stats))) {
+    cc <- .piNorm(stats$Cat_Num[i])
+    ## A BLANK CATALOGUE IS NOT A MISS. Nothing was looked up, so nothing failed to be found --
+    ## and the workbook, not the inventory, is where that gets fixed.
+    if (is.na(cc) || !nzchar(cc) || toupper(cc) == "NA") next
+    if (k(cc) %in% have || k(cc) %in% seen) next
+    seen <- c(seen, k(cc))
+    nm <- .piNorm(lab[i])
+    out <- c(out, if (is.na(nm) || !nzchar(nm)) cc else sprintf("%s (%s)", nm, cc))
+  }
+  out
+}
+
+## The sentence for that condition, written ONCE. Four places say it -- the app's pre-flight, the
+## run's console, the report, and the bundle build -- and the same rule applies as to
+## actaPanelIterationCaption(): a check panel that says one thing and a PDF that says another is
+## worse than neither, because one of them gets believed.
+actaCatalogMissCaption <- function(misses, file = NULL) {
+  if (!length(misses)) return(NA_character_)
+  f <- if (is.null(file) || !length(file) || is.na(file[1]) || !nzchar(as.character(file)[1]))
+         "the master panel inventory" else sprintf("'%s'", basename(as.character(file)[1]))
+  ## NO BACKTICKS. This sentence is printed verbatim into the report, where LaTeX renders a
+  ## backtick as a left smart quote -- measured: "`Catalog`" came out as a mismatched pair.
+  sprintf(paste("%d titrated reagent(s) are not in %s by catalogue number (%s), so their",
+                "clonality, isotype and host species publish blank. ACTA matches on the",
+                "inventory's Catalog column only, not Supplier Cat. No measured value is",
+                "affected."),
+          length(misses), f, paste(misses, collapse = ", "))
 }
 
 
@@ -860,8 +944,14 @@ actaApplyScrub <- function(df, quiet = FALSE, eln = NULL) {
 ## co-stain panel and publishes no bundle, and costs the submission its reagent provenance on one
 ## that does. `stakes` is that distinction, and it is why this does not go amber on every run in a
 ## lab that keeps no inventory at all.
+## `catalogs` IS THE TITRATED REAGENTS' Cat_Num, straight from Layout_Plate. It is here rather than
+## left to the run because a catalogue that is not in the inventory costs the submission the
+## reagent's clonality, isotype and host species -- and the first place that showed up was a
+## maintainer reading the published columns. Same argument as the inventory path itself: the wrong
+## end of a six-hour job is the wrong place to learn it.
 actaPanelInventoryRecords <- function(info = NULL, version_dir = NULL, code_dir = NULL,
-                                      iterations = character(0), override = NULL) {
+                                      iterations = character(0), override = NULL,
+                                      catalogs = character(0)) {
   L <- "Master panel inventory"
   its <- unique(.piNorm(iterations))
   its <- its[!is.na(its) & nzchar(its) & toupper(its) != "NA"]
@@ -963,6 +1053,26 @@ actaPanelInventoryRecords <- function(info = NULL, version_dir = NULL, code_dir 
         sprintf(paste("'%s' — %d reagent(s) listed in %s. Matching them to the channels this",
                       "run measured happens during the run."), it, nrow(rg), basename(path)), path)
     }
+  }
+
+  ## ONE ROW FOR THE TITRATED REAGENTS, and only when the run has something to lose. `stakes` is
+  ## the same distinction the records above use: on a plate that declares no co-stain panel and
+  ## publishes no bundle, a blank clonality costs nothing, and going amber there is how a check
+  ## panel stops being read.
+  ##
+  ## A `warn`, never a `fail` -- see the header. Blank is a legitimate answer; being quiet is not.
+  .cats <- unique(.piNorm(catalogs))
+  .cats <- .cats[!is.na(.cats) & nzchar(.cats) & toupper(.cats) != "NA"]
+  if (length(.cats)) {
+    .miss <- actaCatalogMisses(inv, data.frame(Cat_Num = .cats, stringsAsFactors = FALSE))
+    recs[[length(recs) + 1L]] <- if (length(.miss))
+      .appRec("panel_inventory_catalog", "Titrated reagents are in the inventory",
+              if (stakes) "warn" else "pass",
+              actaCatalogMissCaption(.miss, path), path)
+    else
+      .appRec("panel_inventory_catalog", "Titrated reagents are in the inventory", "pass",
+              sprintf("All %d titrated reagent catalogue(s) were found in %s.",
+                      length(.cats), basename(path)), path)
   }
   out(recs)
 }

@@ -2168,6 +2168,23 @@ exportName<-paste0(str_replace_all(str_replace_all(lubridate::today(),"-",""),"^
 ## table beside 2.4 and changes nothing else: no gate fails and no number moves. This is the one
 ## place ACTA deliberately differs from ACFA, where the same lookup is a QC gate because the panel
 ## feeds patient data.
+## ---- the run's panel inventory, resolved ONCE at top level -----------------------------------
+## HOISTED OUT OF THE BLOCK BELOW, which used to resolve it for its own use and then return NULL
+## on a plate that declares no Costain_Panel_Iteration -- taking the resolved inventory with it.
+## The inventory writer below runs on runs like that too (a titrated reagent is worth describing
+## even with no co-stain panel), and without this it had nothing to fill from.
+##
+## ONE RESOLUTION, NOT TWO. Resolving again further down is how a bundle comes to disagree with the
+## report shipped beside it; it is the same argument that makes the override an option rather than
+## an argument threaded through two call sites.
+##
+## COSTS NOTHING WHEN THERE IS NO INVENTORY: actaPanelInventoryPath() returns NA and
+## actaPanelInventory(NA) returns NULL without reading or warning. A file that is named and
+## unreadable does warn, which is worth hearing on any run.
+actaRunInventoryPath <- actaPanelInventoryPath(infoSheet, version_dir = getwd(),
+                                               code_dir = acta_code_dir)
+actaRunInventory     <- actaPanelInventory(actaRunInventoryPath)
+
 panelIterationInfo <- local({
   if (!"Costain_Panel_Iteration" %in% names(metadata_file)) return(NULL)
 
@@ -2196,8 +2213,9 @@ panelIterationInfo <- local({
   names(grpIter) <- actaGroups$key
   if (!any(!is.na(grpIter))) return(NULL)
 
-  invPath <- actaPanelInventoryPath(infoSheet, version_dir = getwd(), code_dir = acta_code_dir)
-  inv <- actaPanelInventory(invPath)
+  ## The run's single resolution, hoisted above this block. Aliased rather than re-resolved.
+  invPath <- actaRunInventoryPath
+  inv     <- actaRunInventory
 
   out <- list()
   for (i in unique(stats::na.omit(grpIter))) {
@@ -2350,9 +2368,22 @@ auditSheets <- local({
 ## would mean the NEXT run in this folder silently resolved against ACTA's own truncated copy
 ## instead of the lab's live master -- and would keep doing so after the master was corrected.
 ## Under this name it is inert until somebody sets Info!master_panel_inventory_path to it.
-if (!is.null(panelIterationInfo) && length(panelIterationInfo)) {
+## THE SAME GUARD THE BUNDLE'S COPY USES, deliberately. This read `panelIterationInfo` alone, so a
+## run with titrated reagents but no resolved co-stain panel wrote an inventory into its BUNDLE and
+## none into its RUN FOLDER -- the run-folder copy being the weaker of the two for no stated reason,
+## which is the same shape as the defect above. One rule now: an inventory is written whenever there
+## is any reagent to describe.
+if ((!is.null(panelIterationInfo) && length(panelIterationInfo)) ||
+    (is.data.frame(statsForExport) && nrow(statsForExport))) {
   .invOut <- sprintf("%s_Panel_Inventory.xlsx", gsub("[^A-Za-z0-9._-]", "_", BIDfile))
-  .w <- tryCatch(.tpWriteInventory(panelIterationInfo, .invOut), error = function(e) {
+  ## `stats` AND `inv`, exactly as the bundle's copy gets them. Without inv the known columns the
+  ## master does hold -- Clonality, the isotype, anything the lab carries -- are written empty;
+  ## without stats the TITRATED reagent has no row at all, and this file's whole purpose is to let
+  ## a reader re-resolve THIS run, which is the one reagent the run is about.
+  .w <- tryCatch(.tpWriteInventory(panelIterationInfo, .invOut,
+                                   stats = statsForExport,
+                                   inv   = actaRunInventory),
+         error = function(e) {
          message("[ACTA] panel inventory not written: ", conditionMessage(e)); NULL })
   if (!is.null(.w))
     message("[ACTA] wrote ", basename(.invOut),

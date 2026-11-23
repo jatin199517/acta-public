@@ -1353,28 +1353,60 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
 .tpWriteInventory <- function(panels, path, stats = NULL, inv = NULL) {
   if ((is.null(panels) || !length(panels)) && (is.null(stats) || !nrow(stats)))
     return(invisible(NULL))
-  ## Clonality sits beside Clone, matching ACTA_PI_COLS' own order. Read back by NAME, so the
-  ## position is for a human opening the file.
-  cols <- c("Antigen", "Fluorochrome", "Fluorochrome_Alias", "Marker_Alias", "Vendor", "Catalog",
-            "Supplier Cat", "Clone", "Clonality", "Species / Isotype", "Size",
-            "Flow Cytometry Assay", "Type", "Easy Panel name", "Easy Panel ID", "Subset Panel?",
-            "Panel Iteration", "Storage Temperature")
+  ## THE SHIPPED TEMPLATE'S COLUMNS, DERIVED FROM ACTA_PI_COLS rather than retyped beside it.
+  ##
+  ## This was an eighteen-name literal, seven of which ACTA never filled and never read: they were
+  ## written empty into every bundle, which reads as "ACTA looked and found nothing" rather than
+  ## "ACTA has no opinion". Six were one lab's own fields and had no business in a generic tool's
+  ## template. Deriving the list means a column ACTA reads can never end up with nowhere to go.
+  cols <- unname(ACTA_PI_COLS)
+  ## PLUS EVERY COLUMN THE SOURCE CARRIED THAT ACTA DOES NOT INTERPRET -- verbatim, in the order
+  ## the lab wrote them. NOT a deny-list of the seven removed above: a lab that keeps a column
+  ## named `Storage Temperature` gets it back, because the template says what ACTA suggests
+  ## recording and never what ACTA will tolerate.
+  xtra <- if (is.null(inv)) character(0) else (attr(inv, "acta_inventory_extra") %||% character(0))
+  xtra <- setdiff(as.character(xtra), cols)
+  cols <- c(cols, xtra)
+  ## NAMED, NOT COUNTED, AND NEVER SILENT. A column carried into a published artefact that nobody
+  ## announced is the one thing a site's own outbound check cannot be expected to catch by itself.
+  if (length(xtra))
+    message(sprintf("  %d extra inventory column(s) carried through: %s",
+                    length(xtra), paste(xtra, collapse = ", ")))
   .nz <- function(x) { x <- as.character(x); if (!length(x) || is.na(x[1])) "" else trimws(x[1]) }
   .ck <- function(z) gsub("[^a-z0-9]", "", tolower(as.character(z)))
   ## Fill from the inventory this run resolved, by catalogue. Never overwrites a value the panel
   ## table already supplied -- that one came from the same inventory and has been normalised.
-  .fromInv <- function(r, catalog) {
+  ## THE TITRATED REAGENTS THAT WERE LOOKED UP AND NOT FOUND. Collected rather than re-derived, so
+  ## the message cannot disagree with what was actually written. Only the titrated rows are tracked:
+  ## a panel row came FROM the inventory, so it cannot miss, and the panel's own caption already
+  ## covers an iteration that did not resolve.
+  missCat <- character(0)
+  .fromInv <- function(r, catalog, track = FALSE) {
     if (is.null(inv) || .tpBlank(catalog)) return(r)
     h <- tryCatch(.tpInvByCatalog(inv, catalog), error = function(e) NULL)
-    if (is.null(h) || !nrow(h)) return(r)
+    if (is.null(h) || !nrow(h)) {
+      if (isTRUE(track)) {
+        .lab <- r[["Antigen"]]
+        missCat <<- c(missCat, if (nzchar(.lab)) sprintf("%s (%s)", .lab, catalog)
+                               else as.character(catalog))
+      }
+      return(r)
+    }
     pick <- function(field, col)
       if (!nzchar(r[[field]]) && col %in% names(h)) .nz(h[[col]][1]) else r[[field]]
-    r[["Antigen"]]           <- pick("Antigen", "antigen")
-    r[["Fluorochrome"]]      <- pick("Fluorochrome", "fluorochrome")
-    r[["Vendor"]]            <- pick("Vendor", "vendor")
-    r[["Clone"]]             <- pick("Clone", "clone")
-    r[["Clonality"]]         <- pick("Clonality", "clonality")
-    r[["Species / Isotype"]] <- pick("Species / Isotype", "isotype")
+    ## EVERY KNOWN COLUMN, not a hand-picked six. `Fluorochrome_Alias` was in neither the old list
+    ## nor any other filler, so ACTA READ it to match reagents and never wrote it back -- a lab
+    ## that fills it lost it on every round trip. Driving the loop off ACTA_PI_COLS means adding a
+    ## column to that constant is enough; there is no second place to remember.
+    for (k in names(ACTA_PI_COLS)) {
+      f <- ACTA_PI_COLS[[k]]
+      ## PANEL ITERATION IS NEVER FILLED FROM THE INVENTORY. The titrated row's is blank on
+      ## purpose (see the header above), and filling it from the master would put the titrated
+      ## reagent into its own co-stain panel -- the exact data .tpSelfCostain() refuses to publish.
+      if (identical(f, unname(ACTA_PI_COLS[["iteration"]]))) next
+      r[[f]] <- pick(f, k)
+    }
+    for (f in xtra) r[[f]] <- pick(f, f)
     r
   }
   rows <- list()
@@ -1439,7 +1471,7 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
       ## BLANK ON PURPOSE -- see the header. Not "none", not the run's iteration.
       r[["Panel Iteration"]] <- ""
       r <- ifelse(is.na(r), "", r)
-      r <- .fromInv(r, cat_)
+      r <- .fromInv(r, cat_, track = TRUE)
       ## The titrated reagent is the only one whose lot ACTA knows: the workbook states it. A
       ## co-stain's lot is never recorded, so Lot_info can only ever cover these rows.
       .lot <- if ("Lot_Num" %in% names(stats)) .tpNorm(stats$Lot_Num[i]) else NA_character_
@@ -1448,6 +1480,11 @@ actaTiterPubsWrite <- function(template, out, values, overflow = character(0),
       rows[[length(rows) + 1L]] <- r
     }
   }
+  ## SAID AT EVERY WRITE, which means it is said again at BUNDLE BUILD -- the moment the blank
+  ## becomes irrevocable on a CC BY 4.0 deposit. Not a refusal: a reagent genuinely absent from
+  ## every inventory is a legitimate state, and refusing would punish correct data.
+  if (length(missCat))
+    message("  ", actaCatalogMissCaption(unique(missCat), attr(inv, "acta_inventory_path")))
   if (!length(rows)) return(invisible(NULL))
   m <- rbind(cols, do.call(rbind, rows))
 
